@@ -70,6 +70,14 @@ python -m agents.lead_agent /path/to/leads.csv
 cd ..
 ```
 
+**Quick single-shot test run** (takes the oldest `'new'` lead through
+LeadAgent -> DesignAgent -> SalesAgent once, no loop, no rate limits --
+good for a first end-to-end smoke test):
+
+```bash
+python pipeline/quick_run.py
+```
+
 **Start the orchestrator loop** (researches leads, builds/deploys sites,
 sends rate-limited cold emails, polls the inbox, all on a 60s cycle):
 
