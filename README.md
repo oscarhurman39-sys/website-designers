@@ -62,8 +62,9 @@ cp .env.example .env
 Required `.env` variables: `GITHUB_TOKEN`, `VERCEL_TOKEN`, `EMAIL_HOST`,
 `EMAIL_PORT`, `EMAIL_USER`, `EMAIL_PASSWORD`, `HF_API_TOKEN`,
 `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `ADMIN_EMAIL`,
-`SENDING_DOMAIN`, `PHYSICAL_ADDRESS`. `config.py` validates these at
-startup and fails loudly, listing everything missing, if any are unset.
+`SENDING_DOMAIN`, `PHYSICAL_ADDRESS`, `GOOGLE_PLACES_API_KEY` (see
+"Lead research" below). `config.py` validates these at startup and fails
+loudly, listing everything missing, if any are unset.
 
 `VERCEL_TEAM_ID`, `SLACK_BOT_TOKEN`, `UNSPLASH_ACCESS_KEY`,
 `VOLTAGENT_PUBLIC_KEY`, `VOLTAGENT_SECRET_KEY` are optional.
@@ -123,6 +124,32 @@ python webhook_server.py
 streamlit run dashboard.py
 ```
 
+## Lead research
+
+`agents/lead_agent.py` sources business data (name, phone, address,
+opening hours, categories, rating, review count, up to 3 review
+snippets) from the **Google Places API (New)**, not by scraping Google
+Maps directly. Google Maps Platform's Terms of Service explicitly
+prohibit scraping Maps/Places content, and Maps listing pages are a
+JS-rendered SPA that plain `requests`+`BeautifulSoup` can't meaningfully
+parse anyway -- the Places API is the real, working, ToS-compliant way to
+get this data. Get a key at
+https://console.cloud.google.com/google/maps-apis and set
+`GOOGLE_PLACES_API_KEY` (note opening hours are billed at the
+"Enterprise" SKU tier, higher than the base tier -- check current
+pricing before high-volume use).
+
+Places has no email field at all, though. When a listing includes the
+business's own website, `lead_agent.py` reuses its existing (unchanged)
+robots.txt-respecting scraper just to find a contact email there --
+that's the one part of research that's still done by scraping a business's
+own site, which is a different situation from scraping Google's platform.
+
+A lead is marked `'researched'` once Places returns at least a name and
+phone number; `'lost'` otherwise. `contact_email` may still be blank on a
+`'researched'` lead if no website (or no discoverable email on it) was
+found -- `sales_agent.py` already handles that gracefully at send time.
+
 ## Templates
 
 `templates/` holds one subfolder per business niche, each with an
@@ -137,10 +164,12 @@ Two template styles currently coexist:
   `{{ business_name }}`, `{{ phone }}`, `{{ hero_headline }}`,
   `{{ services_list }}` (falls back to a niche-appropriate default via
   Jinja's `default()` filter if not supplied), `{{ pain_point_solution }}`,
-  `{{ testimonial }}`, `{{ location }}`, `{{ year }}`, and
+  `{{ testimonial }}`, `{{ location }}`, `{{ year }}`,
   `{{ preview_url }}` (a real, working link back to the site's own
   click-tracked preview URL, shown at the bottom as a "share this preview"
-  link).
+  link), `{{ reviews }}` (up to 3 Google review snippets, falls back to
+  `{{ testimonial }}` if none), and `{{ opening_hours }}` (falls back to
+  "Contact us for hours" if not supplied).
 - **`restaurant`, `gym`, `dentist`** -- original hand-rolled CSS designs
   from the pipeline's first iteration. Placeholders: `{{ business_name }}`,
   `{{ phone }}`, `{{ pain_point_solution }}`, `{{ testimonial }}`,

@@ -4,6 +4,7 @@ preview URL.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -72,6 +73,34 @@ def _testimonial(lead: dict) -> str:
     )
 
 
+def _opening_hours(lead: dict) -> str:
+    """leads.opening_hours is stored as JSON (a list of human-readable
+    per-weekday strings from Google Places, e.g. "Monday: 7:00 AM – 6:00
+    PM") -- join it into one display-ready line."""
+    raw = lead.get("opening_hours") or ""
+    try:
+        hours = json.loads(raw) if raw else []
+    except (json.JSONDecodeError, TypeError):
+        hours = []
+    return " | ".join(hours) if hours else ""
+
+
+def _reviews(lead: dict) -> str:
+    """leads.reviews is stored as JSON (up to 3 review text snippets from
+    Google Places) -- join them into one display-ready block. Falls back
+    to the single `testimonial` field (already reviews[0] when Places
+    supplied any) so older leads / rows without this column still render
+    something reasonable."""
+    raw = lead.get("reviews") or ""
+    try:
+        reviews = json.loads(raw) if raw else []
+    except (json.JSONDecodeError, TypeError):
+        reviews = []
+    if reviews:
+        return " -- ".join(f'"{r}"' for r in reviews)
+    return _testimonial(lead)
+
+
 def build_context(lead: dict) -> dict:
     return {
         "business_name": lead["business_name"],
@@ -91,6 +120,10 @@ def build_context(lead: dict) -> dict:
         # the webhook server resolves it to the real preview_url from the
         # `websites` table whenever it's actually clicked).
         "preview_url": tracker.create_click_link(lead["id"]),
+        # Added for Google Places-sourced leads; blank/fallback gracefully
+        # for leads researched before this data was available.
+        "opening_hours": _opening_hours(lead),
+        "reviews": _reviews(lead),
     }
 
 

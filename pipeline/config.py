@@ -35,6 +35,7 @@ REQUIRED_VARS: list[str] = [
     "ADMIN_EMAIL",
     "SENDING_DOMAIN",
     "PHYSICAL_ADDRESS",
+    "GOOGLE_PLACES_API_KEY",
 ]
 
 # --- Values (all optional at import time; validated via validate()) --------
@@ -48,6 +49,17 @@ EMAIL_USER: str = os.getenv("EMAIL_USER", "")
 EMAIL_PASSWORD: str = os.getenv("EMAIL_PASSWORD", "")
 
 HF_API_TOKEN: str = os.getenv("HF_API_TOKEN", "")
+
+# Used by agents/lead_agent.py's Places API (New) client -- see
+# utils/places_api.py. Required because Google Maps Platform's Terms of
+# Service explicitly prohibit scraping Maps/Places content ("Customer will
+# not export, extract, or otherwise scrape Google Maps Content for use
+# outside the Services", Maps Platform ToS 3.2.3); the Places API is the
+# only ToS-compliant way to get this data. Get a key at
+# https://console.cloud.google.com/google/maps-apis -- note some fields
+# used here (opening hours) are billed at the "Enterprise" SKU tier, not
+# the base tier; check current pricing before high-volume use.
+GOOGLE_PLACES_API_KEY: str = os.getenv("GOOGLE_PLACES_API_KEY", "")
 
 STRIPE_SECRET_KEY: str = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET: str = os.getenv("STRIPE_WEBHOOK_SECRET", "")

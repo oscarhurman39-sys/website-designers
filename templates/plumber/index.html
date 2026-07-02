@@ -59,6 +59,12 @@
     </div>
   </section>
 
+  <!-- Reviews -->
+  <section id="reviews" class="max-w-3xl mx-auto px-6 py-16 text-center">
+    <h2 class="text-2xl font-bold text-blue-800 mb-4">What Customers Say</h2>
+    <p class="text-slate-600">{{ reviews | default(testimonial) }}</p>
+  </section>
+
   <!-- Contact -->
   <section id="contact" class="max-w-3xl mx-auto px-6 py-16 text-center">
     <h2 class="text-2xl font-bold text-blue-800 mb-4">Get In Touch</h2>
@@ -66,6 +72,7 @@
     <p class="mt-2">
       <a href="tel:{{ phone }}" class="text-lg font-semibold text-blue-700 hover:underline">{{ phone }}</a>
     </p>
+    <p class="mt-2 text-slate-600">{{ opening_hours | default('Contact us for hours') }}</p>
   </section>
 
   <!-- Footer -->

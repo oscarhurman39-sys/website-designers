@@ -46,6 +46,12 @@ CREATE TABLE IF NOT EXISTS leads (
     pain_point      TEXT,
     testimonial     TEXT,
     phone           TEXT,
+    address         TEXT,
+    opening_hours   TEXT,
+    categories      TEXT,
+    rating          REAL,
+    review_count    INTEGER,
+    reviews         TEXT,
     status          TEXT NOT NULL DEFAULT 'new'
                     CHECK (status IN ({_STATUS_LIST_SQL})),
     unsubscribed    INTEGER NOT NULL DEFAULT 0,
@@ -113,6 +119,12 @@ def init_db(db_path: Optional[str] = None) -> None:
         conn.executescript(_SCHEMA)
         _migrate_add_column(conn, "websites", "screenshot_url", "TEXT")
         _migrate_add_column(conn, "websites", "screenshot_path", "TEXT")
+        _migrate_add_column(conn, "leads", "address", "TEXT")
+        _migrate_add_column(conn, "leads", "opening_hours", "TEXT")
+        _migrate_add_column(conn, "leads", "categories", "TEXT")
+        _migrate_add_column(conn, "leads", "rating", "REAL")
+        _migrate_add_column(conn, "leads", "review_count", "INTEGER")
+        _migrate_add_column(conn, "leads", "reviews", "TEXT")
         conn.commit()
 
 

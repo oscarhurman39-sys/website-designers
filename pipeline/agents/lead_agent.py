@@ -1,15 +1,28 @@
 """LeadAgent: turns a CSV of (business_name, niche, location) rows into
-enriched leads with a contact email, a pain-point snippet, and (if found) a
-testimonial, scraped from the business's own website.
+enriched leads with business details (phone, address, hours, categories,
+rating, reviews) from Google Places, plus a contact email.
 
-This is intentionally best-effort: small local businesses often have thin,
-inconsistent websites, so we fall back gracefully at every step rather than
-raising. A lead we can't find a contact email for is marked 'lost' rather
-than blocking the pipeline.
+Business data comes from the Google Places API (New), not from scraping
+Google Maps directly: Google Maps Platform's Terms of Service explicitly
+prohibit scraping Maps/Places content, and Maps listing pages are a
+JS-rendered SPA that plain requests+BeautifulSoup can't meaningfully parse
+anyway (see utils/places_api.py). Places has no email field at all, though
+-- when it gives us the business's own website, we reuse the same
+robots.txt-respecting scraper this module always used (find_business_website
+/ _fetch / _extract_email, all unchanged) just to find a contact email
+there.
+
+This is intentionally best-effort: a Places lookup can fail to match, and
+a business's own website (if it has one) can still lack a discoverable
+email. A lead is marked 'researched' once we have at least a name and
+phone number from Places, 'lost' otherwise -- contact_email may still be
+blank on a 'researched' lead; sales_agent.py already handles that
+gracefully at send time.
 """
 from __future__ import annotations
 
 import csv
+import json
 import re
 import urllib.robotparser
 from dataclasses import dataclass
@@ -19,7 +32,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from utils import db, tracer
+from utils import db, places_api, tracer
 
 USER_AGENT = "ColdEmailSalesPipelineBot/1.0 (+mailto:contact@example.com)"
 REQUEST_TIMEOUT = 10
@@ -170,7 +183,7 @@ def research_lead(lead: dict) -> None:
     tracer.run_traced(
         agent_id="lead-agent",
         agent_name="LeadResearcher",
-        tool_name="scrape_business_website",
+        tool_name="google_places_lookup",
         input_data={"lead_id": lead["id"], "business_name": lead["business_name"], "niche": lead["niche"]},
         fn=lambda: _research_lead_impl(lead),
     )
@@ -178,45 +191,65 @@ def research_lead(lead: dict) -> None:
 
 def _research_lead_impl(lead: dict) -> None:
     lead_id = lead["id"]
-    website_url = find_business_website(lead["business_name"], lead["location"] or "")
 
-    if not website_url:
-        db.update_lead_status(lead_id, "lost", notes="No website found during research")
+    try:
+        place = places_api.find_business(lead["business_name"], lead["location"] or "")
+    except Exception as exc:  # noqa: BLE001 - API/auth/quota errors must not crash the batch
+        db.update_lead_status(lead_id, "lost", notes=f"Google Places lookup failed: {exc}")
         return
 
-    homepage = _fetch(website_url)
-    if homepage is None:
-        db.update_lead_status(lead_id, "lost", notes=f"Could not fetch website (robots.txt or network): {website_url}")
+    if place is None:
+        db.update_lead_status(lead_id, "lost", notes="No matching Google Places listing found")
         return
 
-    email_addr = _extract_email(homepage)
-    testimonial = _extract_testimonial(homepage)
-    pain_point = _extract_pain_point(homepage, website_url)
-
-    # If nothing useful on the homepage, try a likely subpage (about/contact/blog).
-    if not email_addr or not testimonial or not pain_point:
-        subpage_url = _find_subpage(homepage, website_url, ("contact", "about", "blog", "review"))
-        if subpage_url:
-            subpage = _fetch(subpage_url)
-            if subpage is not None:
-                email_addr = email_addr or _extract_email(subpage)
-                testimonial = testimonial or _extract_testimonial(subpage)
-                pain_point = pain_point or _extract_pain_point(subpage, subpage_url)
-
-    if not email_addr:
-        db.update_lead_fields(lead_id, website_url=website_url, scraped_info=homepage.get_text(" ", strip=True)[:2000])
-        db.update_lead_status(lead_id, "lost", notes="Website found but no contact email discovered")
+    if not place["name"] or not place["phone"]:
+        db.update_lead_fields(
+            lead_id,
+            address=place["address"] or "",
+            categories=", ".join(place["categories"]),
+            rating=place["rating"],
+            review_count=place["review_count"],
+            opening_hours=json.dumps(place["opening_hours"]),
+            reviews=json.dumps(place["reviews"]),
+            scraped_info=place["editorial_summary"] or "",
+        )
+        db.update_lead_status(lead_id, "lost", notes="Places listing found but missing name and/or phone")
         return
+
+    # Places has no email field at all -- if it gave us the business's own
+    # website, reuse the same robots.txt-respecting scraper this module
+    # always used (find_business_website / _fetch / _extract_email /
+    # _find_subpage, all unchanged) just to find a contact email there.
+    # Fall back to a DuckDuckGo search for a website if Places didn't have
+    # one on file.
+    email_addr: Optional[str] = None
+    website_url = place["website_uri"] or find_business_website(lead["business_name"], lead["location"] or "")
+    if website_url:
+        homepage = _fetch(website_url)
+        if homepage is not None:
+            email_addr = _extract_email(homepage)
+            if not email_addr:
+                subpage_url = _find_subpage(homepage, website_url, ("contact", "about"))
+                if subpage_url:
+                    subpage = _fetch(subpage_url)
+                    if subpage is not None:
+                        email_addr = _extract_email(subpage)
 
     db.update_lead_fields(
         lead_id,
-        website_url=website_url,
-        contact_email=email_addr,
-        pain_point=pain_point or "",
-        testimonial=testimonial or "",
-        scraped_info=homepage.get_text(" ", strip=True)[:2000],
+        contact_email=email_addr or "",
+        website_url=website_url or "",
+        phone=place["phone"],
+        address=place["address"] or "",
+        categories=", ".join(place["categories"]),
+        rating=place["rating"],
+        review_count=place["review_count"],
+        opening_hours=json.dumps(place["opening_hours"]),
+        reviews=json.dumps(place["reviews"]),
+        testimonial=place["reviews"][0] if place["reviews"] else (lead.get("testimonial") or ""),
+        scraped_info=place["editorial_summary"] or "",
     )
-    db.update_lead_status(lead_id, "researched", notes="Research complete")
+    db.update_lead_status(lead_id, "researched", notes="Research complete via Google Places API")
 
 
 def run(csv_path: Optional[str] = None) -> None:
