@@ -17,7 +17,7 @@ from typing import Optional
 from huggingface_hub import InferenceClient
 
 import config
-from utils import compliance, db, email_utils, tracker
+from utils import compliance, db, email_utils, tracer, tracker
 
 try:
     from slack_sdk import WebClient
@@ -187,7 +187,19 @@ def _can_send_now() -> bool:
 
 
 def send_cold_email(lead: dict) -> bool:
-    """Send the initial cold email for one 'designed' lead. Returns True if sent."""
+    """Send the initial cold email for one 'designed' lead. Returns True if sent.
+    Wrapped in a trace -> agent -> tool span (see utils/tracer.py); the
+    actual drafting/sending logic lives untouched in _send_cold_email_impl."""
+    return tracer.run_traced(
+        agent_id="sales-agent",
+        agent_name="SalesAgent",
+        tool_name="draft_and_send_cold_email",
+        input_data={"lead_id": lead["id"], "business_name": lead["business_name"]},
+        fn=lambda: _send_cold_email_impl(lead),
+    )
+
+
+def _send_cold_email_impl(lead: dict) -> bool:
     global _next_send_allowed_at
 
     email_addr = lead.get("contact_email") or ""
@@ -277,6 +289,19 @@ def _send_goodbye(lead: dict) -> None:
 
 
 def _handle_inbound(lead: dict, msg) -> None:  # msg: email_utils.InboundEmail
+    """Classify and act on one inbound reply. Wrapped in a trace -> agent ->
+    tool span (see utils/tracer.py); the actual classification/action logic
+    lives untouched in _handle_inbound_impl."""
+    tracer.run_traced(
+        agent_id="sales-agent",
+        agent_name="SalesAgent",
+        tool_name="classify_and_handle_reply",
+        input_data={"lead_id": lead["id"], "from_addr": msg.from_addr, "subject": msg.subject},
+        fn=lambda: _handle_inbound_impl(lead, msg),
+    )
+
+
+def _handle_inbound_impl(lead: dict, msg) -> None:  # msg: email_utils.InboundEmail
     if compliance.is_bounce_message(msg.subject, msg.from_addr, msg.content_type):
         classification = "bounce"
         db.insert_email_thread(

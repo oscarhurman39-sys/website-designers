@@ -23,7 +23,7 @@ _PIPELINE_DIR = Path(__file__).resolve().parent / "pipeline"
 sys.path.insert(0, str(_PIPELINE_DIR))
 
 import config  # noqa: E402
-from utils import db  # noqa: E402
+from utils import db, tracer  # noqa: E402
 
 PAUSE_FLAG = _PIPELINE_DIR / ".paused"
 
@@ -141,3 +141,51 @@ if lead_id:
             if msg["classification"]:
                 st.write(f"Classification: `{msg['classification']}`")
             st.text(msg["body"])
+
+st.divider()
+
+# --- Agent trace history -----------------------------------------------------
+# Local pipeline/traces.json is always written by utils/tracer.py and is the
+# only readable source of trace history in this app: the VoltAgent Python
+# SDK is write-only (create/update history & events, no list/query
+# endpoint), so even in cloud-mirroring mode this file is what we can show
+# here -- full trace history for cloud mode lives in the VoltAgent Cloud UI.
+st.subheader("Agent trace history")
+
+cloud_enabled = bool(config.VOLTAGENT_PUBLIC_KEY and config.VOLTAGENT_SECRET_KEY)
+if cloud_enabled:
+    st.caption(
+        "VoltAgent Cloud mirroring is enabled -- spans are also sent to "
+        f"{config.VOLTAGENT_BASE_URL}. The Python SDK has no read-back API, "
+        "so this table (from pipeline/traces.json) is still the local view; "
+        "see your VoltAgent Cloud dashboard for the hosted one."
+    )
+else:
+    st.caption(
+        "Local tracing only (set VOLTAGENT_PUBLIC_KEY / VOLTAGENT_SECRET_KEY "
+        "in .env to also mirror spans to VoltAgent Cloud)."
+    )
+
+traces = tracer.load_local_traces()
+if not traces:
+    st.write("_No agent activity traced yet._")
+else:
+    trace_rows = []
+    for t in traces:
+        agent = t["agents"][0] if t.get("agents") else {}
+        tool = agent.get("tools", [{}])[0] if agent.get("tools") else {}
+        trace_rows.append(
+            {
+                "start_time": t.get("start_time"),
+                "agent_id": t.get("agent_id"),
+                "agent_name": agent.get("name"),
+                "tool_name": tool.get("name"),
+                "status": t.get("status"),
+                "input": str(t.get("input"))[:80],
+            }
+        )
+    trace_df = pd.DataFrame(trace_rows).sort_values("start_time", ascending=False)
+    st.dataframe(trace_df, use_container_width=True)
+
+    with st.expander("Raw trace JSON (most recent 20)"):
+        st.json(list(reversed(traces))[:20])

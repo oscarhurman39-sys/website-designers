@@ -12,7 +12,7 @@ import requests
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 import config
-from utils import db, github_api, vercel_api
+from utils import db, github_api, tracer, vercel_api
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 TEMPLATE_FILES = ("index.html", "style.css")
@@ -104,7 +104,19 @@ def render_template_files(niche: str, context: dict) -> dict[str, str]:
 
 def process_lead(lead: dict) -> Optional[dict]:
     """Render, deploy, and persist a website for a single 'researched' lead.
-    Returns the website record, or None if the niche has no template."""
+    Returns the website record, or None if the niche has no template.
+    Wrapped in a trace -> agent -> tool span (see utils/tracer.py); the
+    actual design/deploy logic lives untouched in _process_lead_impl."""
+    return tracer.run_traced(
+        agent_id="design-agent",
+        agent_name="DesignAgent",
+        tool_name="render_and_deploy_preview",
+        input_data={"lead_id": lead["id"], "business_name": lead["business_name"], "niche": lead["niche"]},
+        fn=lambda: _process_lead_impl(lead),
+    )
+
+
+def _process_lead_impl(lead: dict) -> Optional[dict]:
     niche = lead["niche"]
     if niche not in available_niches():
         db.update_lead_status(

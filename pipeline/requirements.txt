@@ -11,6 +11,10 @@ pandas==2.2.3
 huggingface_hub==0.25.2
 slack-sdk==3.33.1
 
+# Observability (optional cloud mirroring; local tracing works without any
+# VoltAgent account -- see pipeline/utils/tracer.py)
+voltagent==0.1.1
+
 # NOTE: sqlite3, smtplib, imaplib, and email are all part of the Python standard
 # library and must NOT be pip-installed. They are listed here only as documentation
 # of what the project depends on; `pip install` will fail if they are left in.

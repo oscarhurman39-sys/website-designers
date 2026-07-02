@@ -222,6 +222,7 @@ __marimo__/
 *.db
 pipeline/.secret_key
 pipeline/*.log
+pipeline/traces.json
 pipeline/.paused
 pipeline/leads_inbox/
 pipeline/leads_processed/

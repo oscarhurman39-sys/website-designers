@@ -66,6 +66,17 @@ DB_PATH: str = os.getenv("DB_PATH", "").strip() or str(Path(__file__).resolve().
 PUBLIC_BASE_URL: str = (os.getenv("PUBLIC_BASE_URL", "").strip() or "http://localhost:5000").rstrip("/")
 WEBSITE_PRICE_USD: int = int(os.getenv("WEBSITE_PRICE_USD", "750") or 750)
 
+# --- VoltAgent observability (optional) -------------------------------------
+# When both keys are set, pipeline/utils/tracer.py mirrors every agent/tool
+# span to VoltAgent Cloud in addition to the always-on local trace file
+# below (the VoltAgent Python SDK is write-only -- there is no endpoint to
+# read traces back out -- so the local file remains the dashboard's source
+# of truth regardless of whether cloud mirroring is enabled).
+VOLTAGENT_PUBLIC_KEY: str = os.getenv("VOLTAGENT_PUBLIC_KEY", "")
+VOLTAGENT_SECRET_KEY: str = os.getenv("VOLTAGENT_SECRET_KEY", "")
+VOLTAGENT_BASE_URL: str = (os.getenv("VOLTAGENT_BASE_URL", "").strip() or "https://api.voltagent.dev").rstrip("/")
+TRACES_PATH: str = os.getenv("TRACES_PATH", "").strip() or str(Path(__file__).resolve().parent / "traces.json")
+
 # --- Rate limiting (cold email deliverability safeguards) ------------------
 EMAIL_MIN_DELAY_SECONDS: int = 120
 EMAIL_MAX_DELAY_SECONDS: int = 300

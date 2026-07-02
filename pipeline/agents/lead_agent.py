@@ -19,7 +19,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from utils import db
+from utils import db, tracer
 
 USER_AGENT = "ColdEmailSalesPipelineBot/1.0 (+mailto:contact@example.com)"
 REQUEST_TIMEOUT = 10
@@ -164,7 +164,19 @@ def _find_subpage(soup: BeautifulSoup, base_url: str, hints: tuple[str, ...]) ->
 
 def research_lead(lead: dict) -> None:
     """Run the full research step for a single lead dict (as returned by
-    db.get_lead) and persist results directly to the DB."""
+    db.get_lead) and persist results directly to the DB. Wrapped in a
+    trace -> agent -> tool span (see utils/tracer.py); the actual research
+    logic lives untouched in _research_lead_impl."""
+    tracer.run_traced(
+        agent_id="lead-agent",
+        agent_name="LeadResearcher",
+        tool_name="scrape_business_website",
+        input_data={"lead_id": lead["id"], "business_name": lead["business_name"], "niche": lead["niche"]},
+        fn=lambda: _research_lead_impl(lead),
+    )
+
+
+def _research_lead_impl(lead: dict) -> None:
     lead_id = lead["id"]
     website_url = find_business_website(lead["business_name"], lead["location"] or "")
 
