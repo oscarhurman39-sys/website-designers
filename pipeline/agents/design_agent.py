@@ -12,7 +12,7 @@ import requests
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 import config
-from utils import db, github_api, tracer, tracker, vercel_api
+from utils import db, github_api, screenshot, tracer, tracker, vercel_api
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 TEMPLATE_FILES = ("index.html", "style.css")
@@ -112,6 +112,22 @@ def render_template_files(niche: str, context: dict) -> dict[str, str]:
     return rendered
 
 
+def _capture_and_publish_screenshot(lead_id: int, preview_url: str) -> str:
+    """Capture (or reuse a cached) screenshot of the freshly-deployed
+    preview and return the public URL it's served at. A screenshot is a
+    nice-to-have for the cold email, not a requirement for a successful
+    deploy -- any failure here (Playwright/browser unavailable, the
+    preview not reachable yet, etc.) is caught and logged, and the caller
+    proceeds with an empty screenshot_url rather than losing the deploy
+    that already succeeded."""
+    try:
+        screenshot.capture_screenshot(preview_url, lead_id)
+    except Exception as exc:  # noqa: BLE001 - screenshot capture must never fail a successful deploy
+        print(f"[design_agent] Screenshot capture failed for lead {lead_id}, continuing without one: {exc}")
+        return ""
+    return f"{config.PUBLIC_BASE_URL}/screenshots/{lead_id}.png"
+
+
 def process_lead(lead: dict) -> Optional[dict]:
     """Render, deploy, and persist a website for a single 'researched' lead.
     Returns the website record, or None if the niche has no template.
@@ -144,6 +160,8 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
         github_api.make_repo_name(lead["business_name"], lead["id"]), files
     )
 
+    screenshot_url = _capture_and_publish_screenshot(lead["id"], deployment["url"])
+
     website_id = db.insert_website(
         lead_id=lead["id"],
         template_niche=niche,
@@ -151,6 +169,7 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
         repo_full_name=repo_full_name,
         preview_url=deployment["url"],
         vercel_project_id=deployment["deployment_id"],
+        screenshot_url=screenshot_url,
     )
     db.update_lead_status(lead["id"], "designed", notes=f"Preview deployed: {deployment['url']}")
     return db.get_website_by_lead(lead["id"]) if website_id else None

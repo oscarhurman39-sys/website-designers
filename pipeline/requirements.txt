@@ -11,6 +11,12 @@ pandas==2.2.3
 huggingface_hub==0.25.2
 slack-sdk==3.33.1
 
+# Website preview screenshots (pipeline/utils/screenshot.py). After
+# installing, run `playwright install chromium` once (not needed if
+# Chromium is already provided by your environment, e.g. a pre-provisioned
+# container image -- screenshot.py auto-detects that case).
+playwright==1.56.0
+
 # Observability (optional cloud mirroring; local tracing works without any
 # VoltAgent account -- see pipeline/utils/tracer.py)
 voltagent==0.1.1

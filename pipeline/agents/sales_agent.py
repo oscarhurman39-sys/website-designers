@@ -9,6 +9,7 @@ stdin command thread handles the actual "takeover" / "payment ready" flow.
 """
 from __future__ import annotations
 
+import html as html_module
 import random
 import re
 from datetime import datetime, timedelta, timezone
@@ -17,7 +18,7 @@ from typing import Optional
 from huggingface_hub import InferenceClient
 
 import config
-from utils import compliance, db, email_utils, tracer, tracker
+from utils import compliance, db, email_utils, screenshot, tracer, tracker
 
 try:
     from slack_sdk import WebClient
@@ -175,6 +176,31 @@ def draft_cold_email(lead: dict) -> tuple[str, str]:
 
 # --- Sending (rate-limited) ----------------------------------------------------
 
+_SCREENSHOT_CID = "preview"
+
+
+def _build_html_body(body: str, preview_link: str) -> str:
+    """HTML counterpart of the plain-text drafted body, with the cached
+    screenshot embedded as a cid: inline image (alt text: "Your new
+    website preview") linking to the same tracked preview URL as the text
+    version. Only called when a screenshot is actually available -- see
+    _send_cold_email_impl."""
+    paragraphs = "".join(
+        f"<p>{html_module.escape(para).replace(chr(10), '<br>')}</p>"
+        for para in body.split("\n\n")
+        if para.strip()
+    )
+    escaped_link = html_module.escape(preview_link)
+    link_html = f'<p><a href="{escaped_link}">Here\'s the live preview: {escaped_link}</a></p>'
+    image_html = (
+        f'<p><a href="{escaped_link}">'
+        f'<img src="cid:{_SCREENSHOT_CID}" alt="Your new website preview" '
+        'style="max-width:100%;border:1px solid #ddd;border-radius:8px;">'
+        "</a></p>"
+    )
+    return paragraphs + link_html + image_html
+
+
 def _can_send_now() -> bool:
     now = datetime.now(timezone.utc)
     if now < _next_send_allowed_at:
@@ -212,11 +238,23 @@ def _send_cold_email_impl(lead: dict) -> bool:
     preview_link = tracker.create_click_link(lead["id"])
     body_with_link = f"{body}\n\nHere's the live preview: {preview_link}"
 
+    # Embed the cached preview screenshot inline (cid:) if design_agent.py
+    # already captured one for this lead; otherwise send exactly the same
+    # plain-text-only email as before -- a missing screenshot (capture
+    # failed, or an older lead from before this feature existed) must
+    # never block or change the send itself.
+    cached_screenshot = screenshot.get_cached_screenshot(lead["id"])
+    body_html = _build_html_body(body, preview_link) if cached_screenshot else None
+    inline_image_path = str(cached_screenshot) if cached_screenshot else None
+
     message_id = email_utils.send_email(
         to_addr=email_addr,
         subject=subject,
         body_text=body_with_link,
         lead_id=lead["id"],
+        body_html=body_html,
+        inline_image_path=inline_image_path,
+        inline_image_cid=_SCREENSHOT_CID,
     )
     db.insert_email_thread(
         lead_id=lead["id"],

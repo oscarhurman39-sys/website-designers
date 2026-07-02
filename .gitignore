@@ -232,4 +232,5 @@ pipeline/leads_inbox/
 pipeline/leads_processed/
 pipeline/.scheduler.pid
 pipeline/scheduler.log
+pipeline/screenshots/
 

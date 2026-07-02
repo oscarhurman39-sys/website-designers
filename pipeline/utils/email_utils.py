@@ -20,9 +20,11 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from email.header import decode_header
+from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formatdate, make_msgid, parseaddr
+from pathlib import Path
 from typing import Optional
 
 import config
@@ -47,20 +49,50 @@ def send_email(
     body_text: str,
     lead_id: int,
     body_html: Optional[str] = None,
+    inline_image_path: Optional[str] = None,
+    inline_image_cid: str = "preview",
 ) -> str:
     """Send a compliant cold email. Returns the generated Message-ID.
 
     Raises RuntimeError if the recipient is unsubscribed -- this is a hard
     stop enforced at the transport layer as a last line of defense, in
     addition to the caller checking `db.is_unsubscribed()` beforehand.
+
+    `inline_image_path`, if given, embeds that image as a `multipart/related`
+    part with the given Content-ID (default "preview") -- `body_html` must
+    reference it as `cid:<inline_image_cid>` and must be provided in that
+    case (there'd be nothing to display the image inline in otherwise).
+    Callers that never pass `inline_image_path` (which is every caller as
+    of this writing except sales_agent.py's cold-email send) get back the
+    exact same `multipart/alternative`-only structure as before -- this
+    parameter is purely additive.
     """
     from utils import db  # local import to avoid a circular import at module load time
 
     if db.is_unsubscribed(to_addr):
         raise RuntimeError(f"Refusing to send: {to_addr} is unsubscribed.")
+    if inline_image_path and not body_html:
+        raise ValueError("inline_image_path requires body_html (the image is referenced via cid: inside it).")
 
     text_with_footer = compliance.append_footer(body_text, lead_id)
-    msg = MIMEMultipart("alternative")
+
+    content = MIMEMultipart("alternative")
+    content.attach(MIMEText(text_with_footer, "plain"))
+    if body_html:
+        html_with_footer = compliance.append_footer_html(body_html, lead_id)
+        content.attach(MIMEText(html_with_footer, "html"))
+
+    if inline_image_path:
+        msg = MIMEMultipart("related")
+        msg.attach(content)
+        image_path = Path(inline_image_path)
+        image_part = MIMEImage(image_path.read_bytes())
+        image_part.add_header("Content-ID", f"<{inline_image_cid}>")
+        image_part.add_header("Content-Disposition", "inline", filename=image_path.name)
+        msg.attach(image_part)
+    else:
+        msg = content
+
     msg["Subject"] = subject
     msg["From"] = f"{config.SENDING_DOMAIN} <{config.EMAIL_USER}>"
     msg["To"] = to_addr
@@ -69,11 +101,6 @@ def send_email(
     msg["Message-ID"] = message_id
     msg["List-Unsubscribe"] = compliance.list_unsubscribe_header(lead_id)
     msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
-
-    msg.attach(MIMEText(text_with_footer, "plain"))
-    if body_html:
-        html_with_footer = compliance.append_footer_html(body_html, lead_id)
-        msg.attach(MIMEText(html_with_footer, "html"))
 
     with smtplib.SMTP(config.EMAIL_HOST, config.EMAIL_PORT, timeout=30) as server:
         server.starttls()

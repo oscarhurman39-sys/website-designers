@@ -1,21 +1,22 @@
-"""Flask app serving three public-facing routes:
+"""Flask app serving these public-facing routes:
 
   GET  /click?lead_id=<id>&token=<token>   -- click-tracking redirect to the preview site
   GET  /unsubscribe/<token>                -- one-click CAN-SPAM unsubscribe
+  GET  /screenshots/<lead_id>.png          -- serves a cached preview screenshot
   POST /webhook/stripe                     -- Stripe `checkout.session.completed` events
 
 Run standalone with `python webhook_server.py` (dev server) or behind a real
 WSGI server (gunicorn/uwsgi) in production. Must be reachable at
-config.PUBLIC_BASE_URL for the click-tracking and unsubscribe links embedded
-in outgoing emails to work.
+config.PUBLIC_BASE_URL for the click-tracking, unsubscribe, and screenshot
+links embedded in outgoing emails to work.
 """
 from __future__ import annotations
 
 import stripe
-from flask import Flask, Response, abort, redirect, request
+from flask import Flask, Response, abort, redirect, request, send_from_directory
 
 import config
-from utils import compliance, db, stripe_utils, tracker
+from utils import compliance, db, screenshot, stripe_utils, tracker
 
 
 def create_app() -> Flask:
@@ -42,6 +43,16 @@ def create_app() -> Flask:
             f"<p>{lead['business_name']} will not receive any further emails from us. Sorry for the bother.</p>",
             200,
         )
+
+    @app.route("/screenshots/<int:lead_id>.png", methods=["GET"])
+    def serve_screenshot(lead_id: int) -> Response:
+        """Serves the cached preview screenshot for a lead, if one exists.
+        This is the URL stored in websites.screenshot_url and embedded (as
+        a linked or cid: inline image) in cold emails by sales_agent.py."""
+        path = screenshot.get_cached_screenshot(lead_id)
+        if path is None:
+            abort(404)
+        return send_from_directory(screenshot.SCREENSHOTS_DIR, path.name, mimetype="image/png")
 
     @app.route("/payment-success", methods=["GET"])
     def payment_success() -> tuple[str, int]:

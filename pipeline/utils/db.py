@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS websites (
     repo_full_name      TEXT,
     preview_url         TEXT,
     vercel_project_id   TEXT,
+    screenshot_url      TEXT,
     transferred         INTEGER NOT NULL DEFAULT 0,
     created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -109,7 +110,18 @@ def init_db(db_path: Optional[str] = None) -> None:
     """Create all tables/indexes if they don't already exist. Idempotent."""
     with _connect(db_path) as conn:
         conn.executescript(_SCHEMA)
+        _migrate_add_column(conn, "websites", "screenshot_url", "TEXT")
         conn.commit()
+
+
+def _migrate_add_column(conn: sqlite3.Connection, table: str, column: str, coltype: str) -> None:
+    """Idempotently add `column` to `table` if it doesn't already exist --
+    covers DB files created before this column was added to the schema
+    above (CREATE TABLE IF NOT EXISTS is a no-op against an existing
+    table, so new columns need an explicit, safe-to-rerun ALTER TABLE)."""
+    existing_columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in existing_columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
 
 
 def _connect(db_path: Optional[str] = None) -> sqlite3.Connection:
@@ -298,15 +310,23 @@ def insert_website(
     repo_full_name: str,
     preview_url: str,
     vercel_project_id: str = "",
+    screenshot_url: str = "",
 ) -> int:
     with get_connection() as conn:
         cur = conn.execute(
             """INSERT INTO websites
-               (lead_id, template_niche, repo_url, repo_full_name, preview_url, vercel_project_id)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (lead_id, template_niche, repo_url, repo_full_name, preview_url, vercel_project_id),
+               (lead_id, template_niche, repo_url, repo_full_name, preview_url, vercel_project_id, screenshot_url)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (lead_id, template_niche, repo_url, repo_full_name, preview_url, vercel_project_id, screenshot_url),
         )
         return cur.lastrowid
+
+
+def update_website_screenshot_url(lead_id: int, screenshot_url: str) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE websites SET screenshot_url = ? WHERE lead_id = ?", (screenshot_url, lead_id)
+        )
 
 
 def get_website_by_lead(lead_id: int) -> Optional[dict[str, Any]]:
