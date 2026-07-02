@@ -103,3 +103,25 @@ def get_deployment_url(deployment_id: str) -> Optional[str]:
     resp.raise_for_status()
     url = resp.json().get("url")
     return f"https://{url}" if url else None
+
+
+def delete_project(project_name: str) -> None:
+    """Permanently delete a Vercel project (and its deployments). Destructive
+    and irreversible -- used only by the opt-in integration test
+    (tests/test_pipeline_real.py) to clean up the throwaway project it
+    creates, never by the normal pipeline flow. A 404 (already gone) is
+    treated as success, not an error, since cleanup should be idempotent.
+
+    Applies the same `_sanitize_project_name` as `deploy_files`, so callers
+    can pass the same raw name they'd pass to `deploy_files` (e.g.
+    `github_api.make_repo_name(...)`) rather than needing to separately
+    track the sanitized form Vercel actually assigned.
+    """
+    resp = requests.delete(
+        f"{_API_BASE}/v9/projects/{_sanitize_project_name(project_name)}",
+        headers=_headers(),
+        params=_team_params(),
+        timeout=30,
+    )
+    if resp.status_code != 404:
+        resp.raise_for_status()

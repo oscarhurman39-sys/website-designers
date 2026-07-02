@@ -1,143 +1,15 @@
-:root {
-  --accent: #8a5a2b;
-  --accent-dark: #5f3c19;
-  --bg: #fbf6ee;
-}
+/* Small, hand-authored flourishes layered on top of Tailwind (loaded via
+   CDN in index.html). Tailwind utility classes do almost all of the
+   styling here on purpose -- this file intentionally stays minimal. */
 
-* { box-sizing: border-box; margin: 0; padding: 0; }
+html {
+  scroll-behavior: smooth;
+}
 
 body {
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-  color: #222;
-  background: var(--bg);
-  line-height: 1.6;
 }
 
-.container {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 0 24px;
-}
-
-.site-header {
-  background: #fff;
-  border-bottom: 1px solid #e5e5e5;
-  position: sticky;
-  top: 0;
-  z-index: 10;
-}
-
-.header-inner {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding-top: 16px;
-  padding-bottom: 16px;
-}
-
-.logo {
-  font-weight: 700;
-  font-size: 1.25rem;
-  color: var(--accent-dark);
-}
-
-nav a {
-  margin-left: 24px;
-  text-decoration: none;
-  color: #333;
-  font-weight: 500;
-}
-
-nav a:hover { color: var(--accent); }
-
-.hero {
-  background-size: cover;
-  background-position: center;
-  color: #fff;
-  padding: 120px 0;
-  text-align: center;
-}
-
-.hero h1 {
-  font-size: 3rem;
-  margin-bottom: 12px;
-}
-
-.hero .tagline {
-  font-size: 1.25rem;
-  margin-bottom: 28px;
-}
-
-.cta {
-  display: inline-block;
-  background: var(--accent);
-  color: #fff;
-  padding: 14px 32px;
-  border-radius: 6px;
-  text-decoration: none;
-  font-weight: 600;
-  transition: background 0.2s ease;
-}
-
-.cta:hover { background: var(--accent-dark); }
-
-.about, .contact {
-  padding: 64px 0;
-  text-align: center;
-}
-
-.about h2, .services h2, .contact h2 {
-  font-size: 2rem;
-  margin-bottom: 20px;
-  color: var(--accent-dark);
-}
-
-.services {
-  background: #fff;
-  padding: 64px 0;
-}
-
-.service-grid {
-  list-style: none;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 20px;
-  text-align: center;
-}
-
-.service-grid li {
-  background: var(--bg);
-  border: 1px solid #e5e5e5;
-  border-radius: 8px;
-  padding: 24px 16px;
-  font-weight: 600;
-  color: var(--accent-dark);
-}
-
-.testimonial {
-  background: var(--accent);
-  color: #fff;
-  padding: 56px 0;
-  text-align: center;
-}
-
-.testimonial blockquote {
-  font-size: 1.35rem;
-  font-style: italic;
-  max-width: 700px;
-  margin: 0 auto;
-}
-
-.site-footer {
-  background: #1a1a1a;
-  color: #ccc;
-  text-align: center;
-  padding: 28px 0;
-  font-size: 0.9rem;
-}
-
-.preview-note {
-  margin-top: 6px;
-  color: #888;
-  font-size: 0.8rem;
+blockquote {
+  quotes: none;
 }

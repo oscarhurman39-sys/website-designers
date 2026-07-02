@@ -15,6 +15,9 @@ slack-sdk==3.33.1
 # VoltAgent account -- see pipeline/utils/tracer.py)
 voltagent==0.1.1
 
+# Testing (optional; only needed to run tests/test_pipeline_real.py)
+pytest==8.3.3
+
 # NOTE: sqlite3, smtplib, imaplib, and email are all part of the Python standard
 # library and must NOT be pip-installed. They are listed here only as documentation
 # of what the project depends on; `pip install` will fail if they are left in.

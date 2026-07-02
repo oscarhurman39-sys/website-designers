@@ -4,65 +4,82 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{ business_name }} | Cafe</title>
+  <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
-  <header class="site-header">
-    <div class="container header-inner">
-      <span class="logo">☕ {{ business_name }}</span>
-      <nav>
-        <a href="#services">Services</a>
-        <a href="#about">About</a>
-        <a href="#testimonial">Reviews</a>
-        <a href="#contact">Contact</a>
+<body class="bg-white text-slate-800 antialiased">
+
+  <!-- Nav -->
+  <header class="sticky top-0 z-10 bg-white/90 backdrop-blur border-b border-slate-200">
+    <div class="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
+      <span class="text-lg font-bold text-amber-700">☕ {{ business_name }}</span>
+      <nav class="hidden sm:flex gap-6 text-sm font-medium text-slate-600">
+        <a href="#services" class="hover:text-amber-700">Services</a>
+        <a href="#about" class="hover:text-amber-700">About</a>
+        <a href="#testimonial" class="hover:text-amber-700">Reviews</a>
+        <a href="#contact" class="hover:text-amber-700">Contact</a>
       </nav>
+      <a href="tel:{{ phone }}"
+         class="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700 transition">
+        Call {{ phone }}
+      </a>
     </div>
   </header>
 
-  <section class="hero" style="background-image: linear-gradient(rgba(0,0,0,0.45), rgba(0,0,0,0.45)), url('{{ hero_image_url }}');">
-    <div class="container hero-inner">
-      <h1>{{ business_name }}</h1>
-      <p class="tagline">Your neighborhood spot for great coffee in {{ location }}</p>
-      <a class="cta" href="#contact">Get In Touch</a>
+  <!-- Hero -->
+  <section class="bg-gradient-to-br from-amber-600 to-amber-800 text-white">
+    <div class="max-w-5xl mx-auto px-6 py-24 text-center">
+      <h1 class="text-4xl sm:text-5xl font-extrabold tracking-tight">{{ hero_headline }}</h1>
+      <p class="mt-4 text-lg text-amber-100">Serving {{ location }}</p>
+      <a href="#contact"
+         class="mt-8 inline-block rounded-lg bg-white px-6 py-3 font-semibold text-amber-800 hover:bg-amber-50 transition">
+        Get In Touch
+      </a>
     </div>
   </section>
 
-  <section id="about" class="about container">
-    <h2>Why {{ business_name }}?</h2>
-    <p>{{ pain_point_solution }}</p>
+  <!-- About / pain point -->
+  <section id="about" class="max-w-3xl mx-auto px-6 py-16 text-center">
+    <h2 class="text-2xl font-bold text-amber-800 mb-4">Why {{ business_name }}?</h2>
+    <p class="text-slate-600 leading-relaxed">{{ pain_point_solution }}</p>
   </section>
 
-  <section id="services" class="services">
-    <div class="container">
-      <h2>What We Offer</h2>
-      <ul class="service-grid">
-        <li>Fresh Roasted Coffee</li>
-        <li>House-made Pastries</li>
-        <li>Cozy Seating</li>
-        <li>Free Wi-Fi</li>
-      </ul>
+  <!-- Services -->
+  <section id="services" class="bg-slate-50 border-y border-slate-200">
+    <div class="max-w-3xl mx-auto px-6 py-16 text-center">
+      <h2 class="text-2xl font-bold text-amber-800 mb-4">What We Offer</h2>
+      <p class="text-slate-600">{{ services_list | default("Fresh Roasted Coffee, House-made Pastries, Cozy Seating, Free Wi-Fi") }}</p>
     </div>
   </section>
 
-  <section id="testimonial" class="testimonial">
-    <div class="container">
-      <blockquote>&ldquo;{{ testimonial }}&rdquo;</blockquote>
+  <!-- Testimonial -->
+  <section id="testimonial" class="bg-amber-700 text-white">
+    <div class="max-w-3xl mx-auto px-6 py-16 text-center">
+      <blockquote class="text-xl italic">&ldquo;{{ testimonial }}&rdquo;</blockquote>
     </div>
   </section>
 
-  <section id="contact" class="contact">
-    <div class="container">
-      <h2>Get In Touch</h2>
-      <p>{{ location }}</p>
-      <p><a href="tel:{{ phone }}">{{ phone }}</a></p>
-    </div>
+  <!-- Contact -->
+  <section id="contact" class="max-w-3xl mx-auto px-6 py-16 text-center">
+    <h2 class="text-2xl font-bold text-amber-800 mb-4">Get In Touch</h2>
+    <p class="text-slate-600">{{ location }}</p>
+    <p class="mt-2">
+      <a href="tel:{{ phone }}" class="text-lg font-semibold text-amber-700 hover:underline">{{ phone }}</a>
+    </p>
   </section>
 
-  <footer class="site-footer">
-    <div class="container">
+  <!-- Footer -->
+  <footer class="border-t border-slate-200 bg-slate-50">
+    <div class="max-w-3xl mx-auto px-6 py-8 text-center text-sm text-slate-500 space-y-2">
       <p>&copy; {{ year }} {{ business_name }}. All rights reserved.</p>
-      <p class="preview-note">This is a free preview site built by your local web design team.</p>
+      <p>This is a free, live preview built by your local web design team.</p>
+      <p>
+        <a href="{{ preview_url | default('#') }}" class="text-amber-700 hover:underline">
+          View / share this preview
+        </a>
+      </p>
     </div>
   </footer>
+
 </body>
 </html>

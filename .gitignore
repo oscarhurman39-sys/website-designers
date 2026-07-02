@@ -219,11 +219,17 @@ __marimo__/
 
 # Project-specific
 .env
+.env.test
 *.db
 pipeline/.secret_key
 pipeline/*.log
 pipeline/traces.json
+pipeline/traces.test.json
+leads.test.db
+traces.test.json
 pipeline/.paused
 pipeline/leads_inbox/
 pipeline/leads_processed/
+pipeline/.scheduler.pid
+pipeline/scheduler.log
 

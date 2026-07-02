@@ -12,7 +12,7 @@ import requests
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 import config
-from utils import db, github_api, tracer, vercel_api
+from utils import db, github_api, tracer, tracker, vercel_api
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 TEMPLATE_FILES = ("index.html", "style.css")
@@ -81,6 +81,16 @@ def build_context(lead: dict) -> dict:
         "testimonial": _testimonial(lead),
         "hero_image_url": get_hero_image_url(lead["niche"]),
         "year": datetime.now(timezone.utc).year,
+        # Added for the newer Tailwind-based templates (landscaper/cafe/
+        # plumber/salon/electrician); older templates simply ignore unused
+        # context keys, so this is additive and doesn't affect them.
+        "hero_headline": f"{lead['business_name']} -- Trusted Local {lead['niche'].title()}",
+        # A real, working link back to this lead's own preview, generated
+        # from the lead id alone (no dependency on the site already being
+        # deployed -- utils/tracker.py signs it purely from lead_id, and
+        # the webhook server resolves it to the real preview_url from the
+        # `websites` table whenever it's actually clicked).
+        "preview_url": tracker.create_click_link(lead["id"]),
     }
 
 

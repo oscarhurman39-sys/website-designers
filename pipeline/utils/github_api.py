@@ -97,3 +97,12 @@ def remove_collaborator(repo_full_name: str, github_username: str) -> None:
 
 def get_authenticated_username() -> str:
     return _get_client().get_user().login
+
+
+def delete_repo(repo_full_name: str) -> None:
+    """Permanently delete a repo. Destructive and irreversible -- used only
+    by the opt-in integration test (tests/test_pipeline_real.py) to clean
+    up the throwaway repo it creates, never by the normal pipeline flow."""
+    client = _get_client()
+    repo = client.get_repo(repo_full_name)
+    repo.delete()
