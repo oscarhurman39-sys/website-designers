@@ -216,3 +216,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project-specific
+.env
+pipeline/.env
+pipeline/*.db
+pipeline/pipeline.db
+pipeline/.secret_key
+pipeline/*.log
+pipeline/.paused
+pipeline/leads_inbox/
+pipeline/leads_processed/
+

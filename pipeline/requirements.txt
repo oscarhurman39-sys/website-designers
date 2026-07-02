@@ -1,0 +1,16 @@
+# Core
+requests==2.32.3
+beautifulsoup4==4.12.3
+Jinja2==3.1.4
+python-dotenv==1.0.1
+PyGithub==2.4.0
+stripe==10.12.0
+Flask==3.0.3
+streamlit==1.38.0
+pandas==2.2.3
+huggingface_hub==0.25.2
+slack-sdk==3.33.1
+
+# NOTE: sqlite3, smtplib, imaplib, and email are all part of the Python standard
+# library and must NOT be pip-installed. They are listed here only as documentation
+# of what the project depends on; `pip install` will fail if they are left in.

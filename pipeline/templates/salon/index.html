@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ business_name }} | Salon</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <span class="logo">✂️ {{ business_name }}</span>
+      <nav>
+        <a href="#services">Services</a>
+        <a href="#about">About</a>
+        <a href="#testimonial">Reviews</a>
+        <a href="#contact">Contact</a>
+      </nav>
+    </div>
+  </header>
+
+  <section class="hero" style="background-image: linear-gradient(rgba(0,0,0,0.45), rgba(0,0,0,0.45)), url('{{ hero_image_url }}');">
+    <div class="container hero-inner">
+      <h1>{{ business_name }}</h1>
+      <p class="tagline">Look and feel your best -- {{ location }}'s go-to salon</p>
+      <a class="cta" href="#contact">Get In Touch</a>
+    </div>
+  </section>
+
+  <section id="about" class="about container">
+    <h2>Why {{ business_name }}?</h2>
+    <p>{{ pain_point_solution }}</p>
+  </section>
+
+  <section id="services" class="services">
+    <div class="container">
+      <h2>What We Offer</h2>
+      <ul class="service-grid">
+        <li>Haircuts & Color</li>
+        <li>Styling</li>
+        <li>Skincare</li>
+        <li>Bridal Packages</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="testimonial" class="testimonial">
+    <div class="container">
+      <blockquote>&ldquo;{{ testimonial }}&rdquo;</blockquote>
+    </div>
+  </section>
+
+  <section id="contact" class="contact">
+    <div class="container">
+      <h2>Get In Touch</h2>
+      <p>{{ location }}</p>
+      <p><a href="tel:{{ phone }}">{{ phone }}</a></p>
+    </div>
+  </section>
+
+  <footer class="site-footer">
+    <div class="container">
+      <p>&copy; {{ year }} {{ business_name }}. All rights reserved.</p>
+      <p class="preview-note">This is a free preview site built by your local web design team.</p>
+    </div>
+  </footer>
+</body>
+</html>
