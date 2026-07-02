@@ -1,0 +1,15 @@
+/* Small, hand-authored flourishes layered on top of Tailwind (loaded via
+   CDN in index.html). Tailwind utility classes do almost all of the
+   styling here on purpose -- this file intentionally stays minimal. */
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+blockquote {
+  quotes: none;
+}

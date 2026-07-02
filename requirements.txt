@@ -1,0 +1,4 @@
+# The real, maintained dependency list lives in pipeline/requirements.txt
+# (with each package pinned and annotated). This file exists only so
+# `pip install -r requirements.txt` works from the repo root too.
+-r pipeline/requirements.txt

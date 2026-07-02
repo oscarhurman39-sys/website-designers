@@ -1,0 +1,29 @@
+# Core
+requests==2.32.3
+beautifulsoup4==4.12.3
+Jinja2==3.1.4
+python-dotenv==1.0.1
+PyGithub==2.4.0
+stripe==10.12.0
+Flask==3.0.3
+streamlit==1.38.0
+pandas==2.2.3
+huggingface_hub==0.25.2
+slack-sdk==3.33.1
+
+# Website preview screenshots (pipeline/utils/screenshot.py). After
+# installing, run `playwright install chromium` once (not needed if
+# Chromium is already provided by your environment, e.g. a pre-provisioned
+# container image -- screenshot.py auto-detects that case).
+playwright==1.56.0
+
+# Observability (optional cloud mirroring; local tracing works without any
+# VoltAgent account -- see pipeline/utils/tracer.py)
+voltagent==0.1.1
+
+# Testing (optional; only needed to run tests/test_pipeline_real.py)
+pytest==8.3.3
+
+# NOTE: sqlite3, smtplib, imaplib, and email are all part of the Python standard
+# library and must NOT be pip-installed. They are listed here only as documentation
+# of what the project depends on; `pip install` will fail if they are left in.
