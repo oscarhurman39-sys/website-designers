@@ -219,9 +219,7 @@ __marimo__/
 
 # Project-specific
 .env
-pipeline/.env
-pipeline/*.db
-pipeline/pipeline.db
+*.db
 pipeline/.secret_key
 pipeline/*.log
 pipeline/.paused

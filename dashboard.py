@@ -1,6 +1,6 @@
 """Streamlit dashboard for operators.
 
-Run with: `streamlit run dashboard.py` (from inside the `pipeline/` directory).
+Run with: `streamlit run dashboard.py` (from the repo root).
 
 Shows every lead with status/preview link/last email timestamp, lets you
 filter by status, drill into a lead's email thread, retry a bounce, pause/
@@ -9,15 +9,23 @@ table to CSV.
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
-import config
-from utils import db
+# dashboard.py lives at the repo root, but config.py / utils / agents are
+# flat, non-package modules under pipeline/ (main.py, webhook_server.py,
+# etc. all import them the same bare way, assuming pipeline/ is on
+# sys.path). Add pipeline/ to sys.path so this file can reuse them as-is.
+_PIPELINE_DIR = Path(__file__).resolve().parent / "pipeline"
+sys.path.insert(0, str(_PIPELINE_DIR))
 
-PAUSE_FLAG = Path(__file__).resolve().parent / ".paused"
+import config  # noqa: E402
+from utils import db  # noqa: E402
+
+PAUSE_FLAG = _PIPELINE_DIR / ".paused"
 
 st.set_page_config(page_title="Cold Email Sales Pipeline", layout="wide")
 db.init_db()  # safe/idempotent if main.py hasn't started the DB yet

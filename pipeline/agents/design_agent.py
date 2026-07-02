@@ -14,7 +14,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 import config
 from utils import db, github_api, vercel_api
 
-TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
+TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 TEMPLATE_FILES = ("index.html", "style.css")
 
 _PLACEHOLDER_IMAGE_BASE = "https://picsum.photos/seed"

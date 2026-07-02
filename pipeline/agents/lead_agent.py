@@ -214,3 +214,21 @@ def run(csv_path: Optional[str] = None) -> None:
         ingest_csv(csv_path)
     for lead in db.list_leads_by_status("new"):
         research_lead(lead)
+
+
+def _main() -> None:
+    """CLI entrypoint: `python -m agents.lead_agent path/to/leads.csv`
+    (run from inside the `pipeline/` directory so the flat `utils`/`config`
+    imports resolve, same as main.py and webhook_server.py)."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Ingest and research leads from a CSV file.")
+    parser.add_argument("csv_path", help="CSV with columns: business_name, niche, location")
+    args = parser.parse_args()
+
+    db.init_db()
+    run(args.csv_path)
+
+
+if __name__ == "__main__":
+    _main()

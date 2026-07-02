@@ -13,9 +13,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Load `.env` from the pipeline/ directory regardless of the current working
-# directory the process was started from.
-_ENV_PATH = Path(__file__).resolve().parent / ".env"
+# Load `.env` from the repo root (one level up from pipeline/) regardless of
+# the current working directory the process was started from.
+_ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(dotenv_path=_ENV_PATH)
 
 # --- Required variables -----------------------------------------------------
@@ -60,8 +60,10 @@ SENDING_DOMAIN: str = os.getenv("SENDING_DOMAIN", "")
 PHYSICAL_ADDRESS: str = os.getenv("PHYSICAL_ADDRESS", "")
 
 UNSPLASH_ACCESS_KEY: str = os.getenv("UNSPLASH_ACCESS_KEY", "")
-DB_PATH: str = os.getenv("DB_PATH", str(Path(__file__).resolve().parent / "pipeline.db"))
-PUBLIC_BASE_URL: str = os.getenv("PUBLIC_BASE_URL", "http://localhost:5000").rstrip("/")
+# `.strip() or default` (rather than getenv's own default) so an empty
+# `DB_PATH=` line in .env falls back too, not just a fully-absent key.
+DB_PATH: str = os.getenv("DB_PATH", "").strip() or str(Path(__file__).resolve().parent / "leads.db")
+PUBLIC_BASE_URL: str = (os.getenv("PUBLIC_BASE_URL", "").strip() or "http://localhost:5000").rstrip("/")
 WEBSITE_PRICE_USD: int = int(os.getenv("WEBSITE_PRICE_USD", "750") or 750)
 
 # --- Rate limiting (cold email deliverability safeguards) ------------------
@@ -114,7 +116,7 @@ def validate() -> None:
         raise RuntimeError(
             "Missing required environment variable(s): "
             + ", ".join(missing)
-            + f"\nCopy pipeline/.env.example to pipeline/.env ({_ENV_PATH}) and fill them in."
+            + f"\nCopy .env.example to .env ({_ENV_PATH}) and fill them in."
         )
 
 
