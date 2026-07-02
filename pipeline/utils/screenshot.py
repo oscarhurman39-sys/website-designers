@@ -2,13 +2,25 @@
 
 Used by design_agent.py right after a successful Vercel deployment, and by
 sales_agent.py to embed the result as an inline image in the cold email.
-Screenshots are cached on disk keyed by lead_id: capture_screenshot() never
-re-captures for a lead that already has a screenshot file, so a retried or
-re-run design step doesn't burn a browser launch (or produce a different
-image) every time.
+Screenshots are cached on disk keyed by lead_id: capture never re-runs for
+a lead that already has a screenshot file, so a retried or re-run design
+step doesn't burn a browser launch (or produce a different image) every
+time.
+
+Two public entrypoints, same underlying capture logic:
+  - `capture_screenshot_sync()` -- what design_agent.py actually calls.
+    Required: design_agent.process_lead() runs inside
+    tracer.run_traced()'s asyncio.run(), and Playwright's sync API refuses
+    to launch on a thread with an active event loop (confirmed by hitting
+    that exact TargetClosedError in testing) -- this dispatches the real
+    Playwright work to a plain worker thread to sidestep that.
+  - `capture_screenshot()` -- a real `async def`, for any async caller.
+    Internally just awaits the same worker-thread dispatch via
+    asyncio.to_thread, so it's safe to call from inside an event loop too.
 """
 from __future__ import annotations
 
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
@@ -33,7 +45,7 @@ def screenshot_path(lead_id: int) -> Path:
     return SCREENSHOTS_DIR / f"{lead_id}.png"
 
 
-def capture_screenshot(preview_url: str, lead_id: int) -> Path:
+def capture_screenshot_sync(preview_url: str, lead_id: int) -> Path:
     """Capture a full-page screenshot of `preview_url` and save it to
     pipeline/screenshots/{lead_id}.png. Cached: if that file already
     exists, returns it immediately without launching a browser.
@@ -49,18 +61,22 @@ def capture_screenshot(preview_url: str, lead_id: int) -> Path:
 
     SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Playwright's sync API refuses to run on a thread with an active
-    # asyncio event loop (confirmed by testing: design_agent.process_lead()
-    # is wrapped by tracer.run_traced(), which runs its callback inside
-    # asyncio.run()). Running the actual capture in a plain worker thread
-    # -- which has no event loop of its own -- sidesteps that restriction
-    # so this function works the same whether called from inside or
-    # outside an async context, without design_agent.py needing to know or
-    # care about the difference.
+    # See module docstring: dispatched to a plain worker thread so this
+    # works whether the caller is inside an active asyncio event loop or
+    # not, without the caller needing to know or care which.
     with ThreadPoolExecutor(max_workers=1) as executor:
         executor.submit(_capture_sync, preview_url, out_path).result()
 
     return out_path
+
+
+async def capture_screenshot(preview_url: str, lead_id: int) -> str:
+    """Async entrypoint wrapping capture_screenshot_sync(). Returns the
+    local file path as a string. Safe to call from within a running event
+    loop (asyncio.to_thread hands the actual Playwright work to a plain
+    worker thread, same as the sync entrypoint does internally)."""
+    path = await asyncio.to_thread(capture_screenshot_sync, preview_url, lead_id)
+    return str(path)
 
 
 def _capture_sync(preview_url: str, out_path: Path) -> None:
@@ -102,4 +118,10 @@ def get_cached_screenshot(lead_id: int) -> Optional[Path]:
     return path if path.exists() else None
 
 
-__all__ = ["capture_screenshot", "get_cached_screenshot", "screenshot_path", "PlaywrightError"]
+__all__ = [
+    "capture_screenshot",
+    "capture_screenshot_sync",
+    "get_cached_screenshot",
+    "screenshot_path",
+    "PlaywrightError",
+]

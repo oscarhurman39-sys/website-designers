@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS websites (
     preview_url         TEXT,
     vercel_project_id   TEXT,
     screenshot_url      TEXT,
+    screenshot_path     TEXT,
     transferred         INTEGER NOT NULL DEFAULT 0,
     created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -111,6 +112,7 @@ def init_db(db_path: Optional[str] = None) -> None:
     with _connect(db_path) as conn:
         conn.executescript(_SCHEMA)
         _migrate_add_column(conn, "websites", "screenshot_url", "TEXT")
+        _migrate_add_column(conn, "websites", "screenshot_path", "TEXT")
         conn.commit()
 
 
@@ -311,13 +313,16 @@ def insert_website(
     preview_url: str,
     vercel_project_id: str = "",
     screenshot_url: str = "",
+    screenshot_path: str = "",
 ) -> int:
     with get_connection() as conn:
         cur = conn.execute(
             """INSERT INTO websites
-               (lead_id, template_niche, repo_url, repo_full_name, preview_url, vercel_project_id, screenshot_url)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (lead_id, template_niche, repo_url, repo_full_name, preview_url, vercel_project_id, screenshot_url),
+               (lead_id, template_niche, repo_url, repo_full_name, preview_url, vercel_project_id,
+                screenshot_url, screenshot_path)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (lead_id, template_niche, repo_url, repo_full_name, preview_url, vercel_project_id,
+             screenshot_url, screenshot_path),
         )
         return cur.lastrowid
 

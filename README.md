@@ -207,6 +207,12 @@ cp .env.test.example .env.test
 pytest --run-real tests/test_pipeline_real.py -v -s
 ```
 
+If `.env.test` doesn't exist, `tests/conftest.py` falls back to your real
+`.env` rather than skipping -- but always forces `DB_PATH`/`TRACES_PATH`
+to throwaway `pipeline/leads.test.db` / `traces.test.json` regardless of
+what `.env` specifies, so even a fallback run can't write into your real
+`leads.db`. Create `.env.test` if you want explicit control instead.
+
 ## Scheduler / keeping it running
 
 `main.py` already contains its own infinite work loop -- once started, it

@@ -112,20 +112,22 @@ def render_template_files(niche: str, context: dict) -> dict[str, str]:
     return rendered
 
 
-def _capture_and_publish_screenshot(lead_id: int, preview_url: str) -> str:
+def _capture_and_publish_screenshot(lead_id: int, preview_url: str) -> tuple[str, str]:
     """Capture (or reuse a cached) screenshot of the freshly-deployed
-    preview and return the public URL it's served at. A screenshot is a
+    preview. Returns (public_screenshot_url, local_screenshot_path) -- the
+    former is what gets linked/displayed, the latter is what sales_agent.py
+    actually reads bytes from for the CID attachment. A screenshot is a
     nice-to-have for the cold email, not a requirement for a successful
     deploy -- any failure here (Playwright/browser unavailable, the
     preview not reachable yet, etc.) is caught and logged, and the caller
-    proceeds with an empty screenshot_url rather than losing the deploy
-    that already succeeded."""
+    proceeds with both empty rather than losing the deploy that already
+    succeeded."""
     try:
-        screenshot.capture_screenshot(preview_url, lead_id)
+        local_path = screenshot.capture_screenshot_sync(preview_url, lead_id)
     except Exception as exc:  # noqa: BLE001 - screenshot capture must never fail a successful deploy
         print(f"[design_agent] Screenshot capture failed for lead {lead_id}, continuing without one: {exc}")
-        return ""
-    return f"{config.PUBLIC_BASE_URL}/screenshots/{lead_id}.png"
+        return "", ""
+    return f"{config.PUBLIC_BASE_URL}/screenshots/{lead_id}.png", str(local_path)
 
 
 def process_lead(lead: dict) -> Optional[dict]:
@@ -160,7 +162,7 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
         github_api.make_repo_name(lead["business_name"], lead["id"]), files
     )
 
-    screenshot_url = _capture_and_publish_screenshot(lead["id"], deployment["url"])
+    screenshot_url, screenshot_path = _capture_and_publish_screenshot(lead["id"], deployment["url"])
 
     website_id = db.insert_website(
         lead_id=lead["id"],
@@ -170,6 +172,7 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
         preview_url=deployment["url"],
         vercel_project_id=deployment["deployment_id"],
         screenshot_url=screenshot_url,
+        screenshot_path=screenshot_path,
     )
     db.update_lead_status(lead["id"], "designed", notes=f"Preview deployed: {deployment['url']}")
     return db.get_website_by_lead(lead["id"]) if website_id else None
