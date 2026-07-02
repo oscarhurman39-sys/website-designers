@@ -31,7 +31,7 @@ from pathlib import Path
 
 import config
 from agents import design_agent, lead_agent, sales_agent
-from utils import db, github_api, stripe_utils
+from utils import db, github_api, stripe_utils, vercel_api
 
 PIPELINE_DIR = Path(__file__).resolve().parent
 LEADS_INBOX = PIPELINE_DIR / "leads_inbox"
@@ -138,28 +138,60 @@ def _handle_transfer(lead_id: int) -> None:
         print(f"[main] Lead {lead_id} is not marked 'won' yet (status: {lead['status']}). Aborting.")
         return
 
-    github_username = input(f"GitHub username to invite for lead {lead_id}: ").strip()
-    if not github_username:
-        print("[main] No username given, aborting transfer.")
-        return
-    try:
-        github_api.invite_collaborator(website["repo_full_name"], github_username, permission="admin")
-        print(f"[main] Invited {github_username} to {website['repo_full_name']}")
-    except Exception as exc:  # noqa: BLE001
-        print(f"[main] Failed to invite collaborator: {exc}")
-        return
+    # --- GitHub: invite the client as a collaborator on their repo ---
+    github_username = input(f"GitHub username to invite for lead {lead_id} (blank to skip): ").strip()
+    if github_username:
+        try:
+            github_api.invite_collaborator(website["repo_full_name"], github_username, permission="admin")
+            print(f"[main] Invited {github_username} to {website['repo_full_name']}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[main] Failed to invite GitHub collaborator: {exc}")
+    else:
+        print("[main] Skipping GitHub invite.")
 
-    answer = input("Transfer ownership? Remove your access? (y/n): ").strip().lower()
+    # --- Vercel: invite the client to the project (requires VERCEL_TEAM_ID) ---
+    default_email = lead.get("contact_email") or ""
+    prompt_suffix = f" [{default_email}]" if default_email else ""
+    vercel_email = (
+        input(f"Client email to invite to the Vercel project{prompt_suffix} (blank to skip): ").strip()
+        or default_email
+    )
+    if vercel_email:
+        try:
+            project_raw_name = github_api.make_repo_name(lead["business_name"], lead_id)
+            vercel_api.invite_collaborator(project_raw_name, vercel_email)
+            print(f"[main] Invited {vercel_email} to the Vercel project.")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[main] Failed to invite Vercel collaborator: {exc}")
+            print(
+                "[main] This call wasn't verified against a live Vercel account during "
+                "development (see utils/vercel_api.py). If it keeps failing, confirm "
+                "VERCEL_TEAM_ID is set and check the request shape against Vercel's "
+                "current REST API docs."
+            )
+    else:
+        print("[main] Skipping Vercel invite.")
+
+    # --- Removing your own access: GitHub only, and only on explicit confirmation ---
+    answer = input("Remove your own GitHub repo access now? (y/n): ").strip().lower()
     if answer == "y":
         try:
             own_username = github_api.get_authenticated_username()
             github_api.remove_collaborator(website["repo_full_name"], own_username)
             db.mark_website_transferred(lead_id)
-            print(f"[main] Access removed. Website for lead {lead_id} marked as transferred.")
+            print(f"[main] GitHub access removed. Website for lead {lead_id} marked as transferred.")
         except Exception as exc:  # noqa: BLE001
-            print(f"[main] Failed to remove own access: {exc}")
+            print(f"[main] Failed to remove own GitHub access: {exc}")
     else:
-        print("[main] Leaving access as-is (not marked transferred).")
+        print("[main] Leaving GitHub access as-is (not marked transferred).")
+
+    print(
+        "[main] NOTE: Vercel access is never removed automatically. Your Vercel team "
+        "membership is typically shared across every client's project, not scoped to "
+        "just this one, so revoking it here could lock you out of unrelated projects "
+        "too. Remove Vercel access manually via the dashboard for this specific "
+        "project if you want to fully hand it over."
+    )
 
 
 def _handle_command(line: str) -> None:

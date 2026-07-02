@@ -105,6 +105,55 @@ def get_deployment_url(deployment_id: str) -> Optional[str]:
     return f"https://{url}" if url else None
 
 
+def _get_project_id(project_name: str) -> str:
+    resp = requests.get(
+        f"{_API_BASE}/v9/projects/{_sanitize_project_name(project_name)}",
+        headers=_headers(),
+        params=_team_params(),
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()["id"]
+
+
+def invite_collaborator(project_name: str, email: str, project_role: str = "ADMIN") -> None:
+    """Invite a client to a specific Vercel project by email.
+
+    Requires VERCEL_TEAM_ID. Vercel has no API to grant access to a single
+    project under a personal (non-team) account -- access is only ever
+    granted by inviting someone to a TEAM, with an optional per-project
+    role assignment (the `projects` field below) scoping what they can do
+    within it. If no team is configured, this raises rather than silently
+    no-op'ing or inviting the client to unrelated projects that might also
+    live in a team.
+
+    Endpoint: POST /v2/teams/{teamId}/members, verified against Vercel's
+    published REST API / SDK reference docs. Unlike the rest of this
+    pipeline (which was exercised against real APIs during development),
+    this specific call could not be verified live -- api.vercel.com wasn't
+    reachable from the sandbox this was built in. Test it once against a
+    real VERCEL_TOKEN/VERCEL_TEAM_ID before relying on it in production.
+    """
+    if not config.VERCEL_TEAM_ID:
+        raise RuntimeError(
+            "Cannot invite a Vercel collaborator without VERCEL_TEAM_ID set -- "
+            "Vercel has no per-project invite API for personal (non-team) accounts."
+        )
+    project_id = _get_project_id(project_name)
+    payload = {
+        "email": email,
+        "role": "MEMBER",
+        "projects": [{"projectId": project_id, "role": project_role}],
+    }
+    resp = requests.post(
+        f"{_API_BASE}/v2/teams/{config.VERCEL_TEAM_ID}/members",
+        headers=_headers(),
+        json=payload,
+        timeout=30,
+    )
+    resp.raise_for_status()
+
+
 def delete_project(project_name: str) -> None:
     """Permanently delete a Vercel project (and its deployments). Destructive
     and irreversible -- used only by the opt-in integration test

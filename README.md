@@ -84,7 +84,7 @@ While `main.py` is running, type commands at its console:
 |---|---|
 | `takeover <lead_id>` | Pause automation for a lead, hand negotiation to a human |
 | `payment ready <lead_id>` | Create + email a Stripe Checkout link |
-| `transfer <lead_id>` | Invite the client to the GitHub repo, optionally remove your own access |
+| `transfer <lead_id>` | Invite the client to the GitHub repo and Vercel project (requires `VERCEL_TEAM_ID`), optionally remove your own GitHub access |
 | `status` | Print a lead-count-by-status summary |
 | `pause` / `resume` | Pause/resume the automated loop |
 | `help` | List commands |

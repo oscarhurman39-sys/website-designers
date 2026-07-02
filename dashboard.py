@@ -23,9 +23,11 @@ _PIPELINE_DIR = Path(__file__).resolve().parent / "pipeline"
 sys.path.insert(0, str(_PIPELINE_DIR))
 
 import config  # noqa: E402
+from agents import design_agent, lead_agent, sales_agent  # noqa: E402
 from utils import db, tracer  # noqa: E402
 
 PAUSE_FLAG = _PIPELINE_DIR / ".paused"
+TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
 st.set_page_config(page_title="Cold Email Sales Pipeline", layout="wide")
 db.init_db()  # safe/idempotent if main.py hasn't started the DB yet
@@ -59,10 +61,81 @@ with col3:
 
 st.divider()
 
+# --- Add a lead manually --------------------------------------------------------
+st.subheader("Add a lead manually")
+_available_niches = sorted(p.name for p in TEMPLATES_DIR.iterdir() if p.is_dir()) if TEMPLATES_DIR.exists() else []
+with st.form("add_lead_form", clear_on_submit=True):
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        new_business_name = st.text_input("Business name")
+    with col_b:
+        new_niche = st.selectbox("Niche", _available_niches) if _available_niches else st.text_input("Niche")
+    with col_c:
+        new_email = st.text_input("Contact email (optional)")
+    if st.form_submit_button("Add lead"):
+        if not new_business_name.strip() or not str(new_niche).strip():
+            st.error("Business name and niche are required.")
+        else:
+            new_lead_id = db.insert_lead(new_business_name.strip(), str(new_niche).strip(), location="")
+            if new_email.strip():
+                # A known email means LeadAgent's job (find one) is already
+                # done -- skip straight to 'researched' so DesignAgent picks
+                # it up on the next cycle instead of re-scraping for it.
+                db.update_lead_fields(new_lead_id, contact_email=new_email.strip())
+                db.update_lead_status(new_lead_id, "researched", notes="Manually added via dashboard with known email")
+                st.success(f"Added lead {new_lead_id} ({new_business_name}) as 'researched' -- ready for DesignAgent.")
+            else:
+                st.success(f"Added lead {new_lead_id} ({new_business_name}) as 'new' -- LeadAgent will research it next cycle.")
+            st.rerun()
+
+st.divider()
+
+# --- Quick-run: process the next 'new' lead through every agent right now ------
+st.subheader("Quick-run next lead")
+st.caption(
+    "Runs LeadAgent -> DesignAgent -> SalesAgent on the oldest 'new' lead, right now, "
+    "in this dashboard process. Sends a real cold email if it gets that far -- this "
+    "bypasses the hourly/daily rate-limit gate that main.py's normal loop enforces "
+    "(sales_agent._can_send_now), since it's a single deliberate manual action, not "
+    "automation. Each step still stops early if the previous one didn't succeed."
+)
+if st.button("Process next 'new' lead now"):
+    new_leads = db.list_leads_by_status("new")
+    if not new_leads:
+        st.warning("No leads with status 'new' to process.")
+    else:
+        target = new_leads[0]
+        try:
+            with st.status(f"Processing lead {target['id']} ({target['business_name']})...", expanded=True) as box:
+                st.write("Running LeadAgent...")
+                lead_agent.research_lead(target)
+                current = db.get_lead(target["id"])
+                st.write(f"-> status: {current['status']}")
+
+                if current["status"] == "researched":
+                    st.write("Running DesignAgent...")
+                    website = design_agent.process_lead(current)
+                    current = db.get_lead(target["id"])
+                    detail = f", preview: {website['preview_url']}" if website else ""
+                    st.write(f"-> status: {current['status']}{detail}")
+
+                    if current["status"] == "designed":
+                        st.write("Running SalesAgent...")
+                        sent = sales_agent.send_cold_email(current)
+                        current = db.get_lead(target["id"])
+                        st.write(f"-> status: {current['status']}, email sent: {sent}")
+
+                box.update(label=f"Finished processing lead {target['id']}", state="complete")
+        except Exception as exc:  # noqa: BLE001 - surface it in the UI rather than crashing the page
+            st.error(f"Quick-run failed partway through: {exc}")
+        st.rerun()
+
+st.divider()
+
 # --- Leads table --------------------------------------------------------------
 leads = db.list_all_leads()
 if not leads:
-    st.info("No leads yet. Drop a CSV into pipeline/leads_inbox/ and start main.py.")
+    st.info("No leads yet. Add one above, drop a CSV into pipeline/leads_inbox/, and start main.py.")
     st.stop()
 
 rows = []
