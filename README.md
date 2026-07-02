@@ -8,6 +8,14 @@ Every automated step has a human-in-the-loop safeguard: positive replies
 pause outreach for that lead and alert an operator; payment and repo/site
 transfer are only ever triggered by an explicit console command.
 
+## Quick Start
+
+1. `pip install -r requirements.txt && playwright install chromium`
+2. `cp .env.example .env` and fill in your real keys
+3. `cd pipeline && python -m agents.lead_agent ../test_lead.csv && cd ..` to load 3 sample leads
+4. `python run.py quick-test` to run one lead through the whole pipeline and watch it work
+5. `python run.py loop` (always-on) or `python run.py dashboard` (Streamlit UI) once you're ready
+
 ## Directory structure
 
 ```
@@ -32,6 +40,8 @@ website-designers/
 │   └── requirements.txt
 ├── templates/                   # one subfolder per niche (index.html + style.css)
 ├── dashboard.py                 # Streamlit monitoring UI
+├── run.py                       # entrypoint: quick-test / loop / dashboard
+├── test_lead.csv                # 3 sample leads for a first test run
 ├── .claude/agents/               # Claude Code subagent personas (see below)
 ├── .env.example
 ├── .gitignore
