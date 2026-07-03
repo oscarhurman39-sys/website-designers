@@ -18,6 +18,16 @@ email. A lead is marked 'researched' once we have at least a name and
 phone number from Places, 'lost' otherwise -- contact_email may still be
 blank on a 'researched' lead; sales_agent.py already handles that
 gracefully at send time.
+
+Two shortcuts keep leads that are already actionable from ever being
+marked 'lost' here:
+  * If the lead already has a contact_email (from CSV import or manual
+    entry), the website email-scrape is skipped entirely -- we only ever
+    scraped a site to *find* an email, and we already have one -- and the
+    lead goes straight to 'researched' regardless of what Places returns.
+  * The Google Places lookup is optional. With no GOOGLE_PLACES_API_KEY
+    configured we skip it and just use whatever data is already on the
+    lead, so the rest of the pipeline can run without a Places key.
 """
 from __future__ import annotations
 
@@ -32,6 +42,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
+import config
 from utils import db, places_api, tracer
 
 USER_AGENT = "ColdEmailSalesPipelineBot/1.0 (+mailto:contact@example.com)"
@@ -191,15 +202,44 @@ def research_lead(lead: dict) -> None:
 
 def _research_lead_impl(lead: dict) -> None:
     lead_id = lead["id"]
+    # A lead that already has an email (CSV/manual) is workable no matter
+    # what research turns up -- we track that here so none of the paths
+    # below can mark it 'lost'.
+    existing_email = (lead.get("contact_email") or "").strip()
 
-    try:
-        place = places_api.find_business(lead["business_name"], lead["location"] or "")
-    except Exception as exc:  # noqa: BLE001 - API/auth/quota errors must not crash the batch
-        db.update_lead_status(lead_id, "lost", notes=f"Google Places lookup failed: {exc}")
-        return
+    # Google Places research is optional: without an API key we skip the
+    # lookup entirely and rely on whatever data is already on the lead.
+    place = None
+    if config.GOOGLE_PLACES_API_KEY:
+        try:
+            place = places_api.find_business(lead["business_name"], lead["location"] or "")
+        except Exception as exc:  # noqa: BLE001 - API/auth/quota errors must not crash the batch
+            if existing_email:
+                db.update_lead_status(
+                    lead_id, "researched", notes=f"Kept existing contact email; Places lookup failed: {exc}"
+                )
+                return
+            db.update_lead_status(lead_id, "lost", notes=f"Google Places lookup failed: {exc}")
+            return
 
     if place is None:
-        db.update_lead_status(lead_id, "lost", notes="No matching Google Places listing found")
+        # No Places match, or no API key configured. If we already have an
+        # email the lead is still actionable; otherwise there's nothing to
+        # work with.
+        if existing_email:
+            note = (
+                "No matching Google Places listing; kept existing contact email"
+                if config.GOOGLE_PLACES_API_KEY
+                else "No Places API key configured; using existing lead data"
+            )
+            db.update_lead_status(lead_id, "researched", notes=note)
+            return
+        note = (
+            "No matching Google Places listing found"
+            if config.GOOGLE_PLACES_API_KEY
+            else "No Places API key configured and no existing contact email"
+        )
+        db.update_lead_status(lead_id, "lost", notes=note)
         return
 
     if not place["name"] or not place["phone"]:
@@ -213,27 +253,33 @@ def _research_lead_impl(lead: dict) -> None:
             reviews=json.dumps(place["reviews"]),
             scraped_info=place["editorial_summary"] or "",
         )
+        if existing_email:
+            db.update_lead_status(
+                lead_id, "researched", notes="Places listing missing name/phone; kept existing contact email"
+            )
+            return
         db.update_lead_status(lead_id, "lost", notes="Places listing found but missing name and/or phone")
         return
 
-    # Places has no email field at all -- if it gave us the business's own
-    # website, reuse the same robots.txt-respecting scraper this module
+    # Places has no email field at all. Only when we DON'T already have an
+    # email do we reuse the same robots.txt-respecting scraper this module
     # always used (find_business_website / _fetch / _extract_email /
-    # _find_subpage, all unchanged) just to find a contact email there.
-    # Fall back to a DuckDuckGo search for a website if Places didn't have
-    # one on file.
-    email_addr: Optional[str] = None
-    website_url = place["website_uri"] or find_business_website(lead["business_name"], lead["location"] or "")
-    if website_url:
-        homepage = _fetch(website_url)
-        if homepage is not None:
-            email_addr = _extract_email(homepage)
-            if not email_addr:
-                subpage_url = _find_subpage(homepage, website_url, ("contact", "about"))
-                if subpage_url:
-                    subpage = _fetch(subpage_url)
-                    if subpage is not None:
-                        email_addr = _extract_email(subpage)
+    # _find_subpage, all unchanged) to find one on the business's own site,
+    # falling back to a DuckDuckGo search for the site if Places had no URL.
+    email_addr: Optional[str] = existing_email or None
+    website_url = place["website_uri"] or ""
+    if not existing_email:
+        website_url = website_url or find_business_website(lead["business_name"], lead["location"] or "")
+        if website_url:
+            homepage = _fetch(website_url)
+            if homepage is not None:
+                email_addr = _extract_email(homepage)
+                if not email_addr:
+                    subpage_url = _find_subpage(homepage, website_url, ("contact", "about"))
+                    if subpage_url:
+                        subpage = _fetch(subpage_url)
+                        if subpage is not None:
+                            email_addr = _extract_email(subpage)
 
     db.update_lead_fields(
         lead_id,

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ business_name }}</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- preview_url: {{ preview_url }} -->
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <span class="logo">{{ business_name }}</span>
+      <nav>
+        <a href="#about">About</a>
+        <a href="#services">Services</a>
+        <a href="#reviews">Reviews</a>
+        <a href="#contact">Contact</a>
+      </nav>
+    </div>
+  </header>
+
+  <section class="hero" style="background-image: linear-gradient(rgba(0,0,0,0.5), rgba(0,0,0,0.5)), url('{{ hero_image_url }}');">
+    <div class="container hero-inner">
+      <h1>{{ hero_headline | default(business_name) }}</h1>
+      <p class="tagline">Trusted local service in {{ location | default('your area') }}</p>
+      <a class="cta" href="#contact">Get In Touch</a>
+    </div>
+  </section>
+
+  <section id="about" class="about container">
+    <h2>Why {{ business_name }}?</h2>
+    <p>{{ pain_point_solution }}</p>
+  </section>
+
+  <section id="services" class="services">
+    <div class="container">
+      <h2>What We Offer</h2>
+      <ul class="service-grid">
+        <li>Quality Work</li>
+        <li>Fair Pricing</li>
+        <li>Fast Response</li>
+        <li>Local &amp; Trusted</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="reviews" class="testimonial">
+    <div class="container">
+      <blockquote>&ldquo;{{ reviews | default(testimonial) }}&rdquo;</blockquote>
+    </div>
+  </section>
+
+  <section id="contact" class="contact">
+    <div class="container">
+      <h2>Get In Touch</h2>
+      <p>{{ location }}</p>
+      <p><a class="phone" href="tel:{{ phone }}">{{ phone }}</a></p>
+      <p class="hours">{{ opening_hours | default('Contact us for hours') }}</p>
+    </div>
+  </section>
+
+  <footer class="site-footer">
+    <div class="container">
+      <p>&copy; {{ year }} {{ business_name }}. All rights reserved.</p>
+      <p class="preview-note">This is a free preview site built by your local web design team.</p>
+    </div>
+  </footer>
+</body>
+</html>

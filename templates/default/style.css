@@ -1,0 +1,164 @@
+:root {
+  --accent: #2563eb;
+  --accent-dark: #1e40af;
+  --bg: #f5f7fb;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  color: #1f2937;
+  background: var(--bg);
+  line-height: 1.6;
+}
+
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+.site-header {
+  background: #fff;
+  border-bottom: 1px solid #e5e7eb;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.header-inner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 16px;
+  padding-bottom: 16px;
+}
+
+.logo {
+  font-weight: 700;
+  font-size: 1.25rem;
+  color: var(--accent-dark);
+}
+
+nav a {
+  margin-left: 24px;
+  text-decoration: none;
+  color: #374151;
+  font-weight: 500;
+}
+
+nav a:hover { color: var(--accent); }
+
+.hero {
+  background-size: cover;
+  background-position: center;
+  color: #fff;
+  padding: 120px 0;
+  text-align: center;
+}
+
+.hero h1 {
+  font-size: 2.75rem;
+  margin-bottom: 12px;
+}
+
+.hero .tagline {
+  font-size: 1.2rem;
+  margin-bottom: 28px;
+}
+
+.cta {
+  display: inline-block;
+  background: var(--accent);
+  color: #fff;
+  padding: 14px 32px;
+  border-radius: 6px;
+  text-decoration: none;
+  font-weight: 600;
+  transition: background 0.2s ease;
+}
+
+.cta:hover { background: var(--accent-dark); }
+
+.about, .contact {
+  padding: 64px 0;
+  text-align: center;
+}
+
+.about h2, .services h2, .contact h2 {
+  font-size: 2rem;
+  margin-bottom: 20px;
+  color: var(--accent-dark);
+}
+
+.about p {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.services {
+  background: #fff;
+  padding: 64px 0;
+}
+
+.service-grid {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 20px;
+  text-align: center;
+}
+
+.service-grid li {
+  background: var(--bg);
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 24px 16px;
+  font-weight: 600;
+  color: var(--accent-dark);
+}
+
+.testimonial {
+  background: var(--accent);
+  color: #fff;
+  padding: 56px 0;
+  text-align: center;
+}
+
+.testimonial blockquote {
+  font-size: 1.3rem;
+  font-style: italic;
+  max-width: 700px;
+  margin: 0 auto;
+}
+
+.contact .phone {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--accent-dark);
+  text-decoration: none;
+}
+
+.contact .phone:hover { text-decoration: underline; }
+
+.contact .hours {
+  margin-top: 8px;
+  color: #6b7280;
+}
+
+.site-footer {
+  background: #111827;
+  color: #cbd5e1;
+  text-align: center;
+  padding: 28px 0;
+  font-size: 0.9rem;
+}
+
+.preview-note {
+  margin-top: 6px;
+  color: #9ca3af;
+  font-size: 0.8rem;
+}

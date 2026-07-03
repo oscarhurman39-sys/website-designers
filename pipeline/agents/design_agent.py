@@ -27,6 +27,21 @@ def available_niches() -> set[str]:
     return {p.name for p in TEMPLATES_DIR.iterdir() if p.is_dir()}
 
 
+def resolve_template_niche(niche: str) -> Optional[str]:
+    """Which template folder to actually render for a lead's niche.
+
+    Prefers an exact per-niche template; falls back to the generic
+    'default' template (templates/default/) when there's no folder for the
+    lead's niche, so a lead in an unsupported niche still gets a clean site
+    instead of being dropped. Returns None only when neither exists."""
+    niches = available_niches()
+    if niche in niches:
+        return niche
+    if "default" in niches:
+        return "default"
+    return None
+
+
 def get_hero_image_url(niche: str) -> str:
     """Fetch a relevant free stock photo URL for the niche.
 
@@ -179,14 +194,17 @@ def process_lead(lead: dict) -> Optional[dict]:
 
 def _process_lead_impl(lead: dict) -> Optional[dict]:
     niche = lead["niche"]
-    if niche not in available_niches():
+    template_niche = resolve_template_niche(niche)
+    if template_niche is None:
         db.update_lead_status(
-            lead["id"], "lost", notes=f"No website template exists for niche '{niche}'"
+            lead["id"],
+            "lost",
+            notes=f"No website template for niche '{niche}' and no 'default' fallback template",
         )
         return None
 
     context = build_context(lead)
-    files = render_template_files(niche, context)
+    files = render_template_files(template_niche, context)
 
     _repo, repo_url, repo_full_name = github_api.create_repo_with_files(
         lead["business_name"], lead["id"], files
@@ -199,7 +217,7 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
 
     website_id = db.insert_website(
         lead_id=lead["id"],
-        template_niche=niche,
+        template_niche=template_niche,
         repo_url=repo_url,
         repo_full_name=repo_full_name,
         preview_url=deployment["url"],
