@@ -190,6 +190,33 @@ domain warm-up tool is still recommended before high-volume sending on a
 brand-new sending domain -- this pipeline staggers send timing but does
 not warm up domain reputation for you.
 
+## Conversion intelligence
+
+The pipeline learns from its own outcomes. `pipeline/utils/intelligence.py`
+reads back everything already logged -- sends, clicks, replies,
+classifications, and every state transition -- and turns it into signal:
+
+- **A truthful funnel.** Measured from `state_history` ("did this lead
+  ever reach stage X"), not current status -- so a won lead still counts
+  toward `emailed`/`replied`, and each stage is a real superset of the
+  next. Current-status counts would undercount every earlier stage.
+- **Niche performance** ranked by reply rate -- which verticals to weight
+  your next CSV toward.
+- **Subject-line A/B**, for free, from history -- reply rate grouped by the
+  subject actually sent. Feed the winner back into the drafting prompt.
+- **Screenshot lift** -- reply rate with vs without the embedded preview
+  image, so the feature you built on faith becomes a measured one.
+- **Plain-English recommendations**, deliberately silent until there's
+  enough volume (>=5 sends per group) to not be noise.
+
+Zero new dependencies, zero API cost -- it's pure analysis over data you
+already collect. Surfaced live in the dashboard under "Conversion
+Intelligence", or as a text report:
+
+```bash
+cd pipeline && python -m utils.intelligence
+```
+
 ## Observability (VoltAgent)
 
 Every meaningful agent action (lead research, site design/deploy, cold

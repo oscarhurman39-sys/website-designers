@@ -24,7 +24,7 @@ sys.path.insert(0, str(_PIPELINE_DIR))
 
 import config  # noqa: E402
 from agents import design_agent, lead_agent, sales_agent  # noqa: E402
-from utils import db, tracer  # noqa: E402
+from utils import db, intelligence, tracer  # noqa: E402
 
 PAUSE_FLAG = _PIPELINE_DIR / ".paused"
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
@@ -262,3 +262,93 @@ else:
 
     with st.expander("Raw trace JSON (most recent 20)"):
         st.json(list(reversed(traces))[:20])
+
+st.divider()
+
+# --- Conversion intelligence -------------------------------------------------
+# Read-only analysis of the pipeline's own history (utils/intelligence.py):
+# a truthful ever-reached funnel, per-niche/subject/screenshot performance,
+# and plain-English recommendations -- all from data already collected, no
+# new deps or API cost. This is the "learn from your own outcomes" layer.
+st.header("📈 Conversion Intelligence")
+st.caption("What's actually working, reconstructed from every send, click, reply, and state change you've logged.")
+
+intel = intelligence.analyze()
+
+if intel.total_leads == 0:
+    st.info("No leads yet -- intelligence appears once the pipeline has history to learn from.")
+else:
+    # Headline recommendations first: the "so what" before the tables.
+    for rec in intel.recommendations:
+        if rec.startswith(("Lean", "Best", "The preview")):
+            st.success(rec)
+        else:
+            st.warning(rec)
+
+    col_a, col_b = st.columns(2)
+
+    with col_a:
+        st.subheader("Funnel (ever-reached)")
+        st.caption("Each stage counts leads that EVER got there -- a won lead still counts as 'emailed'.")
+        funnel_df = pd.DataFrame(
+            [
+                {
+                    "stage": s.stage,
+                    "reached": s.reached,
+                    "conv % from prev": s.conversion_from_prev,
+                    "leaked": s.drop_off,
+                }
+                for s in intel.funnel
+            ]
+        )
+        st.dataframe(funnel_df, use_container_width=True, hide_index=True)
+        # Visual funnel: reached count per stage.
+        chart_df = funnel_df[funnel_df["reached"] > 0].set_index("stage")["reached"]
+        if not chart_df.empty:
+            st.bar_chart(chart_df)
+
+    with col_b:
+        st.subheader("Niche performance")
+        st.caption("Sorted by reply rate. This tells you which verticals to weight your next CSV toward.")
+        niche_df = pd.DataFrame(
+            [
+                {
+                    "niche": n.niche,
+                    "sent": n.emailed,
+                    "click %": n.click_rate,
+                    "reply %": n.reply_rate,
+                    "win %": n.win_rate,
+                }
+                for n in intel.niches
+                if n.total > 0
+            ]
+        )
+        st.dataframe(niche_df, use_container_width=True, hide_index=True)
+
+        st.subheader("Screenshot lift")
+        lift = intel.screenshot_lift
+        delta = lift["lift_points"]
+        st.metric(
+            "Reply-rate lift from embedding the preview screenshot",
+            f"{lift['with_screenshot']['reply_rate']}%",
+            delta=f"{delta:+} pts vs no screenshot",
+        )
+        st.caption(
+            f"With screenshot: {lift['with_screenshot']['emailed']} sent · "
+            f"Without: {lift['without_screenshot']['emailed']} sent"
+        )
+
+    st.subheader("Subject line A/B (free, from history)")
+    st.caption("Reply rate grouped by the subject line actually sent -- feed the winner back into the drafting prompt.")
+    if intel.subjects:
+        subj_df = pd.DataFrame(
+            [{"subject": s.subject, "sent": s.sent, "replied": s.replied, "reply %": s.reply_rate} for s in intel.subjects]
+        )
+        st.dataframe(subj_df, use_container_width=True, hide_index=True)
+    else:
+        st.write("_No subjects sent yet._")
+
+    exits = intel.exits
+    st.caption(
+        f"Exits — lost: {exits['lost']} · bounced: {exits['bounced']} · unsubscribed: {exits['unsubscribed']}"
+    )
