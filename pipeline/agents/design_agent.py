@@ -18,6 +18,39 @@ from utils import db, github_api, image_placeholder, screenshot, tracer, tracker
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 TEMPLATE_FILES = ("index.html", "style.css")
 
+# Maps Google Places `types` (stored on the lead as `categories`) to
+# human-readable services shown in a preview's "What We Offer" section, so
+# the list reflects the real business instead of a generic template default.
+SERVICE_MAP = {
+    "car_repair": "Auto Repair",
+    "oil_change": "Oil Change",
+    "brake_service": "Brake Service",
+    "tire_shop": "Tire Replacement",
+    "auto_body_shop": "Body Work",
+    "towing_service": "Towing",
+    "air_conditioning_service": "A/C Service",
+    "plumber": "Plumbing",
+    "electrician": "Electrical Repairs",
+    "landscaper": "Landscaping",
+    "cafe": "Coffee & Pastries",
+    "salon": "Hair & Beauty",
+    # Rounded out for the pipeline's other built-in template niches.
+    "hair_care": "Hair & Beauty",
+    "beauty_salon": "Hair & Beauty",
+    "dentist": "Dental Care",
+    "gym": "Fitness Training",
+    "restaurant": "Dining",
+    "bakery": "Fresh Baked Goods",
+    "bar": "Drinks & Bar",
+    # add more as needed
+}
+
+
+def get_services_from_types(place_types):
+    """Map a list of Google Places types to unique service labels, or a
+    single generic fallback when none are recognized."""
+    return list({SERVICE_MAP[t] for t in place_types if t in SERVICE_MAP}) or ["General Service"]
+
 
 def available_niches() -> set[str]:
     if not TEMPLATES_DIR.exists():
@@ -121,8 +154,15 @@ def _reviews(lead: dict) -> str:
     return _testimonial(lead)
 
 
+def _place_types(lead: dict) -> list[str]:
+    """leads.categories is the business's Google Places `types` stored as a
+    comma-joined string -- split it back into the list get_services_from_types
+    expects."""
+    return [t.strip() for t in (lead.get("categories") or "").split(",") if t.strip()]
+
+
 def build_context(lead: dict) -> dict:
-    return {
+    context = {
         "business_name": lead["business_name"],
         "phone": lead.get("phone") or "Call us",
         "location": lead.get("location") or "",
@@ -149,6 +189,13 @@ def build_context(lead: dict) -> dict:
         # paying client's real, licensed photos are swapped in later.
         "photo_credit": "",
     }
+    # Populate "What We Offer" from the business's real Places types when any
+    # map to a service; otherwise leave services_list unset so each template's
+    # own niche-specific default (a nicer, tailored list) renders instead.
+    services = get_services_from_types(_place_types(lead))
+    if services != ["General Service"]:
+        context["services_list"] = ", ".join(sorted(services))
+    return context
 
 
 def render_template_files(niche: str, context: dict) -> dict[str, str]:
