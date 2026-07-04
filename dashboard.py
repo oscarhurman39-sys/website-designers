@@ -61,6 +61,31 @@ with col3:
 
 st.divider()
 
+# --- Leads needing your action (positive replies awaiting takeover) ----------
+# Highest-priority operator task, so it sits up top. A lead lands in 'replied'
+# when sales_agent classifies an inbound message as positive; taking it over
+# moves it to 'negotiating', which no automated query ever selects (sending
+# skips it, and the reply classifier won't overwrite it), so all automation
+# pauses for that lead and you drive the conversation by hand.
+st.subheader("Leads needing your action")
+action_leads = db.list_leads_by_status("replied")
+if not action_leads:
+    st.write("_Nothing waiting — no leads in 'replied' status._")
+else:
+    for action_lead in action_leads:
+        col_info, col_btn = st.columns([4, 1])
+        with col_info:
+            st.write(
+                f"**{action_lead['business_name']}** — "
+                f"{action_lead['contact_email'] or '(no email on file)'}  ·  lead {action_lead['id']}"
+            )
+        with col_btn:
+            if st.button("Take over", key=f"takeover_{action_lead['id']}"):
+                db.update_lead_status(action_lead["id"], "negotiating", notes="Human took over via dashboard")
+                st.rerun()
+
+st.divider()
+
 # --- Add a lead manually --------------------------------------------------------
 st.subheader("Add a lead manually")
 _available_niches = sorted(p.name for p in TEMPLATES_DIR.iterdir() if p.is_dir()) if TEMPLATES_DIR.exists() else []
