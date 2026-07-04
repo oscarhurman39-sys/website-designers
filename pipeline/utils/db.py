@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS leads (
     review_count    INTEGER,
     reviews         TEXT,
     image_note      TEXT,
+    followup_1_sent TEXT,
+    followup_2_sent TEXT,
     status          TEXT NOT NULL DEFAULT 'new'
                     CHECK (status IN ({_STATUS_LIST_SQL})),
     unsubscribed    INTEGER NOT NULL DEFAULT 0,
@@ -149,6 +151,10 @@ def init_db(db_path: Optional[str] = None) -> None:
         _migrate_add_column(conn, "leads", "review_count", "INTEGER")
         _migrate_add_column(conn, "leads", "reviews", "TEXT")
         _migrate_add_column(conn, "leads", "image_note", "TEXT")
+        # UTC timestamps ("YYYY-MM-DD HH:MM:SS") of each follow-up send;
+        # NULL/empty = not sent yet (see sales_agent.send_followups).
+        _migrate_add_column(conn, "leads", "followup_1_sent", "TEXT")
+        _migrate_add_column(conn, "leads", "followup_2_sent", "TEXT")
         _migrate_add_column(conn, "email_threads", "subject_variant", "TEXT")
         _migrate_leads_status_check(conn)
         conn.commit()

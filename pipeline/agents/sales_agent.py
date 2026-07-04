@@ -435,6 +435,108 @@ def send_next_pending() -> Optional[int]:
     return None
 
 
+# --- Follow-up sequence --------------------------------------------------------
+# A lead that stays in 'emailed' (no reply -- any reply moves it to replied/
+# negotiating, a bounce to 'bounced', an unsubscribe to 'unsubscribed') gets
+# exactly two nudges: a brief plain-text follow-up FOLLOWUP_1_DAYS after the
+# cold email, and a final "last chance" note FOLLOWUP_2_DAYS after that.
+# Send timestamps live on the lead row (followup_1_sent / followup_2_sent) so
+# the sequence survives restarts and never double-sends. Follow-ups go through
+# the same transport dispatcher, count toward the same hourly/daily caps, and
+# get the same CAN-SPAM footer/unsubscribe hard-stop as every other send.
+
+FOLLOWUP_1_DAYS = 3   # days after the cold email
+FOLLOWUP_2_DAYS = 5   # days after follow-up 1
+
+_DB_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"  # SQLite datetime('now'), always UTC
+
+
+def _parse_db_timestamp(raw: str) -> Optional[datetime]:
+    """Parse a DB timestamp string into an aware UTC datetime, or None."""
+    try:
+        return datetime.strptime(raw.strip(), _DB_TIMESTAMP_FORMAT).replace(tzinfo=timezone.utc)
+    except (ValueError, AttributeError):
+        return None
+
+
+def _draft_followup(lead: dict, stage: int) -> tuple[str, str]:
+    """Deterministic (no LLM) plain-text follow-up copy. Returns (subject,
+    body) without footer -- compliance is appended at send time as usual."""
+    preview_link = tracker.create_click_link(lead["id"])
+    if stage == 1:
+        subject = f"re: free website preview for {lead['business_name']}"
+        body = (
+            "Hi -- just floating this back to the top of your inbox.\n\n"
+            f"The free preview site I built for {lead['business_name']} is still live here: {preview_link}\n\n"
+            "If it's not for you, no worries at all -- a quick 'no thanks' and I'll close it out."
+        )
+    else:
+        subject = f"last one from me -- {lead['business_name']} preview"
+        body = (
+            "Hi -- last note from me, promise.\n\n"
+            f"I'll be taking the {lead['business_name']} preview site down soon: {preview_link}\n\n"
+            "If you'd like to keep it, just reply and it's yours. Otherwise I'll leave you be -- thanks for reading."
+        )
+    return subject, body
+
+
+def _send_followup(lead: dict, stage: int) -> bool:
+    """Send follow-up `stage` (1 or 2) to one lead and record it. Returns
+    True if sent. Status stays 'emailed' so a later reply/bounce is handled
+    exactly like one to the original cold email."""
+    global _next_send_allowed_at
+
+    email_addr = lead.get("contact_email") or ""
+    subject, body = _draft_followup(lead, stage)
+    message_id = _send_via_configured_transport(
+        to_addr=email_addr, subject=subject, body_text=body, lead_id=lead["id"]
+    )
+    db.insert_email_thread(
+        lead_id=lead["id"], direction="outbound", subject=subject, body=body,
+        from_addr=config.EMAIL_USER, to_addr=email_addr, message_id=message_id,
+    )
+    sent_at = datetime.now(timezone.utc).strftime(_DB_TIMESTAMP_FORMAT)
+    db.update_lead_fields(lead["id"], **{f"followup_{stage}_sent": sent_at})
+    db.log_state_history(lead["id"], "emailed", "emailed", notes=f"Follow-up {stage} sent")
+
+    _next_send_allowed_at = datetime.now(timezone.utc) + timedelta(
+        seconds=random.uniform(config.EMAIL_MIN_DELAY_SECONDS, config.EMAIL_MAX_DELAY_SECONDS)
+    )
+    return True
+
+
+def send_followups() -> Optional[int]:
+    """Send at most one due follow-up this cycle, respecting the same rate
+    limits and takeover/unsubscribe guards as cold emails. Returns the
+    lead_id followed up, or None."""
+    if not _can_send_now():
+        return None
+    now = datetime.now(timezone.utc)
+
+    for lead in db.list_leads_by_status("emailed"):
+        if is_under_takeover(lead["id"]):
+            continue
+        email_addr = lead.get("contact_email") or ""
+        if not email_addr or db.is_unsubscribed(email_addr):
+            continue
+
+        if not (lead.get("followup_1_sent") or "").strip():
+            # Follow-up 1: due FOLLOWUP_1_DAYS after the last outbound email
+            # (for an untouched 'emailed' lead, that's the cold email itself).
+            last_sent = _parse_db_timestamp(db.get_last_email_timestamp(lead["id"]) or "")
+            if last_sent and now - last_sent >= timedelta(days=FOLLOWUP_1_DAYS):
+                if _send_followup(lead, 1):
+                    return lead["id"]
+        elif not (lead.get("followup_2_sent") or "").strip():
+            # Follow-up 2: due FOLLOWUP_2_DAYS after follow-up 1 went out.
+            fu1_sent = _parse_db_timestamp(lead["followup_1_sent"])
+            if fu1_sent and now - fu1_sent >= timedelta(days=FOLLOWUP_2_DAYS):
+                if _send_followup(lead, 2):
+                    return lead["id"]
+        # Both follow-ups sent: the sequence is complete; we never nudge again.
+    return None
+
+
 # --- Reply classification -----------------------------------------------------
 
 def classify_reply(subject: str, body: str) -> str:

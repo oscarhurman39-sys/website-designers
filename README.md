@@ -240,6 +240,20 @@ clicks per variant and highlights a winner once both variants have ≥10 sends.
   events. Optionally set `SENDGRID_WEBHOOK_VERIFICATION_KEY` to require signed
   events. Without the webhook, the section still shows clicks; opens stay at 0.
 
+## Follow-up sequence
+
+A lead that never replies gets exactly two nudges, sent by the main loop:
+
+1. **Follow-up 1** — 3 days after the cold email: a brief plain-text bump with
+   the preview link.
+2. **Follow-up 2** — 5 days after follow-up 1: a final "last chance" note.
+
+Send timestamps are stored on the lead (`followup_1_sent` / `followup_2_sent`),
+so the sequence survives restarts and never double-sends. Follow-ups only go
+to leads still in `emailed` (any reply, bounce, or unsubscribe stops the
+sequence automatically), respect the unsubscribe hard-stop, count toward the
+same hourly/daily sending caps, and pause for leads under manual takeover.
+
 ## Observability (VoltAgent)
 
 Every meaningful agent action (lead research, site design/deploy, cold

@@ -24,7 +24,7 @@ sys.path.insert(0, str(_PIPELINE_DIR))
 
 import config  # noqa: E402
 from agents import design_agent, lead_agent, sales_agent  # noqa: E402
-from utils import db, intelligence, tracer  # noqa: E402
+from utils import db, intelligence, stripe_utils, tracer  # noqa: E402
 
 PAUSE_FLAG = _PIPELINE_DIR / ".paused"
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
@@ -68,21 +68,33 @@ st.divider()
 # skips it, and the reply classifier won't overwrite it), so all automation
 # pauses for that lead and you drive the conversation by hand.
 st.subheader("Leads needing your action")
-action_leads = db.list_leads_by_status("replied")
+action_leads = db.list_leads_by_status("replied") + db.list_leads_by_status("negotiating")
 if not action_leads:
-    st.write("_Nothing waiting — no leads in 'replied' status._")
+    st.write("_Nothing waiting — no leads in 'replied' or 'negotiating' status._")
 else:
     for action_lead in action_leads:
-        col_info, col_btn = st.columns([4, 1])
+        col_info, col_take, col_pay = st.columns([4, 1, 1])
         with col_info:
             st.write(
-                f"**{action_lead['business_name']}** — "
+                f"**{action_lead['business_name']}** ({action_lead['status']}) — "
                 f"{action_lead['contact_email'] or '(no email on file)'}  ·  lead {action_lead['id']}"
             )
-        with col_btn:
-            if st.button("Take over", key=f"takeover_{action_lead['id']}"):
-                db.update_lead_status(action_lead["id"], "negotiating", notes="Human took over via dashboard")
-                st.rerun()
+        with col_take:
+            if action_lead["status"] == "replied":
+                if st.button("Take over", key=f"takeover_{action_lead['id']}"):
+                    db.update_lead_status(action_lead["id"], "negotiating", notes="Human took over via dashboard")
+                    st.rerun()
+        with col_pay:
+            # Creates a Stripe Checkout session and emails the lead the link
+            # (status -> 'payment_sent'). Deliberately NOT labeled "mark as
+            # paid": 'won' is only ever set by the Stripe webhook confirming
+            # the payment actually completed.
+            if st.button("Send payment link", key=f"payment_{action_lead['id']}"):
+                try:
+                    checkout_url = stripe_utils.send_payment_link(action_lead["id"])
+                    st.success(f"Payment link emailed to {action_lead['business_name']}: {checkout_url}")
+                except Exception as exc:  # noqa: BLE001 - surface in the UI, never crash the page
+                    st.error(f"Could not send payment link: {exc}")
 
 st.divider()
 

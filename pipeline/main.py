@@ -77,6 +77,10 @@ def _run_cycle() -> None:
     if sent_lead_id:
         print(f"[main] Sent cold email to lead {sent_lead_id}")
 
+    followup_lead_id = sales_agent.send_followups()
+    if followup_lead_id:
+        print(f"[main] Sent follow-up to lead {followup_lead_id}")
+
     replies = sales_agent.check_inbox()
     if replies:
         print(f"[main] Processed {replies} inbound reply(ies)")
