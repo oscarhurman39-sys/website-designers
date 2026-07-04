@@ -174,6 +174,100 @@ def draft_cold_email(lead: dict) -> tuple[str, str]:
     return _parse_subject_body(raw, lead)
 
 
+# --- Plain-text variant (social-proof opener + one-word reply CTA) ------------
+# An alternative, deliberately plain-text cold email: it opens with the
+# lead's Google rating/review count as social proof, keeps the body short
+# (~100 words total), and asks for a one-word reply instead of a click.
+# Plain text (no HTML) often lands better in the primary inbox than an
+# image-heavy HTML email. Not wired into the default send path -- to use it,
+# swap draft_cold_email(...) for generate_plain_text_email(...) in
+# _send_cold_email_impl (and send with body_html=None). The CAN-SPAM footer
+# and List-Unsubscribe are still added by send_email()/send_email_sendgrid()
+# at send time, exactly as for draft_cold_email.
+
+_REPLY_CTA = "Just reply 'yes' if you're interested and I'll send over the details."
+
+
+def _social_proof_opener(lead: dict) -> str:
+    """First line referencing the lead's rating + review count, when Google
+    Places gave us both. Empty string if we have neither (the drafted body
+    then becomes the opening line)."""
+    rating = lead.get("rating")
+    reviews = lead.get("review_count")
+    if rating and reviews:
+        return f"I noticed you have {rating} stars and {reviews} reviews -- that's impressive."
+    if reviews:
+        return f"I noticed you have {reviews} reviews on Google -- that's a great reputation to build on."
+    return ""
+
+
+def _build_plain_text_prompt(lead: dict) -> str:
+    pain_point = (lead.get("pain_point") or "a slow or outdated website").strip()
+    return (
+        "<s>[INST] You write short, casual, plain-text cold outreach emails for a "
+        "freelance web designer. No hype, no HTML, no links, no signature -- sound "
+        "like a real person.\n\n"
+        "Write ONLY the middle of a cold email to a local business with these facts:\n"
+        f"- Business name: {lead['business_name']}\n"
+        f"- Niche: {lead['niche']}\n"
+        f"- Location: {lead.get('location', '')}\n"
+        f"- Something noticed about their current site/reputation: {pain_point}\n\n"
+        "The middle must:\n"
+        "- Mention that you built a free, live website preview for their business, no strings attached\n"
+        "- Be under 60 words\n"
+        "- NOT open with a stat about ratings/reviews (that line is added separately)\n"
+        "- NOT include a link, CTA, signature, or unsubscribe text (all added separately)\n\n"
+        "Respond in EXACTLY this format, nothing else:\n"
+        "Subject: <short subject line>\n\n"
+        "<email middle>\n[/INST]"
+    )
+
+
+def _fallback_plain_text(lead: dict) -> tuple[str, str]:
+    """Deterministic plain-text middle used when the HF call fails."""
+    subject = f"a quick free preview for {lead['business_name']}"
+    body = (
+        f"I put together a free, live website preview for {lead['business_name']} -- "
+        "no strings attached, just wanted to show you what's possible."
+    )
+    return subject, body
+
+
+def generate_plain_text_email(lead_data: dict) -> tuple[str, str]:
+    """Draft a ~100-word, plain-text-only cold email as (subject, body).
+
+    Structure: a social-proof opener referencing the lead's Google rating +
+    review count (when available), an HF-drafted middle, the tracked preview
+    link, and a one-word reply CTA. Plain text only -- there is no HTML part.
+    Falls back to a deterministic middle if the HF call fails, so it never
+    blocks a send. The compliance footer / List-Unsubscribe are appended by
+    send_email()/send_email_sendgrid() at send time, not here (same contract
+    as draft_cold_email)."""
+    try:
+        raw = _hf_client().text_generation(
+            _build_plain_text_prompt(lead_data), max_new_tokens=200, temperature=0.7, do_sample=True
+        )
+        subject, drafted = _parse_subject_body(raw, lead_data)
+    except Exception as exc:  # noqa: BLE001 - any HF/network failure falls back gracefully
+        print(f"[sales_agent] HF plain-text drafting failed, using fallback: {exc}")
+        subject, drafted = _fallback_plain_text(lead_data)
+
+    # Keep the middle tight so the whole email stays around 100 words once the
+    # opener, preview link, and CTA are added.
+    words = drafted.split()
+    if len(words) > 70:
+        drafted = " ".join(words[:70]) + "..."
+
+    opener = _social_proof_opener(lead_data)
+    preview_link = tracker.create_click_link(lead_data["id"])
+    blocks = [
+        block
+        for block in (opener, drafted.strip(), f"Here's the live preview: {preview_link}", _REPLY_CTA)
+        if block
+    ]
+    return subject, "\n\n".join(blocks)
+
+
 # --- Sending (rate-limited) ----------------------------------------------------
 
 _SCREENSHOT_CID = "preview"
