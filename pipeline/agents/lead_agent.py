@@ -287,12 +287,23 @@ def _research_lead_impl(lead: dict) -> None:
     # falling back to a DuckDuckGo search for the site if Places had no URL.
     email_addr: Optional[str] = existing_email or None
     website_url = place["website_uri"] or ""
+    # When we fetch the business's own homepage (only when we don't already
+    # have an email), harvest a pain_point from it too -- the first
+    # substantial paragraph / meta description of their current site. This
+    # restores the pre-Places personalization hook (sales_agent uses it as
+    # "something noticed about their current site", design_agent works it
+    # into the hero copy). Default to any existing value so we never clobber
+    # a pain_point with an empty string when we don't scrape.
+    pain_point = lead.get("pain_point") or ""
     if not existing_email:
         website_url = website_url or find_business_website(lead["business_name"], lead["location"] or "")
         if website_url:
             homepage = _fetch(website_url)
             if homepage is not None:
                 email_addr = _extract_email(homepage)
+                extracted_pain = _extract_pain_point(homepage, website_url)
+                if extracted_pain:
+                    pain_point = extracted_pain
                 if not email_addr:
                     subpage_url = _find_subpage(homepage, website_url, ("contact", "about"))
                     if subpage_url:
@@ -312,6 +323,7 @@ def _research_lead_impl(lead: dict) -> None:
         opening_hours=json.dumps(place["opening_hours"]),
         reviews=json.dumps(place["reviews"]),
         testimonial=place["reviews"][0] if place["reviews"] else (lead.get("testimonial") or ""),
+        pain_point=pain_point,
         scraped_info=place["editorial_summary"] or "",
     )
     db.update_lead_status(lead_id, "researched", notes="Research complete via Google Places API")
