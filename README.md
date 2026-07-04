@@ -217,6 +217,29 @@ Intelligence", or as a text report:
 cd pipeline && python -m utils.intelligence
 ```
 
+## Subject-line A/B testing
+
+Set **both** `SUBJECT_A` and `SUBJECT_B` in `.env` to run a 50/50 subject-line
+test (leave either blank to use the drafted subject). `{business_name}`,
+`{niche}`, and `{location}` are substituted:
+
+```
+SUBJECT_A=Quick website preview for {business_name}
+SUBJECT_B={business_name} – I built you a free site draft
+```
+
+Each cold email records which variant it used (`email_threads.subject_variant`).
+The dashboard's **Subject Line Performance** section compares sends, opens, and
+clicks per variant and highlights a winner once both variants have ≥10 sends.
+
+- **Clicks** are tracked out of the box (the self-hosted preview-link redirect).
+- **Opens** require SendGrid: sends via SendGrid enable open/click tracking, and
+  a **SendGrid Event Webhook** feeds those events back in. In the SendGrid
+  dashboard (Settings → Mail Settings → Event Webhook) point the HTTP POST URL
+  at `https://<your-domain>/webhook/sendgrid` and enable the *Opened* / *Clicked*
+  events. Optionally set `SENDGRID_WEBHOOK_VERIFICATION_KEY` to require signed
+  events. Without the webhook, the section still shows clicks; opens stay at 0.
+
 ## Observability (VoltAgent)
 
 Every meaningful agent action (lead research, site design/deploy, cold

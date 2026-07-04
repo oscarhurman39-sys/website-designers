@@ -268,6 +268,35 @@ def generate_plain_text_email(lead_data: dict) -> tuple[str, str]:
     return subject, "\n\n".join(blocks)
 
 
+# --- Subject-line A/B selection ----------------------------------------------
+
+class _SafeSubjectDict(dict):
+    """Leaves any unknown {placeholder} intact instead of raising KeyError,
+    so a custom subject template can't crash a send."""
+
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+def _format_subject(template: str, lead: dict) -> str:
+    return template.format_map(
+        _SafeSubjectDict(
+            business_name=lead.get("business_name", ""),
+            niche=lead.get("niche", ""),
+            location=lead.get("location", ""),
+        )
+    )
+
+
+def _pick_subject_variant() -> Optional[str]:
+    """'A' or 'B' at 50/50 when both subject templates are configured;
+    None otherwise, so the caller keeps the drafted subject (feature is
+    opt-in and falls back cleanly)."""
+    if config.SUBJECT_A and config.SUBJECT_B:
+        return random.choice(("A", "B"))
+    return None
+
+
 # --- Sending (rate-limited) ----------------------------------------------------
 
 _SCREENSHOT_CID = "preview"
@@ -340,6 +369,14 @@ def _send_cold_email_impl(lead: dict) -> bool:
         return False
 
     subject, body = draft_cold_email(lead)
+    # Subject-line A/B test: when both templates are configured, override the
+    # drafted subject with a randomly-picked variant and remember which one
+    # (logged on the email_threads row below) so the dashboard can compare
+    # open/click rates. No-op when the feature isn't configured.
+    subject_variant = _pick_subject_variant()
+    if subject_variant:
+        template = config.SUBJECT_A if subject_variant == "A" else config.SUBJECT_B
+        subject = _format_subject(template, lead)
     # If DesignAgent flagged that the preview's hero is a placeholder (no
     # real photos yet), tell the prospect plainly -- appended to `body` so
     # it lands in both the plain-text and the HTML version below.
@@ -375,6 +412,7 @@ def _send_cold_email_impl(lead: dict) -> bool:
         from_addr=config.EMAIL_USER,
         to_addr=email_addr,
         message_id=message_id,
+        subject_variant=subject_variant or "",
     )
     db.update_lead_status(lead["id"], "emailed", notes="Cold email sent")
 

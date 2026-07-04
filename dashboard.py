@@ -290,6 +290,52 @@ else:
 
 st.divider()
 
+# --- Subject line A/B performance --------------------------------------------
+st.header("Subject Line Performance")
+if not (config.SUBJECT_A and config.SUBJECT_B):
+    st.caption("Set SUBJECT_A and SUBJECT_B in .env to run a 50/50 subject-line A/B test.")
+else:
+    _variant_templates = {"A": config.SUBJECT_A, "B": config.SUBJECT_B}
+    _sv_stats = db.subject_variant_stats()
+    _sv_rows = []
+    for _v in ("A", "B"):
+        _s = _sv_stats[_v]
+        _sends = _s["sends"]
+        _sv_rows.append(
+            {
+                "variant": _v,
+                "subject": _variant_templates[_v],
+                "sends": _sends,
+                "opens": _s["opens"],
+                "open %": round(100.0 * _s["opens"] / _sends, 1) if _sends else 0.0,
+                "clicks": _s["clicks"],
+                "click %": round(100.0 * _s["clicks"] / _sends, 1) if _sends else 0.0,
+            }
+        )
+    st.dataframe(pd.DataFrame(_sv_rows), use_container_width=True, hide_index=True)
+    st.caption(
+        "Opens come from the SendGrid Event Webhook (POST /webhook/sendgrid); clicks from the "
+        "self-hosted preview-link tracker. Clicks work without SendGrid; opens need the webhook wired up."
+    )
+
+    _a, _b = _sv_rows[0], _sv_rows[1]
+    if _a["sends"] >= 10 and _b["sends"] >= 10:
+        if _a["open %"] != _b["open %"]:
+            _win, _lose = (_a, _b) if _a["open %"] > _b["open %"] else (_b, _a)
+            st.success(
+                f"Winner so far: Variant {_win['variant']} — {_win['open %']}% open rate "
+                f"vs {_lose['open %']}% (over {_win['sends']} and {_lose['sends']} sends)."
+            )
+        else:
+            st.info("Both variants have the same open rate so far — keep sending.")
+    else:
+        st.info(
+            f"Need at least 10 sends per variant to call a winner "
+            f"(so far A: {_a['sends']}, B: {_b['sends']})."
+        )
+
+st.divider()
+
 # --- Conversion intelligence -------------------------------------------------
 # Read-only analysis of the pipeline's own history (utils/intelligence.py):
 # a truthful ever-reached funnel, per-niche/subject/screenshot performance,

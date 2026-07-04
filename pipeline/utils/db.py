@@ -117,10 +117,22 @@ CREATE TABLE IF NOT EXISTS clicks (
     timestamp   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Email engagement events ingested from the SendGrid Event Webhook
+-- (opens/clicks/etc.). sg_event_id is SendGrid's unique per-event id, used
+-- for idempotency so the same event delivered twice is only stored once.
+CREATE TABLE IF NOT EXISTS email_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_id     INTEGER NOT NULL REFERENCES leads(id),
+    event_type  TEXT NOT NULL,
+    sg_event_id TEXT UNIQUE,
+    timestamp   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status);
 CREATE INDEX IF NOT EXISTS idx_leads_email ON leads(contact_email);
 CREATE INDEX IF NOT EXISTS idx_email_threads_lead ON email_threads(lead_id);
 CREATE INDEX IF NOT EXISTS idx_websites_lead ON websites(lead_id);
+CREATE INDEX IF NOT EXISTS idx_email_events_lead ON email_events(lead_id);
 """
 
 
@@ -137,6 +149,7 @@ def init_db(db_path: Optional[str] = None) -> None:
         _migrate_add_column(conn, "leads", "review_count", "INTEGER")
         _migrate_add_column(conn, "leads", "reviews", "TEXT")
         _migrate_add_column(conn, "leads", "image_note", "TEXT")
+        _migrate_add_column(conn, "email_threads", "subject_variant", "TEXT")
         _migrate_leads_status_check(conn)
         conn.commit()
 
@@ -321,13 +334,14 @@ def insert_email_thread(
     to_addr: str,
     message_id: str = "",
     classification: str = "",
+    subject_variant: str = "",
 ) -> int:
     with get_connection() as conn:
         cur = conn.execute(
             """INSERT INTO email_threads
-               (lead_id, direction, message_id, subject, body, from_addr, to_addr, classification)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (lead_id, direction, message_id, subject, body, from_addr, to_addr, classification),
+               (lead_id, direction, message_id, subject, body, from_addr, to_addr, classification, subject_variant)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (lead_id, direction, message_id, subject, body, from_addr, to_addr, classification, subject_variant),
         )
         return cur.lastrowid
 
@@ -418,6 +432,69 @@ def mark_website_transferred(lead_id: int) -> None:
 def log_click(lead_id: int) -> None:
     with get_connection() as conn:
         conn.execute("INSERT INTO clicks (lead_id) VALUES (?)", (lead_id,))
+
+
+# --- Email engagement events (SendGrid webhook) + subject-line A/B stats ------
+
+def record_email_event(lead_id: int, event_type: str, sg_event_id: str = "") -> None:
+    """Record an engagement event (open/click/...) from the SendGrid Event
+    Webhook. Idempotent on sg_event_id: the same event redelivered is stored
+    once. An empty sg_event_id is stored as NULL (SQLite UNIQUE permits many
+    NULLs), so events without an id are never silently deduped against each
+    other."""
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO email_events (lead_id, event_type, sg_event_id) VALUES (?, ?, ?)",
+            (lead_id, event_type, sg_event_id or None),
+        )
+
+
+def _lead_variant_map(conn: sqlite3.Connection) -> dict[int, str]:
+    """lead_id -> the A/B subject variant it was sent, from its most recent
+    outbound email that carried one."""
+    mapping: dict[int, str] = {}
+    for row in conn.execute(
+        "SELECT lead_id, subject_variant FROM email_threads "
+        "WHERE direction = 'outbound' AND subject_variant IN ('A', 'B') "
+        "ORDER BY timestamp ASC"
+    ):
+        mapping[row["lead_id"]] = row["subject_variant"]  # later rows overwrite -> most recent wins
+    return mapping
+
+
+def subject_variant_stats() -> dict[str, dict[str, int]]:
+    """Per-variant engagement for the subject-line A/B test.
+
+    Returns {"A": {...}, "B": {...}} where each dict has: sends (outbound
+    emails tagged with that variant), opens and clicks (distinct leads of
+    that variant that opened / clicked). Opens come from SendGrid webhook
+    events (email_events); clicks from the self-hosted preview-link tracker
+    (clicks table) -- so clicks are available even without SendGrid, opens
+    only once the Event Webhook is wired up."""
+    stats = {v: {"sends": 0, "opens": 0, "clicks": 0} for v in ("A", "B")}
+    with get_connection() as conn:
+        for row in conn.execute(
+            "SELECT subject_variant AS v, COUNT(*) AS n FROM email_threads "
+            "WHERE direction = 'outbound' AND subject_variant IN ('A', 'B') GROUP BY subject_variant"
+        ):
+            stats[row["v"]]["sends"] = row["n"]
+
+        variant_of = _lead_variant_map(conn)
+
+        opened_leads = {r["lead_id"] for r in conn.execute(
+            "SELECT DISTINCT lead_id FROM email_events WHERE event_type = 'open'"
+        )}
+        for lead_id in opened_leads:
+            v = variant_of.get(lead_id)
+            if v in stats:
+                stats[v]["opens"] += 1
+
+        clicked_leads = {r["lead_id"] for r in conn.execute("SELECT DISTINCT lead_id FROM clicks")}
+        for lead_id in clicked_leads:
+            v = variant_of.get(lead_id)
+            if v in stats:
+                stats[v]["clicks"] += 1
+    return stats
 
 
 def get_last_email_timestamp(lead_id: int) -> Optional[str]:

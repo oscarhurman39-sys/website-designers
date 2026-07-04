@@ -154,14 +154,18 @@ def send_email_sendgrid(
     from sendgrid import SendGridAPIClient
     from sendgrid.helpers.mail import (
         Attachment,
+        ClickTracking,
         Content,
         ContentId,
+        CustomArg,
         Disposition,
         FileContent,
         FileName,
         FileType,
         Header,
         Mail,
+        OpenTracking,
+        TrackingSettings,
     )
 
     text_with_footer = compliance.append_footer(body_text, lead_id)
@@ -176,6 +180,16 @@ def send_email_sendgrid(
     # Parity with the SMTP path's one-click unsubscribe.
     message.add_header(Header("List-Unsubscribe", compliance.list_unsubscribe_header(lead_id)))
     message.add_header(Header("List-Unsubscribe-Post", "List-Unsubscribe=One-Click"))
+
+    # Enable SendGrid open + click tracking, and tag the message with lead_id
+    # via a custom arg SendGrid echoes back on every Event Webhook event --
+    # that's how /webhook/sendgrid attributes opens/clicks to a lead (and its
+    # subject-line A/B variant) in the dashboard.
+    message.tracking_settings = TrackingSettings(
+        click_tracking=ClickTracking(enable=True, enable_text=True),
+        open_tracking=OpenTracking(enable=True),
+    )
+    message.add_custom_arg(CustomArg("lead_id", str(lead_id)))
 
     if inline_image_path:
         image_path = Path(inline_image_path)

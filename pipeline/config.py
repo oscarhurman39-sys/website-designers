@@ -57,6 +57,19 @@ EMAIL_PASSWORD: str = os.getenv("EMAIL_PASSWORD", "")
 # SENDGRID_FROM_EMAIL at a mailbox you actually poll.
 SENDGRID_API_KEY: str = os.getenv("SENDGRID_API_KEY", "")
 SENDGRID_FROM_EMAIL: str = os.getenv("SENDGRID_FROM_EMAIL", "")
+# Optional verification key for the SendGrid Event Webhook (/webhook/sendgrid).
+# When set, incoming events are Ed25519-signature-verified before being
+# recorded; when blank the endpoint accepts events unverified (fine for local
+# testing, but set this in production so counts can't be spoofed).
+SENDGRID_WEBHOOK_VERIFICATION_KEY: str = os.getenv("SENDGRID_WEBHOOK_VERIFICATION_KEY", "")
+
+# --- Subject-line A/B test (optional) ---------------------------------------
+# When BOTH are set, sales_agent.py picks one at random (50/50) per cold email
+# and logs the choice (email_threads.subject_variant) so the dashboard can
+# compare open/click rates. When either is blank, the drafted subject is used
+# unchanged. `{business_name}` (and `{niche}` / `{location}`) are substituted.
+SUBJECT_A: str = os.getenv("SUBJECT_A", "")
+SUBJECT_B: str = os.getenv("SUBJECT_B", "")
 
 HF_API_TOKEN: str = os.getenv("HF_API_TOKEN", "")
 
