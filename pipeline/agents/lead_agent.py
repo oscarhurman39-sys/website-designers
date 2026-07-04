@@ -56,6 +56,11 @@ _EMAIL_BLOCKLIST_SUBSTR = ("example.com", "sentry.io", "wixpress.com", "godaddy.
 _TESTIMONIAL_HINTS = ("testimonial", "review", "quote", "client-says")
 _PAIN_POINT_HINTS = ("blog", "news", "about", "why-", "services")
 
+# Established-business targeting gate: a Google Places listing must have at
+# least this many ratings AND at least one photo to be worth pursuing.
+# Listings below the bar are set aside as 'filtered' rather than emailed.
+_MIN_REVIEWS = 5
+
 
 @dataclass
 class CsvRow:
@@ -240,6 +245,20 @@ def _research_lead_impl(lead: dict) -> None:
             else "No Places API key configured and no existing contact email"
         )
         db.update_lead_status(lead_id, "lost", notes=note)
+        return
+
+    # Established-business targeting gate: only pursue listings with enough
+    # ratings to be real and at least one photo. This runs on the Places
+    # result regardless of any pre-existing email -- a weak listing is set
+    # aside as 'filtered' (skipped by every downstream queue), not emailed.
+    review_count = place["review_count"] or 0
+    photo_count = len(place["photo_references"])
+    if review_count < _MIN_REVIEWS or photo_count == 0:
+        db.update_lead_status(
+            lead_id,
+            "filtered",
+            notes=f"Below targeting threshold (ratings={review_count}, photos={photo_count})",
+        )
         return
 
     if not place["name"] or not place["phone"]:

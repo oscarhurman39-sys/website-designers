@@ -20,11 +20,13 @@
     </div>
   </header>
 
-  <section class="hero" style="background-image: linear-gradient(rgba(0,0,0,0.5), rgba(0,0,0,0.5)), url('{{ hero_image_url }}');">
+  <section class="hero">
     <div class="container hero-inner">
       <h1>{{ hero_headline | default(business_name) }}</h1>
       <p class="tagline">Trusted local service in {{ location | default('your area') }}</p>
       <a class="cta" href="#contact">Get In Touch</a>
+      <img class="hero-photo" src="{{ hero_image_url }}" alt="Your photo here">
+      <p class="photo-credit">{{ photo_credit }}</p>
     </div>
   </section>
 

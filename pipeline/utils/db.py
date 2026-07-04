@@ -28,13 +28,17 @@ ALLOWED_STATUSES = (
     "lost",
     "bounced",
     "unsubscribed",
+    # Established-business targeting gate (lead_agent.py): a Places listing
+    # with too few reviews or no photos is set aside rather than pursued.
+    "filtered",
 )
 
 _STATUS_LIST_SQL = ", ".join(f"'{s}'" for s in ALLOWED_STATUSES)
 
-_SCHEMA = f"""
-PRAGMA foreign_keys = ON;
-
+# The full, current leads-table definition, kept as its own constant so the
+# CHECK-constraint rebuild migration (_migrate_leads_status_check) recreates
+# the table with exactly this shape rather than a hand-copied duplicate.
+_LEADS_TABLE_SQL = f"""
 CREATE TABLE IF NOT EXISTS leads (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     business_name   TEXT NOT NULL,
@@ -52,12 +56,19 @@ CREATE TABLE IF NOT EXISTS leads (
     rating          REAL,
     review_count    INTEGER,
     reviews         TEXT,
+    image_note      TEXT,
     status          TEXT NOT NULL DEFAULT 'new'
                     CHECK (status IN ({_STATUS_LIST_SQL})),
     unsubscribed    INTEGER NOT NULL DEFAULT 0,
     notes           TEXT,
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
+"""
+
+_SCHEMA = f"""
+PRAGMA foreign_keys = ON;
+
+{_LEADS_TABLE_SQL}
 
 CREATE TABLE IF NOT EXISTS email_threads (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -125,7 +136,50 @@ def init_db(db_path: Optional[str] = None) -> None:
         _migrate_add_column(conn, "leads", "rating", "REAL")
         _migrate_add_column(conn, "leads", "review_count", "INTEGER")
         _migrate_add_column(conn, "leads", "reviews", "TEXT")
+        _migrate_add_column(conn, "leads", "image_note", "TEXT")
+        _migrate_leads_status_check(conn)
         conn.commit()
+
+
+def _migrate_leads_status_check(conn: sqlite3.Connection) -> None:
+    """Widen the leads.status CHECK constraint to include newer statuses
+    (e.g. 'filtered') on databases created before they existed.
+
+    SQLite can't ALTER a CHECK constraint in place, so we do the documented
+    table-rebuild: rename the old table aside, recreate it with the current
+    definition, copy every row across, drop the old one. Idempotent -- it's
+    a no-op once the live constraint already lists 'filtered'. Runs with
+    foreign keys off (executescript COMMITs first, so the PRAGMA takes)
+    because child tables reference leads(id); ids are preserved by the
+    column-for-column copy, so those references stay valid."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'leads'"
+    ).fetchone()
+    if row is None or "'filtered'" in (row["sql"] or ""):
+        return  # fresh table already has the current constraint, or no table yet
+
+    # Copy only columns that exist on the old table (image_note was just
+    # added above, so both sides have it; any columns the new canonical
+    # shape adds are left to their defaults on rows copied across).
+    old_cols = [r["name"] for r in conn.execute("PRAGMA table_info(leads)").fetchall()]
+    collist = ", ".join(old_cols)
+    # Build the new table under a temp name, copy into it, drop the old
+    # table, then rename the new one into place. This ordering matters:
+    # renaming the *original* leads table would make SQLite auto-rewrite
+    # child tables' foreign keys to follow it (they reference "leads"), so
+    # we instead leave "leads" as the name the children point at and swap
+    # the table underneath it.
+    new_table_sql = _LEADS_TABLE_SQL.replace(
+        "CREATE TABLE IF NOT EXISTS leads", "CREATE TABLE _leads_new"
+    )
+    conn.executescript(
+        "PRAGMA foreign_keys=OFF;\n"
+        f"{new_table_sql}\n"
+        f"INSERT INTO _leads_new ({collist}) SELECT {collist} FROM leads;\n"
+        "DROP TABLE leads;\n"
+        "ALTER TABLE _leads_new RENAME TO leads;\n"
+        "PRAGMA foreign_keys=ON;\n"
+    )
 
 
 def _migrate_add_column(conn: sqlite3.Connection, table: str, column: str, coltype: str) -> None:

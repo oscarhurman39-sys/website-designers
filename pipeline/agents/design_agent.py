@@ -13,12 +13,10 @@ import requests
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 import config
-from utils import db, github_api, screenshot, tracer, tracker, vercel_api
+from utils import db, github_api, image_placeholder, screenshot, tracer, tracker, vercel_api
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 TEMPLATE_FILES = ("index.html", "style.css")
-
-_PLACEHOLDER_IMAGE_BASE = "https://picsum.photos/seed"
 
 
 def available_niches() -> set[str]:
@@ -43,28 +41,35 @@ def resolve_template_niche(niche: str) -> Optional[str]:
 
 
 def get_hero_image_url(niche: str) -> str:
-    """Fetch a relevant free stock photo URL for the niche.
+    """Return the hero image for a preview -- placeholder-first, always.
 
-    Uses Unsplash's search API if UNSPLASH_ACCESS_KEY is configured;
-    otherwise falls back to a deterministic (seeded) placeholder image
-    service that needs no API key, so DesignAgent works out of the box.
+    Every cold preview ships with the self-contained, on-brand "your photo
+    here" placeholder (utils/image_placeholder.py) instead of a stock or
+    third-party photo: honest (the prospect sees a real photo goes there),
+    legally safe (no Unsplash/Google Places image rights on a preview they
+    never asked for), and unbreakable (a `data:` URI, no external URL to
+    404). Real photography is swapped in only once a lead becomes a paying
+    client.
+
+    The Unsplash path is deliberately kept commented out below for that
+    later, paid stage -- do NOT re-enable it for cold previews.
     """
-    if config.UNSPLASH_ACCESS_KEY:
-        try:
-            resp = requests.get(
-                "https://api.unsplash.com/photos/random",
-                params={"query": niche, "orientation": "landscape"},
-                headers={"Authorization": f"Client-ID {config.UNSPLASH_ACCESS_KEY}"},
-                timeout=10,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            url = data.get("urls", {}).get("regular")
-            if url:
-                return url
-        except (requests.RequestException, ValueError, KeyError):
-            pass  # fall through to placeholder
-    return f"{_PLACEHOLDER_IMAGE_BASE}/{niche}/1600/900"
+    # --- Paid-client option (disabled): real stock photo via Unsplash ---
+    # if config.UNSPLASH_ACCESS_KEY:
+    #     try:
+    #         resp = requests.get(
+    #             "https://api.unsplash.com/photos/random",
+    #             params={"query": niche, "orientation": "landscape"},
+    #             headers={"Authorization": f"Client-ID {config.UNSPLASH_ACCESS_KEY}"},
+    #             timeout=10,
+    #         )
+    #         resp.raise_for_status()
+    #         url = resp.json().get("urls", {}).get("regular")
+    #         if url:
+    #             return url
+    #     except (requests.RequestException, ValueError, KeyError):
+    #         pass  # fall through to placeholder
+    return image_placeholder.HERO_PLACEHOLDER_DATA_URI
 
 
 def _pain_point_solution(lead: dict) -> str:
@@ -139,6 +144,10 @@ def build_context(lead: dict) -> dict:
         # for leads researched before this data was available.
         "opening_hours": _opening_hours(lead),
         "reviews": _reviews(lead),
+        # Photo attribution slot -- intentionally empty while the hero is the
+        # placeholder (no third-party image to credit). Reserved for when a
+        # paying client's real, licensed photos are swapped in later.
+        "photo_credit": "",
     }
 
 
@@ -225,6 +234,10 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
         screenshot_url=screenshot_url,
         screenshot_path=screenshot_path,
     )
+    # The hero is the placeholder (no real photos yet), so record a note the
+    # SalesAgent surfaces in the cold email -- letting the prospect know the
+    # image is a stand-in we'll replace with their own photos.
+    db.update_lead_fields(lead["id"], image_note=image_placeholder.PLACEHOLDER_EMAIL_NOTE)
     db.update_lead_status(lead["id"], "designed", notes=f"Preview deployed: {deployment['url']}")
     return db.get_website_by_lead(lead["id"]) if website_id else None
 

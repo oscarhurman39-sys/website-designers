@@ -235,6 +235,12 @@ def _send_cold_email_impl(lead: dict) -> bool:
         return False
 
     subject, body = draft_cold_email(lead)
+    # If DesignAgent flagged that the preview's hero is a placeholder (no
+    # real photos yet), tell the prospect plainly -- appended to `body` so
+    # it lands in both the plain-text and the HTML version below.
+    image_note = (lead.get("image_note") or "").strip()
+    if image_note:
+        body = f"{body}\n\n{image_note}"
     preview_link = tracker.create_click_link(lead["id"])
     body_with_link = f"{body}\n\nHere's the live preview: {preview_link}"
 
