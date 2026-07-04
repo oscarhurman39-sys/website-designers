@@ -48,6 +48,16 @@ EMAIL_PORT: int = int(os.getenv("EMAIL_PORT", "587") or 587)
 EMAIL_USER: str = os.getenv("EMAIL_USER", "")
 EMAIL_PASSWORD: str = os.getenv("EMAIL_PASSWORD", "")
 
+# Optional SendGrid transport (preferred for cold outreach deliverability).
+# When SENDGRID_API_KEY is set, sales_agent.py sends via the SendGrid v3 API
+# instead of SMTP; when it's blank the pipeline falls back to the SMTP
+# settings above, so neither is required on its own. SENDGRID_FROM_EMAIL is
+# the verified sender address (falls back to EMAIL_USER if left blank).
+# Note: replies still come back over IMAP (EMAIL_HOST/EMAIL_USER), so point
+# SENDGRID_FROM_EMAIL at a mailbox you actually poll.
+SENDGRID_API_KEY: str = os.getenv("SENDGRID_API_KEY", "")
+SENDGRID_FROM_EMAIL: str = os.getenv("SENDGRID_FROM_EMAIL", "")
+
 HF_API_TOKEN: str = os.getenv("HF_API_TOKEN", "")
 
 # Used by agents/lead_agent.py's Places API (New) client -- see

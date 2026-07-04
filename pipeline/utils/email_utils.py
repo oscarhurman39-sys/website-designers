@@ -13,8 +13,10 @@ Deliverability & compliance notes:
 """
 from __future__ import annotations
 
+import base64
 import email
 import imaplib
+import mimetypes
 import smtplib
 import uuid
 from dataclasses import dataclass
@@ -108,6 +110,93 @@ def send_email(
         server.sendmail(config.EMAIL_USER, [to_addr], msg.as_string())
 
     return message_id
+
+
+def send_email_sendgrid(
+    to_addr: str,
+    subject: str,
+    body_text: str,
+    lead_id: int,
+    body_html: Optional[str] = None,
+    inline_image_path: Optional[str] = None,
+    inline_image_cid: str = "preview",
+) -> str:
+    """SendGrid v3 API counterpart of send_email(), with an identical
+    signature and the same compliance guarantees:
+
+      * hard-stops on an unsubscribed recipient (last line of defense),
+      * appends the CAN-SPAM footer to the plain-text and HTML parts,
+      * sets the one-click List-Unsubscribe headers,
+      * embeds `inline_image_path` inline via a `cid:` attachment that
+        `body_html` references as `cid:<inline_image_cid>`.
+
+    Returns a Message-ID string (SendGrid's X-Message-Id when present) so
+    callers record it exactly as they do the SMTP Message-ID. Requires
+    config.SENDGRID_API_KEY; the verified sender is config.SENDGRID_FROM_EMAIL
+    (falling back to EMAIL_USER). Raises RuntimeError on a non-2xx response
+    so a failed send is never silently recorded as sent.
+    """
+    from utils import db  # local import to avoid a circular import at module load time
+
+    if db.is_unsubscribed(to_addr):
+        raise RuntimeError(f"Refusing to send: {to_addr} is unsubscribed.")
+    if inline_image_path and not body_html:
+        raise ValueError("inline_image_path requires body_html (the image is referenced via cid: inside it).")
+    if not config.SENDGRID_API_KEY:
+        raise RuntimeError("SENDGRID_API_KEY is not configured.")
+
+    from_email = config.SENDGRID_FROM_EMAIL or config.EMAIL_USER
+    if not from_email:
+        raise RuntimeError("Set SENDGRID_FROM_EMAIL (or EMAIL_USER) as the SendGrid sender address.")
+
+    # Imported lazily so the SMTP path (and the rest of the pipeline) never
+    # requires the sendgrid package to be installed.
+    from sendgrid import SendGridAPIClient
+    from sendgrid.helpers.mail import (
+        Attachment,
+        Content,
+        ContentId,
+        Disposition,
+        FileContent,
+        FileName,
+        FileType,
+        Header,
+        Mail,
+    )
+
+    text_with_footer = compliance.append_footer(body_text, lead_id)
+
+    message = Mail(from_email=from_email, to_emails=to_addr, subject=subject)
+    # text/plain must precede text/html (increasing richness); SendGrid uses
+    # the last part as the primary display candidate.
+    message.add_content(Content("text/plain", text_with_footer))
+    if body_html:
+        message.add_content(Content("text/html", compliance.append_footer_html(body_html, lead_id)))
+
+    # Parity with the SMTP path's one-click unsubscribe.
+    message.add_header(Header("List-Unsubscribe", compliance.list_unsubscribe_header(lead_id)))
+    message.add_header(Header("List-Unsubscribe-Post", "List-Unsubscribe=One-Click"))
+
+    if inline_image_path:
+        image_path = Path(inline_image_path)
+        encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
+        message.add_attachment(
+            Attachment(
+                FileContent(encoded),
+                FileName(image_path.name),
+                FileType(mimetypes.guess_type(image_path.name)[0] or "application/octet-stream"),
+                Disposition("inline"),
+                ContentId(inline_image_cid),
+            )
+        )
+
+    response = SendGridAPIClient(config.SENDGRID_API_KEY).send(message)
+    if response.status_code not in (200, 201, 202):
+        raise RuntimeError(f"SendGrid send failed with HTTP {response.status_code}")
+
+    headers = getattr(response, "headers", None) or {}
+    sg_id = headers.get("X-Message-Id") or headers.get("x-message-id")
+    return f"<{sg_id}@sendgrid.net>" if sg_id else make_msgid(domain=config.SENDING_DOMAIN or None)
 
 
 def _decode(value: Optional[str]) -> str:

@@ -201,6 +201,17 @@ def _build_html_body(body: str, preview_link: str) -> str:
     return paragraphs + link_html + image_html
 
 
+def _send_via_configured_transport(**kwargs) -> str:
+    """Send through SendGrid when SENDGRID_API_KEY is configured, otherwise
+    fall back to SMTP. Both transports take the same arguments and carry the
+    same compliance guarantees (unsubscribe hard-stop, CAN-SPAM footer,
+    List-Unsubscribe header), so this is a transparent swap and returns the
+    Message-ID either way."""
+    if config.SENDGRID_API_KEY:
+        return email_utils.send_email_sendgrid(**kwargs)
+    return email_utils.send_email(**kwargs)
+
+
 def _can_send_now() -> bool:
     now = datetime.now(timezone.utc)
     if now < _next_send_allowed_at:
@@ -253,7 +264,7 @@ def _send_cold_email_impl(lead: dict) -> bool:
     body_html = _build_html_body(body, preview_link) if cached_screenshot else None
     inline_image_path = str(cached_screenshot) if cached_screenshot else None
 
-    message_id = email_utils.send_email(
+    message_id = _send_via_configured_transport(
         to_addr=email_addr,
         subject=subject,
         body_text=body_with_link,
@@ -323,7 +334,7 @@ def _send_goodbye(lead: dict) -> None:
         f"Wishing {lead['business_name']} all the best."
     )
     try:
-        message_id = email_utils.send_email(to_addr=email_addr, subject=subject, body_text=body, lead_id=lead["id"])
+        message_id = _send_via_configured_transport(to_addr=email_addr, subject=subject, body_text=body, lead_id=lead["id"])
         db.insert_email_thread(
             lead_id=lead["id"], direction="outbound", subject=subject, body=body,
             from_addr=config.EMAIL_USER, to_addr=email_addr, message_id=message_id,
