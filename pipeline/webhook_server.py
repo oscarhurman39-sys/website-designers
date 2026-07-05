@@ -125,7 +125,9 @@ def _verify_sendgrid_signature(payload: bytes, headers) -> bool:
     ECDSA public key. Returns False on any error (missing headers, bad
     signature, helper unavailable) so verification failures fail closed."""
     try:
-        from sendgrid.event_webhook import EventWebhook
+        # Correct path is sendgrid.helpers.eventwebhook (verified against the
+        # installed package + sendgrid-python source) -- NOT sendgrid.event_webhook.
+        from sendgrid.helpers.eventwebhook import EventWebhook
 
         ew = EventWebhook()
         public_key = ew.convert_public_key_to_ecdsa(config.SENDGRID_WEBHOOK_VERIFICATION_KEY)
