@@ -119,11 +119,21 @@ def _pain_point_solution(lead: dict) -> str:
     )
 
 
+# Placeholder copy for the review/testimonial sections of a preview site.
+# Deliberately NOT real review content: republishing Google review text on a
+# non-Google site conflicts with Google Maps Platform's display/attribution
+# terms, and a made-up quote would be a fabricated testimonial. Like the
+# "Your photo here" hero, these are honest placeholders swapped for the
+# client's own (permission-cleared) reviews after they become a client.
+_TESTIMONIAL_PLACEHOLDER = "Your best customer quote will sit right here."
+_REVIEWS_PLACEHOLDER = "Reviews from your customers -- coming soon."
+
+
 def _testimonial(lead: dict) -> str:
-    return (lead.get("testimonial") or "").strip() or (
-        f"{lead['business_name']} always takes great care of us -- highly recommend "
-        "to anyone in the area."
-    )
+    """Placeholder only -- never real review text (see note above). The
+    lead's stored testimonial/reviews stay in the DB for the operator's own
+    context; they just don't get published on the preview."""
+    return _TESTIMONIAL_PLACEHOLDER
 
 
 def _opening_hours(lead: dict) -> str:
@@ -139,19 +149,9 @@ def _opening_hours(lead: dict) -> str:
 
 
 def _reviews(lead: dict) -> str:
-    """leads.reviews is stored as JSON (up to 3 review text snippets from
-    Google Places) -- join them into one display-ready block. Falls back
-    to the single `testimonial` field (already reviews[0] when Places
-    supplied any) so older leads / rows without this column still render
-    something reasonable."""
-    raw = lead.get("reviews") or ""
-    try:
-        reviews = json.loads(raw) if raw else []
-    except (json.JSONDecodeError, TypeError):
-        reviews = []
-    if reviews:
-        return " -- ".join(f'"{r}"' for r in reviews)
-    return _testimonial(lead)
+    """Placeholder only -- never the Google review text stored on the lead
+    (see the display-terms note above _TESTIMONIAL_PLACEHOLDER)."""
+    return _REVIEWS_PLACEHOLDER
 
 
 def _place_types(lead: dict) -> list[str]:

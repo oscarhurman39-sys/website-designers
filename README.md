@@ -16,6 +16,10 @@ transfer are only ever triggered by an explicit console command.
 4. `python run.py quick-test` to run one lead through the whole pipeline and watch it work
 5. `python run.py loop` (always-on) or `python run.py dashboard` (Streamlit UI) once you're ready
 
+`.env.example` ships with `DRY_RUN=true`: the whole pipeline runs (research,
+deploys, status changes) but every email is printed to the console instead of
+sent. Flip to `DRY_RUN=false` only when you're ready to send for real.
+
 ## Directory structure
 
 ```

@@ -43,6 +43,13 @@ GITHUB_TOKEN: str = os.getenv("GITHUB_TOKEN", "")
 VERCEL_TOKEN: str = os.getenv("VERCEL_TOKEN", "")
 VERCEL_TEAM_ID: str = os.getenv("VERCEL_TEAM_ID", "")
 
+# When true, NO email is ever actually sent: both transports (SMTP and
+# SendGrid) build the full compliant message, print it to the console, and
+# return a Message-ID as if it were sent -- so the whole pipeline (status
+# transitions, thread logging, rate limiting) can be exercised end-to-end
+# with zero deliverability risk. Set DRY_RUN=false to go live.
+DRY_RUN: bool = os.getenv("DRY_RUN", "").strip().lower() in ("1", "true", "yes")
+
 EMAIL_HOST: str = os.getenv("EMAIL_HOST", "")
 EMAIL_PORT: int = int(os.getenv("EMAIL_PORT", "587") or 587)
 EMAIL_USER: str = os.getenv("EMAIL_USER", "")

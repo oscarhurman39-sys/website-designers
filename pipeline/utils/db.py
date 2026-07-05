@@ -31,6 +31,9 @@ ALLOWED_STATUSES = (
     # Established-business targeting gate (lead_agent.py): a Places listing
     # with too few reviews or no photos is set aside rather than pursued.
     "filtered",
+    # Pre-send verification failure (utils/email_verify.py): the address has
+    # bad syntax or its domain provably can't receive mail. Never emailed.
+    "bad_email",
 )
 
 _STATUS_LIST_SQL = ", ".join(f"'{s}'" for s in ALLOWED_STATUSES)
@@ -174,8 +177,11 @@ def _migrate_leads_status_check(conn: sqlite3.Connection) -> None:
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'leads'"
     ).fetchone()
-    if row is None or "'filtered'" in (row["sql"] or ""):
-        return  # fresh table already has the current constraint, or no table yet
+    if row is None:
+        return  # no table yet; the fresh CREATE above will carry the full constraint
+    live_sql = row["sql"] or ""
+    if all(f"'{status}'" in live_sql for status in ALLOWED_STATUSES):
+        return  # live constraint already covers every current status
 
     # Copy only columns that exist on the old table (image_note was just
     # added above, so both sides have it; any columns the new canonical

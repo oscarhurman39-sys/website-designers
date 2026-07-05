@@ -104,12 +104,28 @@ def send_email(
     msg["List-Unsubscribe"] = compliance.list_unsubscribe_header(lead_id)
     msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
 
+    # Dry run: the full compliant message was built (footer, headers, parts)
+    # but nothing leaves the machine. Placed after the unsubscribe hard-stop
+    # on purpose, so dry runs exercise every guard a real send would.
+    if config.DRY_RUN:
+        _print_dry_run("SMTP", to_addr, subject, text_with_footer)
+        return message_id
+
     with smtplib.SMTP(config.EMAIL_HOST, config.EMAIL_PORT, timeout=30) as server:
         server.starttls()
         server.login(config.EMAIL_USER, config.EMAIL_PASSWORD)
         server.sendmail(config.EMAIL_USER, [to_addr], msg.as_string())
 
     return message_id
+
+
+def _print_dry_run(transport: str, to_addr: str, subject: str, body_with_footer: str) -> None:
+    """Console dump of an email a live run would have sent (DRY_RUN=true)."""
+    bar = "=" * 66
+    print(
+        f"\n{bar}\nDRY RUN -- email NOT sent (transport: {transport})\n"
+        f"To: {to_addr}\nSubject: {subject}\n{'-' * 66}\n{body_with_footer}\n{bar}\n"
+    )
 
 
 def send_email_sendgrid(
@@ -203,6 +219,12 @@ def send_email_sendgrid(
                 ContentId(inline_image_cid),
             )
         )
+
+    # Dry run: same contract as the SMTP path -- full message built, all
+    # guards exercised, nothing sent.
+    if config.DRY_RUN:
+        _print_dry_run("SendGrid", to_addr, subject, text_with_footer)
+        return make_msgid(domain=config.SENDING_DOMAIN or None)
 
     response = SendGridAPIClient(config.SENDGRID_API_KEY).send(message)
     if response.status_code not in (200, 201, 202):

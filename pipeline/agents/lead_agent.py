@@ -321,8 +321,11 @@ def _research_lead_impl(lead: dict) -> None:
         rating=place["rating"],
         review_count=place["review_count"],
         opening_hours=json.dumps(place["opening_hours"]),
+        # Review text stays in the DB for the operator's own context only --
+        # design_agent renders placeholders, never this content (Google
+        # Maps Platform display terms). Deliberately NOT copied into
+        # `testimonial` anymore for the same reason.
         reviews=json.dumps(place["reviews"]),
-        testimonial=place["reviews"][0] if place["reviews"] else (lead.get("testimonial") or ""),
         pain_point=pain_point,
         scraped_info=place["editorial_summary"] or "",
     )

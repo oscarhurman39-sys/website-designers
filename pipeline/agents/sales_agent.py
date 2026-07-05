@@ -18,7 +18,7 @@ from typing import Optional
 from huggingface_hub import InferenceClient
 
 import config
-from utils import compliance, db, email_utils, screenshot, tracer, tracker
+from utils import compliance, db, email_utils, email_verify, screenshot, tracer, tracker
 
 try:
     from slack_sdk import WebClient
@@ -366,6 +366,15 @@ def _send_cold_email_impl(lead: dict) -> bool:
     if not email_addr or db.is_unsubscribed(email_addr):
         db.update_lead_status(lead["id"], "unsubscribed" if db.is_unsubscribed(email_addr) else "lost",
                                notes="No usable email at send time")
+        return False
+
+    # Pre-send verification (syntax + MX): a provably undeliverable address
+    # is never sent to -- bounces are what poison a sending domain's
+    # reputation. Transient DNS problems fail open inside verify_email, so
+    # this only ever rejects definitive failures.
+    sendable, verify_reason = email_verify.verify_email(email_addr)
+    if not sendable:
+        db.update_lead_status(lead["id"], "bad_email", notes=f"Email failed verification: {verify_reason}")
         return False
 
     subject, body = draft_cold_email(lead)

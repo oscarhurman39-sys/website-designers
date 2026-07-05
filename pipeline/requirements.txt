@@ -10,6 +10,8 @@ streamlit==1.38.0
 pandas==2.2.3
 huggingface_hub==0.25.2
 slack-sdk==3.33.1
+# MX-record lookups for pre-send email verification (utils/email_verify.py)
+dnspython==2.6.1
 
 # Preferred cold-email transport (100 emails/day free tier). Optional:
 # sales_agent.py uses it only when SENDGRID_API_KEY is set, otherwise it
