@@ -226,7 +226,24 @@ def send_email_sendgrid(
         _print_dry_run("SendGrid", to_addr, subject, text_with_footer)
         return make_msgid(domain=config.SENDING_DOMAIN or None)
 
-    response = SendGridAPIClient(config.SENDGRID_API_KEY).send(message)
+    # Retry ONLY definitive 429/5xx API rejections (3 attempts, 2s/4s
+    # backoff). Ambiguous failures (timeouts/resets) are deliberately NOT
+    # retried: the message may have already been accepted, and retrying
+    # would send the same cold email twice. python_http_client is the
+    # transport sendgrid itself uses, so its HTTPError carries status_code.
+    from python_http_client.exceptions import HTTPError as SendGridHTTPError
+
+    from utils import retry
+
+    @retry.with_retries(
+        retriable=(SendGridHTTPError,),
+        transient=retry.is_retriable_http_response,
+        label="sendgrid.send",
+    )
+    def _send_once():
+        return SendGridAPIClient(config.SENDGRID_API_KEY).send(message)
+
+    response = _send_once()
     if response.status_code not in (200, 201, 202):
         raise RuntimeError(f"SendGrid send failed with HTTP {response.status_code}")
 

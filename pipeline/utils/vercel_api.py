@@ -16,10 +16,17 @@ from typing import Optional
 import requests
 
 import config
+from utils import retry
 
 _API_BASE = "https://api.vercel.com"
 _DEPLOY_TIMEOUT_SECONDS = 90
 _POLL_INTERVAL_SECONDS = 3
+
+# All public functions below retry transient failures (connection errors,
+# 429/5xx) 3 times with 2s/4s backoff; definitive 4xx errors raise
+# immediately. Retrying deploy_files can at worst create a second deployment
+# on the same project (the latest one wins), which is harmless.
+_vercel_retry = retry.with_retries(retriable=(requests.RequestException,), label="vercel")
 
 
 def _headers() -> dict[str, str]:
@@ -39,6 +46,7 @@ def _sanitize_project_name(name: str) -> str:
     return slug[:100] or "preview-site"
 
 
+@_vercel_retry
 def deploy_files(project_name: str, files: dict[str, str]) -> dict:
     """Deploy `files` (path -> text content) as a new production deployment.
 
@@ -93,6 +101,7 @@ def _poll_until_ready(deployment_id: str) -> str:
     return state
 
 
+@_vercel_retry
 def get_deployment_url(deployment_id: str) -> Optional[str]:
     resp = requests.get(
         f"{_API_BASE}/v13/deployments/{deployment_id}",
@@ -105,6 +114,7 @@ def get_deployment_url(deployment_id: str) -> Optional[str]:
     return f"https://{url}" if url else None
 
 
+@_vercel_retry
 def _get_project_id(project_name: str) -> str:
     resp = requests.get(
         f"{_API_BASE}/v9/projects/{_sanitize_project_name(project_name)}",
@@ -116,6 +126,7 @@ def _get_project_id(project_name: str) -> str:
     return resp.json()["id"]
 
 
+@_vercel_retry
 def invite_collaborator(project_name: str, email: str, project_role: str = "ADMIN") -> None:
     """Invite a client to a specific Vercel project by email.
 
@@ -154,6 +165,7 @@ def invite_collaborator(project_name: str, email: str, project_role: str = "ADMI
     resp.raise_for_status()
 
 
+@_vercel_retry
 def delete_project(project_name: str) -> None:
     """Permanently delete a Vercel project (and its deployments). Destructive
     and irreversible -- used only by the opt-in integration test
