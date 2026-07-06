@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import secrets
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -173,6 +174,37 @@ def validate() -> None:
         )
 
 
+# Obvious placeholder fragments that mean PHYSICAL_ADDRESS was never filled
+# in with a real postal address. Matched case-insensitively as substrings.
+# Deliberately does NOT include "123 Test St, Testville" -- that's the
+# documented fixture address for the opt-in integration test
+# (.env.test.example), which must stay sendable.
+_ADDRESS_PLACEHOLDER_FRAGMENTS = (
+    "your the walk",
+    "123 street",
+    "your address here",
+    "your address",
+    "address here",
+    "placeholder",
+)
+
+
+def physical_address_problem() -> Optional[str]:
+    """Return why PHYSICAL_ADDRESS is unusable (empty, or contains an
+    obvious placeholder fragment), or None if it looks like a real postal
+    address. CAN-SPAM (and UK PECR/GDPR transparency) require a genuine
+    postal address in every cold email's footer, so the transports in
+    utils/email_utils.py refuse to send while this returns a problem."""
+    address = PHYSICAL_ADDRESS.strip()
+    if not address:
+        return "empty"
+    lowered = address.lower()
+    for fragment in _ADDRESS_PLACEHOLDER_FRAGMENTS:
+        if fragment in lowered:
+            return f"contains placeholder text {fragment!r}"
+    return None
+
+
 def print_startup_diagnostics() -> None:
     """Print the handful of config values that determine whether an email
     actually sends, without revealing secrets. Call once at process startup
@@ -183,6 +215,15 @@ def print_startup_diagnostics() -> None:
     """
     print(f"DRY_RUN config: {DRY_RUN}")
     print(f"SendGrid key loaded: {bool(SENDGRID_API_KEY)} (length: {len(SENDGRID_API_KEY)})")
+    problem = physical_address_problem()
+    if problem:
+        bar = "!" * 70
+        print(
+            f"{bar}\nWARNING: PHYSICAL_ADDRESS is {problem}.\n"
+            "Every cold email legally needs a real postal address in its footer,\n"
+            "so ALL sends will be refused until you fix PHYSICAL_ADDRESS in .env.\n"
+            f"The rest of the pipeline still runs normally.\n{bar}"
+        )
 
 
 if __name__ == "__main__":

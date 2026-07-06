@@ -1,8 +1,9 @@
-"""Single entrypoint dispatching to the pipeline's three run modes:
+"""Single entrypoint dispatching to the pipeline's run modes:
 
-    python run.py quick-test   # one-shot: pipeline/quick_run.py
-    python run.py loop         # main.py's always-on orchestrator + console
-    python run.py dashboard    # streamlit run dashboard.py
+    python run.py quick-test              # one-shot: pipeline/quick_run.py
+    python run.py loop                    # main.py's always-on orchestrator + console
+    python run.py dashboard               # streamlit run dashboard.py
+    python run.py test-email you@x.com    # end-to-end test email to YOURSELF
 
 Each mode runs as its own subprocess, not imported in-process -- this is a
 thin dispatcher, not a reimplementation. That matters because `loop` reads
@@ -35,6 +36,14 @@ def run_dashboard() -> int:
     )
 
 
+def run_test_email(email: str) -> int:
+    """The "am I ready?" button: pipeline/test_email.py sends one end-to-end
+    test email (dummy lead -> real design/deploy -> send) to `email`."""
+    return subprocess.call(
+        [sys.executable, str(PIPELINE_DIR / "test_email.py"), email], cwd=str(PIPELINE_DIR)
+    )
+
+
 _MODES = {
     "quick-test": run_quick_test,
     "loop": run_loop,
@@ -44,8 +53,14 @@ _MODES = {
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Entrypoint for the cold-email sales pipeline.")
-    parser.add_argument("mode", choices=sorted(_MODES), help="Which mode to run")
+    parser.add_argument("mode", choices=sorted([*_MODES, "test-email"]), help="Which mode to run")
+    parser.add_argument("email", nargs="?", help="Recipient for test-email mode (your own address)")
     args = parser.parse_args()
+
+    if args.mode == "test-email":
+        if not args.email:
+            parser.error("test-email mode needs an address: python run.py test-email you@example.com")
+        raise SystemExit(run_test_email(args.email))
     raise SystemExit(_MODES[args.mode]())
 
 

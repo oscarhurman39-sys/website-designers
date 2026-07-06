@@ -33,6 +33,21 @@ import config
 from utils import compliance
 
 
+def _require_real_physical_address() -> None:
+    """Refuse to send while PHYSICAL_ADDRESS is empty or an obvious
+    placeholder (see config.physical_address_problem) -- the footer's postal
+    address is a legal requirement, not decoration. Loud on purpose, and
+    enforced even in DRY_RUN so a bad address is caught at test time."""
+    problem = config.physical_address_problem()
+    if problem:
+        bar = "!" * 70
+        print(
+            f"\n{bar}\nREFUSING TO SEND: PHYSICAL_ADDRESS is {problem}.\n"
+            f"Set a real postal address in .env (PHYSICAL_ADDRESS=...) and retry.\n{bar}\n"
+        )
+        raise RuntimeError(f"PHYSICAL_ADDRESS is {problem}; refusing to send.")
+
+
 @dataclass
 class InboundEmail:
     message_id: str
@@ -73,6 +88,7 @@ def send_email(
 
     if db.is_unsubscribed(to_addr):
         raise RuntimeError(f"Refusing to send: {to_addr} is unsubscribed.")
+    _require_real_physical_address()
     if inline_image_path and not body_html:
         raise ValueError("inline_image_path requires body_html (the image is referenced via cid: inside it).")
 
@@ -103,6 +119,9 @@ def send_email(
     msg["Message-ID"] = message_id
     msg["List-Unsubscribe"] = compliance.list_unsubscribe_header(lead_id)
     msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+    # Signals legitimate bulk mail to receivers (helps Outlook placement)
+    # and suppresses out-of-office auto-replies from most mail systems.
+    msg["Precedence"] = "bulk"
 
     # Dry run: the full compliant message was built (footer, headers, parts)
     # but nothing leaves the machine. Placed after the unsubscribe hard-stop
@@ -161,6 +180,7 @@ def send_email_sendgrid(
 
     if db.is_unsubscribed(to_addr):
         raise RuntimeError(f"Refusing to send: {to_addr} is unsubscribed.")
+    _require_real_physical_address()
     if inline_image_path and not body_html:
         raise ValueError("inline_image_path requires body_html (the image is referenced via cid: inside it).")
     if not config.SENDGRID_API_KEY:
@@ -201,6 +221,8 @@ def send_email_sendgrid(
     # Parity with the SMTP path's one-click unsubscribe.
     message.add_header(Header("List-Unsubscribe", compliance.list_unsubscribe_header(lead_id)))
     message.add_header(Header("List-Unsubscribe-Post", "List-Unsubscribe=One-Click"))
+    # Same legitimate-bulk-mail signal as the SMTP path (see there).
+    message.add_header(Header("Precedence", "bulk"))
 
     # Enable SendGrid open + click tracking, and tag the message with lead_id
     # via a custom arg SendGrid echoes back on every Event Webhook event --

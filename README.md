@@ -10,11 +10,13 @@ transfer are only ever triggered by an explicit console command.
 
 ## Quick Start
 
-1. `pip install -r requirements.txt && playwright install chromium`
-2. `cp .env.example .env` and fill in your real keys
-3. `cd pipeline && python -m agents.lead_agent ../test_lead.csv && cd ..` to load 3 sample leads
-4. `python run.py quick-test` to run one lead through the whole pipeline and watch it work
-5. `python run.py loop` (always-on) or `python run.py dashboard` (Streamlit UI) once you're ready
+1. **Fill in `.env`** — `pip install -r requirements.txt && playwright install chromium`,
+   then `cp .env.example .env` and fill in your real keys (including a real
+   `PHYSICAL_ADDRESS`; sends are refused while it's a placeholder).
+2. **Verify** — `python run.py test-email your@email.com` creates a dummy lead, runs the
+   full pipeline (real GitHub repo + Vercel preview), and sends one test email to you.
+3. **Go** — if it arrives (or prints cleanly under `DRY_RUN`), start the full pipeline:
+   `python run.py loop` (always-on) or `python run.py dashboard` (Streamlit UI).
 
 `.env.example` ships with `DRY_RUN=true`: the whole pipeline runs (research,
 deploys, status changes) but every email is printed to the console instead of
