@@ -134,15 +134,16 @@ def _build_prompt(lead: dict) -> str:
 
 def _fallback_email(lead: dict) -> tuple[str, str]:
     """Deterministic template used if the HF call fails, so a bad API day
-    never stops the pipeline from sending compliant, on-brand emails."""
+    never stops the pipeline from sending compliant, on-brand emails.
+    Deliberately short and plain -- the preview image and link do the
+    talking in the HTML layout (_build_html_body)."""
     subject = f"a free preview site for {lead['business_name']}"
     body = (
-        f"Hi there,\n\n"
-        f"I put together a free, live website preview for {lead['business_name']} -- "
-        "no strings attached, just wanted to show you what's possible. "
-        "I noticed your current online presence could use a refresh, so I figured "
-        "I'd build one and let you take a look.\n\n"
-        "Take a look whenever you get a chance -- no pressure either way."
+        "Hi there,\n\n"
+        f"I build websites for local businesses, and I put one together for "
+        f"{lead['business_name']} -- free, no strings attached. It felt easier "
+        "to show you than to describe it.\n\n"
+        "Have a look when you get a minute. If it's not for you, no bother at all."
     )
     return subject, body
 
@@ -259,7 +260,8 @@ def generate_plain_text_email(lead_data: dict) -> tuple[str, str]:
         drafted = " ".join(words[:70]) + "..."
 
     opener = _social_proof_opener(lead_data)
-    preview_link = tracker.create_click_link(lead_data["id"])
+    website = db.get_website_by_lead(lead_data["id"])
+    preview_link = tracker.best_preview_link(lead_data["id"], (website or {}).get("preview_url") or "")
     blocks = [
         block
         for block in (opener, drafted.strip(), f"Here's the live preview: {preview_link}", _REPLY_CTA)
@@ -302,26 +304,43 @@ def _pick_subject_variant() -> Optional[str]:
 _SCREENSHOT_CID = "preview"
 
 
-def _build_html_body(body: str, preview_link: str) -> str:
-    """HTML counterpart of the plain-text drafted body, with the cached
-    screenshot embedded as a cid: inline image (alt text: "Your new
-    website preview") linking to the same tracked preview URL as the text
-    version. Only called when a screenshot is actually available -- see
-    _send_cold_email_impl."""
+def _build_html_body(body: str, preview_link: str, with_image: bool = True) -> str:
+    """Warm, image-first HTML layout for the cold email:
+
+        greeting line -> clickable preview screenshot (the dominant visual,
+        cid: inline) -> the short drafted paragraphs -> a clear button link
+        to the live preview -> one-line sign-off.
+
+    Inline CSS only (email clients strip <style> blocks). The drafted plain
+    `body` provides the greeting/copy so both MIME parts always say the
+    same thing; when no screenshot exists (`with_image=False`) the same
+    layout renders without the image block. The compliance footer is
+    appended by the transport at send time, as for every email."""
+    escaped_link = html_module.escape(preview_link)
     paragraphs = "".join(
-        f"<p>{html_module.escape(para).replace(chr(10), '<br>')}</p>"
+        f'<p style="margin:0 0 14px 0;">{html_module.escape(para).replace(chr(10), "<br>")}</p>'
         for para in body.split("\n\n")
         if para.strip()
     )
-    escaped_link = html_module.escape(preview_link)
-    link_html = f'<p><a href="{escaped_link}">Here\'s the live preview: {escaped_link}</a></p>'
     image_html = (
-        f'<p><a href="{escaped_link}">'
-        f'<img src="cid:{_SCREENSHOT_CID}" alt="Your new website preview" '
-        'style="max-width:100%;border:1px solid #ddd;border-radius:8px;">'
-        "</a></p>"
+        f'<a href="{escaped_link}" style="display:block;margin:0 0 18px 0;">'
+        f'<img src="cid:{_SCREENSHOT_CID}" alt="Your new website preview" width="600" '
+        'style="display:block;width:100%;max-width:600px;border:1px solid #e2e2e2;border-radius:10px;">'
+        "</a>"
+        if with_image
+        else ""
     )
-    return paragraphs + link_html + image_html
+    button_html = (
+        f'<p style="margin:6px 0 18px 0;"><a href="{escaped_link}" '
+        'style="display:inline-block;background:#1d4ed8;color:#ffffff;text-decoration:none;'
+        'padding:10px 22px;border-radius:8px;font-weight:600;">See your live preview</a><br>'
+        f'<span style="font-size:12px;color:#888;">or copy this link: {escaped_link}</span></p>'
+    )
+    return (
+        '<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.55;'
+        f'color:#222;max-width:600px;">{image_html}{paragraphs}{button_html}'
+        '<p style="margin:0;">Best,<br>Casey</p></div>'
+    )
 
 
 def _send_via_configured_transport(**kwargs) -> str:
@@ -399,16 +418,22 @@ def _send_cold_email_impl(lead: dict) -> bool:
     image_note = (lead.get("image_note") or "").strip()
     if image_note:
         body = f"{body}\n\n{image_note}"
-    preview_link = tracker.create_click_link(lead["id"])
+    # The link recipients see: the tracked redirect when the webhook server
+    # is publicly reachable, otherwise the lead's real preview URL directly
+    # (a localhost tracking link would be dead for every recipient).
+    website = db.get_website_by_lead(lead["id"])
+    direct_url = (website or {}).get("preview_url") or ""
+    preview_link = tracker.best_preview_link(lead["id"], direct_url)
+    if not tracker.tracking_is_public():
+        print("[sales_agent] PUBLIC_BASE_URL is localhost -- linking straight to the preview URL (no click tracking)")
     body_with_link = f"{body}\n\nHere's the live preview: {preview_link}"
 
     # Embed the cached preview screenshot inline (cid:) if design_agent.py
-    # already captured one for this lead; otherwise send exactly the same
-    # plain-text-only email as before -- a missing screenshot (capture
-    # failed, or an older lead from before this feature existed) must
-    # never block or change the send itself.
+    # already captured one for this lead. A missing screenshot (capture
+    # failed, or an older lead from before this feature existed) must never
+    # block the send -- the same HTML layout goes out without the image.
     cached_screenshot = screenshot.get_cached_screenshot(lead["id"])
-    body_html = _build_html_body(body, preview_link) if cached_screenshot else None
+    body_html = _build_html_body(body, preview_link, with_image=cached_screenshot is not None)
     inline_image_path = str(cached_screenshot) if cached_screenshot else None
 
     message_id = _send_via_configured_transport(
@@ -478,7 +503,8 @@ def _parse_db_timestamp(raw: str) -> Optional[datetime]:
 def _draft_followup(lead: dict, stage: int) -> tuple[str, str]:
     """Deterministic (no LLM) plain-text follow-up copy. Returns (subject,
     body) without footer -- compliance is appended at send time as usual."""
-    preview_link = tracker.create_click_link(lead["id"])
+    website = db.get_website_by_lead(lead["id"])
+    preview_link = tracker.best_preview_link(lead["id"], (website or {}).get("preview_url") or "")
     if stage == 1:
         subject = f"re: free website preview for {lead['business_name']}"
         body = (
@@ -615,6 +641,20 @@ def _handle_inbound_impl(lead: dict, msg) -> None:  # msg: email_utils.InboundEm
             classification=classification,
         )
         db.update_lead_status(lead["id"], "bounced", notes="Bounce/DSN detected")
+        return
+
+    # An explicit unsubscribe request (including via the mailto: unsubscribe
+    # link used when no public webhook server exists) is honored directly:
+    # mark unsubscribed so every future send hard-stops. No goodbye email --
+    # they asked for silence.
+    if re.search(r"\bunsubscribe\b|\bopt out\b|\btake me off\b", f"{msg.subject}\n{msg.body}", re.IGNORECASE):
+        db.insert_email_thread(
+            lead_id=lead["id"], direction="inbound", subject=msg.subject, body=msg.body,
+            from_addr=msg.from_addr, to_addr=msg.to_addr, message_id=msg.message_id,
+            classification="unsubscribe",
+        )
+        db.mark_unsubscribed(lead["id"], lead.get("contact_email") or msg.from_addr)
+        print(f"[sales_agent] Lead {lead['id']} unsubscribed by reply; no further emails.")
         return
 
     classification = classify_reply(msg.subject, msg.body)

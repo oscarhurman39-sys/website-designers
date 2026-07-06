@@ -118,7 +118,10 @@ def send_email(
     message_id = make_msgid(domain=config.SENDING_DOMAIN or None)
     msg["Message-ID"] = message_id
     msg["List-Unsubscribe"] = compliance.list_unsubscribe_header(lead_id)
-    msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+    if compliance.one_click_supported():
+        # RFC 8058 one-click requires a public HTTPS unsubscribe endpoint;
+        # with the mailto-only fallback this header would be invalid.
+        msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
     # Signals legitimate bulk mail to receivers (helps Outlook placement)
     # and suppresses out-of-office auto-replies from most mail systems.
     msg["Precedence"] = "bulk"
@@ -218,9 +221,11 @@ def send_email_sendgrid(
     if body_html:
         message.add_content(Content("text/html", compliance.append_footer_html(body_html, lead_id)))
 
-    # Parity with the SMTP path's one-click unsubscribe.
+    # Parity with the SMTP path's one-click unsubscribe (one-click only when
+    # a public HTTPS unsubscribe endpoint exists -- see there).
     message.add_header(Header("List-Unsubscribe", compliance.list_unsubscribe_header(lead_id)))
-    message.add_header(Header("List-Unsubscribe-Post", "List-Unsubscribe=One-Click"))
+    if compliance.one_click_supported():
+        message.add_header(Header("List-Unsubscribe-Post", "List-Unsubscribe=One-Click"))
     # Same legitimate-bulk-mail signal as the SMTP path (see there).
     message.add_header(Header("Precedence", "bulk"))
 

@@ -46,8 +46,35 @@ def verify_unsubscribe_token(token: str) -> Optional[int]:
         return None
 
 
+def _public_http_base() -> Optional[str]:
+    """PUBLIC_BASE_URL when it's a real public host, else None. A localhost
+    unsubscribe URL in a sent email is dead for every recipient -- and a
+    dead unsubscribe link isn't a compliance mechanism at all."""
+    lowered = config.PUBLIC_BASE_URL.lower()
+    if "localhost" in lowered or "127.0.0.1" in lowered or "0.0.0.0" in lowered:
+        return None
+    return config.PUBLIC_BASE_URL
+
+
+def _unsubscribe_mailto() -> str:
+    addr = config.ADMIN_EMAIL or config.EMAIL_USER or config.SENDGRID_FROM_EMAIL
+    return f"mailto:{addr}?subject=unsubscribe"
+
+
+def one_click_supported() -> bool:
+    """RFC 8058 one-click unsubscribe needs a public HTTPS endpoint; only
+    true when the webhook server is actually reachable by recipients."""
+    return _public_http_base() is not None
+
+
 def create_unsubscribe_link(lead_id: int) -> str:
-    """Build the fully-qualified unsubscribe URL for a given lead."""
+    """The unsubscribe mechanism for a given lead: the fully-qualified
+    /unsubscribe/<token> URL when the webhook server is public, otherwise a
+    mailto: link to the polled inbox -- sales_agent's inbox poller marks
+    leads unsubscribed when a reply asks for it, so the mailto path is a
+    real working opt-out, not decoration."""
+    if _public_http_base() is None:
+        return _unsubscribe_mailto()
     token = generate_unsubscribe_token(lead_id)
     return f"{config.PUBLIC_BASE_URL}/unsubscribe/{token}"
 
@@ -66,19 +93,26 @@ def process_unsubscribe(token: str) -> Optional[dict]:
 
 
 def list_unsubscribe_header(lead_id: int) -> str:
-    """Value for the RFC 8058 `List-Unsubscribe` header (one-click + mailto fallback)."""
-    link = create_unsubscribe_link(lead_id)
-    return f"<{link}>, <mailto:{config.ADMIN_EMAIL}?subject=unsubscribe>"
+    """Value for the `List-Unsubscribe` header: HTTPS one-click + mailto
+    when the webhook server is public, mailto-only otherwise."""
+    if one_click_supported():
+        link = create_unsubscribe_link(lead_id)
+        return f"<{link}>, <{_unsubscribe_mailto()}>"
+    return f"<{_unsubscribe_mailto()}>"
 
 
 def append_footer(body_text: str, lead_id: int) -> str:
     """Append the mandatory CAN-SPAM footer to a plain-text email body."""
     link = create_unsubscribe_link(lead_id)
+    if link.startswith("mailto:"):
+        unsubscribe_line = "To opt out, just reply with 'unsubscribe' and I won't email again."
+    else:
+        unsubscribe_line = f"Unsubscribe: {link}"
     footer = (
         "\n\n--\n"
         f"{config.PHYSICAL_ADDRESS}\n"
         "You can opt out anytime -- no hard feelings.\n"
-        f"Unsubscribe: {link}"
+        f"{unsubscribe_line}"
     )
     return body_text.rstrip() + footer
 

@@ -76,10 +76,40 @@ def deploy_files(project_name: str, files: dict[str, str]) -> dict:
 
     return {
         "deployment_id": deployment_id,
-        "url": f"https://{url}" if url else "",
+        "url": _public_url(deployment_id, project_name, f"https://{url}" if url else ""),
         "project_name": project_name,
         "ready_state": final_state,
     }
+
+
+def _public_url(deployment_id: str, project_name: str, fallback_url: str) -> str:
+    """The URL to store, email, and screenshot: prefer the clean production
+    alias (`{project}.vercel.app`) over the hash-suffixed deployment URL the
+    create call returns. Vercel's Standard Deployment Protection (on by
+    default) serves a "Log in to Vercel" screen on deployment URLs but NOT
+    on the production alias -- using the deployment URL is exactly how a
+    login page ends up screenshotted into a cold email. Alias resolution is
+    per Vercel's deployment API docs (the `alias` array on GET
+    /v13/deployments/{id}); falls back to the deployment URL if the lookup
+    fails or no alias is assigned yet."""
+    try:
+        resp = requests.get(
+            f"{_API_BASE}/v13/deployments/{deployment_id}",
+            headers=_headers(),
+            params=_team_params(),
+            timeout=30,
+        )
+        resp.raise_for_status()
+        aliases = resp.json().get("alias") or []
+    except requests.RequestException:
+        aliases = []
+
+    preferred = f"{project_name}.vercel.app"
+    if preferred in aliases:
+        return f"https://{preferred}"
+    if aliases:
+        return f"https://{aliases[0]}"
+    return fallback_url
 
 
 def _poll_until_ready(deployment_id: str) -> str:

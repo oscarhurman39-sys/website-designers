@@ -4,6 +4,7 @@ preview URL.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -73,8 +74,31 @@ def resolve_template_niche(niche: str) -> Optional[str]:
     return None
 
 
+# Hero gradient palettes for the classic (non-Tailwind) templates: picked
+# deterministically per business (md5 of the name), so every business gets a
+# stable look but the batch doesn't feel copy-pasted. The Tailwind templates
+# already vary by business type via their niche accent colors.
+_HERO_GRADIENTS: tuple[tuple[str, str], ...] = (
+    ("#1e293b", "#0f172a"),  # slate night
+    ("#134e4a", "#042f2e"),  # deep teal
+    ("#312e81", "#1e1b4b"),  # indigo dusk
+    ("#7c2d12", "#431407"),  # warm umber
+    ("#164e63", "#082f49"),  # ocean
+)
+
+
+def hero_gradient(business_name: str) -> tuple[str, str]:
+    """Stable (start, end) hero gradient colors for a business name."""
+    digest = hashlib.md5(business_name.encode("utf-8")).digest()
+    return _HERO_GRADIENTS[digest[0] % len(_HERO_GRADIENTS)]
+
+
 def get_hero_image_url(niche: str) -> str:
-    """Return the hero image for a preview -- placeholder-first, always.
+    """BYPASSED for the hero since the pure-CSS gradient hero replaced the
+    placeholder image block in every template -- kept (with the Unsplash
+    option below) for a future paid-client stage that reintroduces real
+    photography. Return the hero image for a preview -- placeholder-first,
+    always.
 
     Every cold preview ships with the self-contained, on-brand "your photo
     here" placeholder (utils/image_placeholder.py) instead of a stock or
@@ -178,17 +202,24 @@ def build_context(lead: dict) -> dict:
         # from the lead id alone (no dependency on the site already being
         # deployed -- utils/tracker.py signs it purely from lead_id, and
         # the webhook server resolves it to the real preview_url from the
-        # `websites` table whenever it's actually clicked).
-        "preview_url": tracker.create_click_link(lead["id"]),
+        # `websites` table whenever it's actually clicked). Only usable when
+        # the webhook server is publicly reachable; otherwise the footer
+        # link degrades to '#' rather than a dead localhost URL.
+        "preview_url": tracker.create_click_link(lead["id"]) if tracker.tracking_is_public() else "#",
         # Added for Google Places-sourced leads; blank/fallback gracefully
         # for leads researched before this data was available.
         "opening_hours": _opening_hours(lead),
         "reviews": _reviews(lead),
-        # Photo attribution slot -- intentionally empty while the hero is the
-        # placeholder (no third-party image to credit). Reserved for when a
-        # paying client's real, licensed photos are swapped in later.
+        # Photo attribution slot -- intentionally empty while there's no
+        # third-party image to credit. Kept for when a paying client's
+        # real, licensed photos are swapped in later.
         "photo_credit": "",
     }
+    # Pure-CSS hero: a per-business gradient (stable across re-renders)
+    # used by the classic templates' hero section inline style.
+    gradient_a, gradient_b = hero_gradient(lead["business_name"])
+    context["hero_gradient_a"] = gradient_a
+    context["hero_gradient_b"] = gradient_b
     # Populate "What We Offer" from the business's real Places types when any
     # map to a service; otherwise leave services_list unset so each template's
     # own niche-specific default (a nicer, tailored list) renders instead.
