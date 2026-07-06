@@ -173,6 +173,18 @@ def validate() -> None:
         )
 
 
+def print_startup_diagnostics() -> None:
+    """Print the handful of config values that determine whether an email
+    actually sends, without revealing secrets. Call once at process startup
+    (main.py, quick_run.py) right after validate() -- this is the first
+    thing to check when "the email didn't arrive": a wrong/missing DRY_RUN
+    or SENDGRID_API_KEY value here explains it before you go looking
+    anywhere else.
+    """
+    print(f"DRY_RUN config: {DRY_RUN}")
+    print(f"SendGrid key loaded: {bool(SENDGRID_API_KEY)} (length: {len(SENDGRID_API_KEY)})")
+
+
 if __name__ == "__main__":
     # `python config.py` doubles as a quick "am I configured?" check.
     try:

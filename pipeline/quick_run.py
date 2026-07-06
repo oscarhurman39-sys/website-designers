@@ -29,6 +29,7 @@ def _print_step(label: str) -> None:
 
 def main() -> None:
     config.validate()
+    config.print_startup_diagnostics()
     db.init_db()
 
     # Prioritize brand-new leads, then ones already researched (e.g. a lead

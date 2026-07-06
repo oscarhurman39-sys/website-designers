@@ -116,6 +116,11 @@ def send_email(
         server.login(config.EMAIL_USER, config.EMAIL_PASSWORD)
         server.sendmail(config.EMAIL_USER, [to_addr], msg.as_string())
 
+    # SMTP has no HTTP status code to report; a clean return from sendmail()
+    # means the server accepted it for delivery (login/auth failures raise
+    # before reaching here, so this line printing at all is itself the
+    # "accepted" signal).
+    print(f"[email_utils] SMTP send accepted for {to_addr} (Message-ID: {message_id})")
     return message_id
 
 
@@ -244,11 +249,17 @@ def send_email_sendgrid(
         return SendGridAPIClient(config.SENDGRID_API_KEY).send(message)
 
     response = _send_once()
-    if response.status_code not in (200, 201, 202):
-        raise RuntimeError(f"SendGrid send failed with HTTP {response.status_code}")
-
     headers = getattr(response, "headers", None) or {}
     sg_id = headers.get("X-Message-Id") or headers.get("x-message-id")
+    accepted = response.status_code in (200, 201, 202)
+    print(
+        f"[email_utils] SendGrid response for {to_addr}: HTTP {response.status_code} "
+        f"({'ACCEPTED' if accepted else 'REJECTED'})"
+        + (f", message_id={sg_id}" if sg_id else ", message_id=<none returned>")
+    )
+    if not accepted:
+        raise RuntimeError(f"SendGrid send failed with HTTP {response.status_code}")
+
     return f"<{sg_id}@sendgrid.net>" if sg_id else make_msgid(domain=config.SENDING_DOMAIN or None)
 
 

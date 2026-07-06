@@ -329,9 +329,16 @@ def _send_via_configured_transport(**kwargs) -> str:
     fall back to SMTP. Both transports take the same arguments and carry the
     same compliance guarantees (unsubscribe hard-stop, CAN-SPAM footer,
     List-Unsubscribe header), so this is a transparent swap and returns the
-    Message-ID either way."""
+    Message-ID either way.
+
+    Prints which transport it picked, every time -- this is the one place
+    that decision is made, so it's the one place that needs to say so out
+    loud rather than leave it to be inferred from a downstream error.
+    """
     if config.SENDGRID_API_KEY:
+        print(f"[sales_agent] Sending via SendGrid to {kwargs.get('to_addr')}")
         return email_utils.send_email_sendgrid(**kwargs)
+    print(f"[sales_agent] SENDGRID_API_KEY not set -- sending via SMTP to {kwargs.get('to_addr')}")
     return email_utils.send_email(**kwargs)
 
 

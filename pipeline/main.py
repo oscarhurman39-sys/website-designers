@@ -240,6 +240,7 @@ def _command_listener() -> None:
 
 def main() -> None:
     config.validate()
+    config.print_startup_diagnostics()
     db.init_db()
     print(f"[main] Pipeline starting. DB: {config.DB_PATH}")
     print("[main] Type 'help' for the operator command list.")
