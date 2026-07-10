@@ -21,14 +21,37 @@ DRY_RUN), the pipeline is ready: `python run.py loop`.
 from __future__ import annotations
 
 import argparse
+import time
 
 import config
 from agents import design_agent, sales_agent
-from utils import db
+from utils import db, sendgrid_diagnostics
 
 
 def _print_step(label: str) -> None:
     print(f"\n{'=' * 60}\n{label}\n{'=' * 60}")
+
+
+def _check_and_clear_suppressions(email: str) -> None:
+    """A single historical bounce puts an address on SendGrid's suppression
+    lists, after which every send to it returns 202 and is silently
+    Dropped -- the classic '202 but nothing ever arrives'. Detect that
+    before sending, and clear it (safe here: this is the operator's own
+    test address, never a lead's)."""
+    found = sendgrid_diagnostics.check_suppressions(email)
+    if "_error" in found:
+        print(f"-> suppression check skipped ({found['_error']})")
+        return
+    if not found:
+        print(f"-> SendGrid suppression lists: clean for {email}")
+        return
+    bar = "!" * 70
+    print(f"{bar}\nFOUND IT: {email} is on SendGrid suppression list(s): {', '.join(found)}.")
+    print("Every send since it landed there was silently dropped AFTER the 202.")
+    for kind in found:
+        cleared = sendgrid_diagnostics.clear_suppression(kind, email)
+        print(f"  - clearing '{kind}': {'done' if cleared else 'FAILED -- remove it manually in the SendGrid dashboard'}")
+    print(f"Proceeding with the send now that it's cleared.\n{bar}")
 
 
 def main() -> None:
@@ -39,6 +62,11 @@ def main() -> None:
     config.validate()
     config.print_startup_diagnostics()
     db.init_db()
+
+    # The '202 accepted but nothing arrives' check: is this address on a
+    # SendGrid suppression list from an earlier bounce?
+    if config.SENDGRID_API_KEY and not config.DRY_RUN:
+        _check_and_clear_suppressions(args.email)
 
     _print_step("Step 1/3: Creating dummy test lead")
     lead_id = db.insert_lead("Pipeline Test Cafe", "cafe", "Testville")
@@ -83,6 +111,18 @@ def main() -> None:
             "set DRY_RUN=false in .env and rerun this command for a real delivery test."
         )
     else:
+        if config.SENDGRID_API_KEY:
+            print("\nAsking SendGrid what happened to the message (waiting 15s for events)...")
+            time.sleep(15)
+            events = sendgrid_diagnostics.try_activity_lookup(args.email)
+            if events:
+                for ev in events:
+                    print(f"  - status={ev['status']}  subject={ev['subject']!r}  last_event={ev['last_event_time']}")
+                print("  ('delivered' = Gmail took it (check Spam/Promotions); 'not_delivered' = bounced/blocked;"
+                      " 'processing' = still in flight)")
+            else:
+                print("  (Email Activity API not enabled on this SendGrid plan -- the dashboard UI still shows it"
+                      " for free: app.sendgrid.com -> Activity -> search the recipient.)")
         print(
             f"\nDone -- SendGrid accepted it. If it isn't in the {args.email} inbox within ~2 minutes:\n"
             "  1. Check SPAM and (in Gmail) the Promotions tab; also search All Mail for the subject.\n"
