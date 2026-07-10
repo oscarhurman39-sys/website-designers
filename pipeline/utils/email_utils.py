@@ -209,12 +209,19 @@ def send_email_sendgrid(
         Header,
         Mail,
         OpenTracking,
+        ReplyTo,
         TrackingSettings,
     )
 
     text_with_footer = compliance.append_footer(body_text, lead_id)
 
     message = Mail(from_email=from_email, to_emails=to_addr, subject=subject)
+    # Replies must land in the inbox check_inbox() actually polls (IMAP on
+    # EMAIL_USER). Once a domain-authenticated From address is in use, that
+    # differs from EMAIL_USER -- without this Reply-To, every reply would go
+    # to an unpolled mailbox and the reply/takeover loop would silently die.
+    if config.EMAIL_USER and from_email.lower() != config.EMAIL_USER.lower():
+        message.reply_to = ReplyTo(config.EMAIL_USER)
     # text/plain must precede text/html (increasing richness); SendGrid uses
     # the last part as the primary display candidate.
     message.add_content(Content("text/plain", text_with_footer))

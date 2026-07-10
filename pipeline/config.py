@@ -30,7 +30,11 @@ REQUIRED_VARS: list[str] = [
     "EMAIL_PORT",
     "EMAIL_USER",
     "EMAIL_PASSWORD",
-    "HF_API_TOKEN",
+    # HF_API_TOKEN is deliberately NOT required: email drafting and website
+    # copy both have deterministic fallbacks, so the pipeline is fully
+    # functional without Hugging Face. Leave it blank in .env to skip the
+    # HF calls entirely (instant fallback, no connection-retry wait) --
+    # useful on networks where api-inference.huggingface.co is unreachable.
     "STRIPE_SECRET_KEY",
     "STRIPE_WEBHOOK_SECRET",
     "ADMIN_EMAIL",
