@@ -56,5 +56,5 @@ HERO_PLACEHOLDER_DATA_URI: str = "data:image/svg+xml;base64," + base64.b64encode
 # sales_agent.py surfaces in the cold email, so the prospect knows the hero
 # is a stand-in. Kept here next to the placeholder it describes.
 PLACEHOLDER_EMAIL_NOTE: str = (
-    "The hero image is a placeholder -- I'll replace it with your own photos when we talk."
+    "I've kept the design simple for now -- we'd add your own photos and reviews when we talk."
 )

@@ -60,6 +60,8 @@ CREATE TABLE IF NOT EXISTS leads (
     review_count    INTEGER,
     reviews         TEXT,
     image_note      TEXT,
+    ai_headline     TEXT,
+    ai_about        TEXT,
     followup_1_sent TEXT,
     followup_2_sent TEXT,
     status          TEXT NOT NULL DEFAULT 'new'
@@ -154,6 +156,10 @@ def init_db(db_path: Optional[str] = None) -> None:
         _migrate_add_column(conn, "leads", "review_count", "INTEGER")
         _migrate_add_column(conn, "leads", "reviews", "TEXT")
         _migrate_add_column(conn, "leads", "image_note", "TEXT")
+        # AI-generated (or fallback) website copy, persisted by design_agent
+        # so the dashboard can show what each preview actually says.
+        _migrate_add_column(conn, "leads", "ai_headline", "TEXT")
+        _migrate_add_column(conn, "leads", "ai_about", "TEXT")
         # UTC timestamps ("YYYY-MM-DD HH:MM:SS") of each follow-up send;
         # NULL/empty = not sent yet (see sales_agent.send_followups).
         _migrate_add_column(conn, "leads", "followup_1_sent", "TEXT")

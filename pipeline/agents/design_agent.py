@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -153,6 +154,52 @@ _TESTIMONIAL_PLACEHOLDER = "Your best customer quote will sit right here."
 _REVIEWS_PLACEHOLDER = "Reviews from your customers -- coming soon."
 
 
+_HF_COPY_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
+
+
+def _fallback_headline(lead: dict) -> str:
+    return f"{lead['business_name']} -- Trusted Local {lead['niche'].title()}"
+
+
+def _ai_copy(lead: dict) -> tuple[str, str]:
+    """(headline, about) for the preview site: drafted by Hugging Face
+    (same Mistral model sales_agent uses for emails) when HF_API_TOKEN is
+    set and reachable, otherwise the deterministic fallbacks the templates
+    always used -- an HF outage can never block a design. Returns copy
+    only; persisting to the lead (ai_headline/ai_about) happens in
+    _process_lead_impl so the dashboard can show it."""
+    fallback = (_fallback_headline(lead), _pain_point_solution(lead))
+    if not config.HF_API_TOKEN:
+        return fallback
+    try:
+        from huggingface_hub import InferenceClient
+
+        prompt = (
+            "<s>[INST] You write short website copy for local businesses. "
+            "Write a hero headline (max 8 words, no quotes) and an about "
+            "paragraph (2 sentences, warm, plain English, no hype) for:\n"
+            f"- Business: {lead['business_name']}\n"
+            f"- Trade: {lead['niche']}\n"
+            f"- Location: {lead.get('location', '')}\n\n"
+            "Respond in EXACTLY this format, nothing else:\n"
+            "Headline: <headline>\nAbout: <about paragraph>\n[/INST]"
+        )
+        raw = InferenceClient(model=_HF_COPY_MODEL, token=config.HF_API_TOKEN).text_generation(
+            prompt, max_new_tokens=160, temperature=0.7, do_sample=True
+        )
+        match = re.search(r"Headline:\s*(.+?)\s*\n+\s*About:\s*(.+)", raw, re.DOTALL | re.IGNORECASE)
+        if not match:
+            return fallback
+        headline = match.group(1).strip().strip('"')
+        about = " ".join(match.group(2).split())
+        if not headline or not about or len(headline) > 90 or len(about) > 500:
+            return fallback
+        return headline, about
+    except Exception as exc:  # noqa: BLE001 - any HF/network failure falls back gracefully
+        print(f"[design_agent] HF copy generation failed, using fallback copy: {exc}")
+        return fallback
+
+
 def _testimonial(lead: dict) -> str:
     """Placeholder only -- never real review text (see note above). The
     lead's stored testimonial/reviews stay in the DB for the operator's own
@@ -186,18 +233,25 @@ def _place_types(lead: dict) -> list[str]:
 
 
 def build_context(lead: dict) -> dict:
+    # AI-drafted (or deterministic-fallback) copy drives the hero headline
+    # and about section; exposed both under the names the templates already
+    # use (hero_headline / pain_point_solution) and as ai_headline /
+    # ai_about for anything newer.
+    ai_headline, ai_about = _ai_copy(lead)
     context = {
         "business_name": lead["business_name"],
         "phone": lead.get("phone") or "Call us",
         "location": lead.get("location") or "",
-        "pain_point_solution": _pain_point_solution(lead),
+        "pain_point_solution": ai_about,
+        "ai_about": ai_about,
         "testimonial": _testimonial(lead),
         "hero_image_url": get_hero_image_url(lead["niche"]),
         "year": datetime.now(timezone.utc).year,
         # Added for the newer Tailwind-based templates (landscaper/cafe/
         # plumber/salon/electrician); older templates simply ignore unused
         # context keys, so this is additive and doesn't affect them.
-        "hero_headline": f"{lead['business_name']} -- Trusted Local {lead['niche'].title()}",
+        "hero_headline": ai_headline,
+        "ai_headline": ai_headline,
         # A real, working link back to this lead's own preview, generated
         # from the lead id alone (no dependency on the site already being
         # deployed -- utils/tracker.py signs it purely from lead_id, and
@@ -312,10 +366,16 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
         screenshot_url=screenshot_url,
         screenshot_path=screenshot_path,
     )
-    # The hero is the placeholder (no real photos yet), so record a note the
-    # SalesAgent surfaces in the cold email -- letting the prospect know the
-    # image is a stand-in we'll replace with their own photos.
-    db.update_lead_fields(lead["id"], image_note=image_placeholder.PLACEHOLDER_EMAIL_NOTE)
+    # No real photos on the preview yet (gradient hero + placeholder review
+    # sections), so record a note the SalesAgent surfaces in the cold email,
+    # plus the AI/fallback copy so the dashboard can show what the preview
+    # actually says.
+    db.update_lead_fields(
+        lead["id"],
+        image_note=image_placeholder.PLACEHOLDER_EMAIL_NOTE,
+        ai_headline=context["ai_headline"],
+        ai_about=context["ai_about"],
+    )
     db.update_lead_status(lead["id"], "designed", notes=f"Preview deployed: {deployment['url']}")
     return db.get_website_by_lead(lead["id"]) if website_id else None
 

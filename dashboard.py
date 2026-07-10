@@ -226,6 +226,11 @@ if lead_id:
             "niche": lead["niche"],
             "location": lead["location"],
             "status": lead["status"],
+            # What the generated preview site actually says (AI-drafted via
+            # Hugging Face when available, deterministic fallback otherwise;
+            # set by design_agent at design time).
+            "ai_headline": lead.get("ai_headline") or "(not designed yet)",
+            "ai_about": lead.get("ai_about") or "(not designed yet)",
             "pain_point": lead["pain_point"],
             "testimonial": lead["testimonial"],
             "preview_url": website["preview_url"] if website else None,

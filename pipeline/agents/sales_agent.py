@@ -136,14 +136,20 @@ def _fallback_email(lead: dict) -> tuple[str, str]:
     """Deterministic template used if the HF call fails, so a bad API day
     never stops the pipeline from sending compliant, on-brand emails.
     Deliberately short and plain -- the preview image and link do the
-    talking in the HTML layout (_build_html_body)."""
-    subject = f"a free preview site for {lead['business_name']}"
+    talking in the HTML layout (_build_html_body); the "see it live" link
+    line and the Cheers/Casey sign-off are appended by the send path so
+    HF-drafted bodies get them too."""
+    subject = f"I built a website for {lead['business_name']} – thoughts?"
+    # Truthful opener: only claim they have no website when research
+    # actually found none -- many leads DO have one (we scraped it).
+    if (lead.get("website_url") or "").strip():
+        noticed = f"I noticed {lead['business_name']}'s website could be working harder for you"
+    else:
+        noticed = f"I noticed {lead['business_name']} didn't have a website"
     body = (
         "Hi there,\n\n"
-        f"I build websites for local businesses, and I put one together for "
-        f"{lead['business_name']} -- free, no strings attached. It felt easier "
-        "to show you than to describe it.\n\n"
-        "Have a look when you get a minute. If it's not for you, no bother at all."
+        f"{noticed}, so I put one together. Here's what it looks like. "
+        "No cost, no catch – if you like it, it's yours."
     )
     return subject, body
 
@@ -339,7 +345,7 @@ def _build_html_body(body: str, preview_link: str, with_image: bool = True) -> s
     return (
         '<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.55;'
         f'color:#222;max-width:600px;">{image_html}{paragraphs}{button_html}'
-        '<p style="margin:0;">Best,<br>Casey</p></div>'
+        '<p style="margin:0;">Cheers,<br>Casey</p></div>'
     )
 
 
@@ -426,7 +432,7 @@ def _send_cold_email_impl(lead: dict) -> bool:
     preview_link = tracker.best_preview_link(lead["id"], direct_url)
     if not tracker.tracking_is_public():
         print("[sales_agent] PUBLIC_BASE_URL is localhost -- linking straight to the preview URL (no click tracking)")
-    body_with_link = f"{body}\n\nHere's the live preview: {preview_link}"
+    body_with_link = f"{body}\n\nYou can see it live here: {preview_link}\n\nCheers,\nCasey"
 
     # Embed the cached preview screenshot inline (cid:) if design_agent.py
     # already captured one for this lead. A missing screenshot (capture
