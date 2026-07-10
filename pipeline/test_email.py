@@ -59,6 +59,11 @@ def main() -> None:
     if website:
         print(f"-> preview: {website['preview_url']}")
         print(f"-> GitHub repo: {website['repo_url']}")
+        if website.get("screenshot_path"):
+            print("-> screenshot: captured (will be embedded in the email)")
+        else:
+            print("-> screenshot: NOT captured (email goes out without the preview image; "
+                  "see the [design_agent] warning above for why)")
     if lead["status"] != "designed":
         print(f"Stopping -- lead did not reach 'designed' (got {lead['status']!r}).")
         raise SystemExit(1)
@@ -78,7 +83,14 @@ def main() -> None:
             "set DRY_RUN=false in .env and rerun this command for a real delivery test."
         )
     else:
-        print(f"\nDone -- check the inbox for {args.email} (and the spam folder, the first time).")
+        print(
+            f"\nDone -- SendGrid accepted it. If it isn't in the {args.email} inbox within ~2 minutes:\n"
+            "  1. Check SPAM and (in Gmail) the Promotions tab; also search All Mail for the subject.\n"
+            "  2. SendGrid dashboard -> Activity Feed -> search this recipient. The status there\n"
+            "     (Delivered / Bounced / Blocked / Dropped) says exactly where it died.\n"
+            "  3. If the From address warning printed at startup, that IS the cause: authenticate\n"
+            "     a real domain in SendGrid and send from it instead of a free mailbox."
+        )
 
 
 if __name__ == "__main__":

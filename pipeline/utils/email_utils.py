@@ -283,6 +283,7 @@ def send_email_sendgrid(
         f"[email_utils] SendGrid response for {to_addr}: HTTP {response.status_code} "
         f"({'ACCEPTED' if accepted else 'REJECTED'})"
         + (f", message_id={sg_id}" if sg_id else ", message_id=<none returned>")
+        + f", from={from_email}"
     )
     if not accepted:
         raise RuntimeError(f"SendGrid send failed with HTTP {response.status_code}")

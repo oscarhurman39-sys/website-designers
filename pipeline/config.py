@@ -215,6 +215,20 @@ def print_startup_diagnostics() -> None:
     """
     print(f"DRY_RUN config: {DRY_RUN}")
     print(f"SendGrid key loaded: {bool(SENDGRID_API_KEY)} (length: {len(SENDGRID_API_KEY)})")
+    from_addr = (SENDGRID_FROM_EMAIL or EMAIL_USER or "").strip()
+    print(f"From address: {from_addr or '(unset)'}")
+    freemail = ("@gmail.com", "@googlemail.com", "@outlook.com", "@hotmail.com", "@live.com", "@yahoo.com", "@icloud.com", "@aol.com")
+    if from_addr.lower().endswith(freemail):
+        bar = "!" * 70
+        print(
+            f"{bar}\nWARNING: the From address is a free mailbox ({from_addr}).\n"
+            "SendGrid cannot DKIM-sign gmail.com/outlook.com/etc., so mail sent\n"
+            "'from' a free mailbox fails DMARC at Gmail/Outlook and is silently\n"
+            "spam-foldered or dropped -- SendGrid will still say 202 ACCEPTED.\n"
+            "Fix: SendGrid dashboard -> Settings -> Sender Authentication ->\n"
+            "Authenticate Your Domain (needs a domain you own + 3 DNS records),\n"
+            f"then set SENDGRID_FROM_EMAIL=casey@yourdomain in .env.\n{bar}"
+        )
     problem = physical_address_problem()
     if problem:
         bar = "!" * 70

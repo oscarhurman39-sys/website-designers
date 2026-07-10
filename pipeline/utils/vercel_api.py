@@ -90,25 +90,47 @@ def _public_url(deployment_id: str, project_name: str, fallback_url: str) -> str
     on the production alias -- using the deployment URL is exactly how a
     login page ends up screenshotted into a cold email. Alias resolution is
     per Vercel's deployment API docs (the `alias` array on GET
-    /v13/deployments/{id}); falls back to the deployment URL if the lookup
-    fails or no alias is assigned yet."""
-    try:
-        resp = requests.get(
-            f"{_API_BASE}/v13/deployments/{deployment_id}",
-            headers=_headers(),
-            params=_team_params(),
-            timeout=30,
-        )
-        resp.raise_for_status()
-        aliases = resp.json().get("alias") or []
-    except requests.RequestException:
-        aliases = []
-
+    /v13/deployments/{id}). Alias assignment can lag the READY state by a
+    few seconds (observed in a real run: the alias list came back empty and
+    the hash-suffixed deployment URL leaked into the email), so the lookup
+    retries briefly; as a last resort the constructed {project}.vercel.app
+    is used only after fetching it and confirming it serves one of OUR
+    generated pages (the templates' 'web design team' footer marker), so a
+    name collision can never put someone else's site in a cold email."""
     preferred = f"{project_name}.vercel.app"
+
+    aliases: list[str] = []
+    for attempt in range(3):
+        try:
+            resp = requests.get(
+                f"{_API_BASE}/v13/deployments/{deployment_id}",
+                headers=_headers(),
+                params=_team_params(),
+                timeout=30,
+            )
+            resp.raise_for_status()
+            aliases = resp.json().get("alias") or []
+        except requests.RequestException:
+            aliases = []
+        if aliases:
+            break
+        time.sleep(2)  # alias assignment often lands moments after READY
+
     if preferred in aliases:
         return f"https://{preferred}"
     if aliases:
-        return f"https://{aliases[0]}"
+        # No exact match: the shortest alias is the cleanest public one
+        # (deployment-hash aliases are strictly longer).
+        return f"https://{min(aliases, key=len)}"
+
+    # Alias list never appeared. Production deployments normally do get the
+    # project alias -- trust it only if it demonstrably serves our page.
+    try:
+        check = requests.get(f"https://{preferred}", timeout=15)
+        if check.status_code < 400 and "web design team" in check.text:
+            return f"https://{preferred}"
+    except requests.RequestException:
+        pass
     return fallback_url
 
 
