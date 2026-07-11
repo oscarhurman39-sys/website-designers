@@ -28,6 +28,7 @@ from email.mime.text import MIMEText
 from email.utils import formatdate, make_msgid, parseaddr
 from pathlib import Path
 from typing import Optional
+import base64
 
 import config
 from utils import compliance
@@ -256,8 +257,13 @@ def send_email_sendgrid(
         # Determine MIME type from file extension
         mime_type = _get_mime_type(image_path.suffix)
 
+        # SendGrid's FileContent expects a base64-encoded string, not raw bytes.
+        # Base64-encode the image bytes and decode to an ASCII string so the
+        # SendGrid helper can JSON-serialize it without errors.
+        image_b64 = base64.b64encode(image_bytes).decode("ascii")
+
         attachment = Attachment(
-            file_content=FileContent(image_bytes),
+            file_content=FileContent(image_b64),
             file_name=FileName(image_path.name),
             file_type=FileType(mime_type),
             disposition=Disposition("inline"),
