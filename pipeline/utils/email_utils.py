@@ -110,6 +110,60 @@ def send_email(
     return message_id
 
 
+def send_email_sendgrid(
+    to_email: str,
+    subject: str,
+    html_body: str,
+    attachments: Optional[list[tuple[str, bytes, str]]] = None,
+) -> bool:
+    """Send an email via SendGrid with open and click tracking enabled.
+
+    Returns True if the send succeeds (HTTP 202), False otherwise.
+
+    Args:
+        to_email: Recipient email address.
+        subject: Email subject line.
+        html_body: HTML content of the email.
+        attachments: Optional list of (filename, file_bytes, mime_type) tuples.
+    """
+    from sendgrid import SendGridAPIClient
+    from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition
+
+    try:
+        message = Mail(
+            from_email=config.SENDGRID_FROM_EMAIL,
+            to_emails=to_email,
+            subject=subject,
+            html_content=html_body,
+        )
+
+        # Enable open and click tracking
+        message.mail_settings.tracking_settings.open_tracking.enable = True
+        message.mail_settings.tracking_settings.click_tracking.enable = True
+
+        # Add attachments if provided
+        if attachments:
+            for filename, file_bytes, mime_type in attachments:
+                attachment = Attachment(
+                    FileContent(file_bytes),
+                    FileName(filename),
+                    FileType(mime_type),
+                    Disposition("attachment"),
+                )
+                message.attachment = attachment
+
+        # Send via SendGrid
+        sg = SendGridAPIClient(config.SENDGRID_API_KEY)
+        response = sg.send(message)
+
+        # SendGrid returns 202 on successful send
+        return response.status_code == 202
+
+    except Exception as e:
+        print(f"SendGrid send failed for {to_email}: {e}")
+        return False
+
+
 def _decode(value: Optional[str]) -> str:
     if not value:
         return ""
