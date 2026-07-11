@@ -14,7 +14,11 @@ blockquote {
   quotes: none;
 }
 
-#hero {
-  background-size: cover;
-  background-position: center;
+/* Dark gradient + subtle diagonal-stripe pattern -- no stock photo, so it
+   never risks looking like someone else's van/shopfront. */
+.hero-pattern {
+  background-color: #0f172a;
+  background-image:
+    repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.04) 0, rgba(255, 255, 255, 0.04) 1px, transparent 1px, transparent 24px),
+    linear-gradient(135deg, #1e293b, #0f172a);
 }

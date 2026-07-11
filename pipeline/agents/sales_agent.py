@@ -178,36 +178,37 @@ def draft_cold_email(lead: dict) -> tuple[str, str]:
 
 _SCREENSHOT_CID = "preview"
 _SENDER_NAME = "Casey"
-_STANDARD_BUILD_PRICE = "£2,000"
 
 
 def _intro_line(business_name: str) -> str:
-    """Plain-text greeting that always sits above the screenshot image."""
+    """Plain-text greeting that always sits above the screenshot image --
+    frames this as solving a discoverability problem, not just a sales pitch."""
     return (
-        f"Hi there, I'm a local web designer. I noticed {business_name} didn't "
-        "have a website yet, so I built a draft for you."
+        f"I noticed people searching for {business_name} only find your Google "
+        "listing. So I built a site that could help you appear more professional "
+        "online."
     )
 
 
-def _offer_paragraphs(preview_link: str) -> list[str]:
-    """The simplified offer copy shown below the screenshot: reply-to-buy,
-    two-tier pricing (anchor vs. WEBSITE_OFFER_PRICE), and the live link."""
+def _closing_paragraphs(preview_link: str) -> list[str]:
+    """Everything below the screenshot: the live link, the reply-to-buy
+    offer, plain (non-anchored) pricing, and the sign-off. Deliberately
+    just these lines -- no bullet points or feature lists."""
     return [
-        "If you'd like to own it, just reply YES. I'll connect your domain and make any changes you'd like.",
-        f"Standard custom build: {_STANDARD_BUILD_PRICE} (4 weeks)\n"
-        f"This pre-built draft: £{config.WEBSITE_OFFER_PRICE:,} (yours today)",
-        f"View the live site: {preview_link}",
-        f"Cheers, {_SENDER_NAME}",
+        f"View the live preview: {preview_link}",
+        "If you'd like to own it, reply YES. I'll connect your domain, swap in your own photos, and make any changes you want.",
+        f"Standard package: £2,000. This completed draft: £{config.WEBSITE_OFFER_PRICE:,}.",
+        _SENDER_NAME,
     ]
 
 
 def _plain_text_body(business_name: str, preview_link: str) -> str:
-    return "\n\n".join([_intro_line(business_name), *_offer_paragraphs(preview_link)])
+    return "\n\n".join([_intro_line(business_name), *_closing_paragraphs(preview_link)])
 
 
 def _build_html_body(business_name: str, preview_link: str) -> str:
-    """Intro greeting, then the cached screenshot, then the offer copy --
-    only called when a screenshot is actually available; see
+    """Intro greeting, then the cached screenshot, then the closing
+    paragraphs -- only called when a screenshot is actually available; see
     _send_cold_email_impl."""
     escaped_link = html_module.escape(preview_link)
     intro_html = f"<p>{html_module.escape(_intro_line(business_name))}</p>"
@@ -217,11 +218,11 @@ def _build_html_body(business_name: str, preview_link: str) -> str:
         'style="max-width:100%;border:1px solid #ddd;border-radius:8px;">'
         "</a></p>"
     )
-    offer_html = "".join(
+    closing_html = "".join(
         f"<p>{html_module.escape(para).replace(chr(10), '<br>')}</p>"
-        for para in _offer_paragraphs(preview_link)
+        for para in _closing_paragraphs(preview_link)
     )
-    return intro_html + image_html + offer_html
+    return intro_html + image_html + closing_html
 
 
 def _can_send_now() -> bool:

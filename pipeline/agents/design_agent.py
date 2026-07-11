@@ -22,7 +22,11 @@ _PLACEHOLDER_IMAGE_BASE = "https://picsum.photos/seed"
 
 # Unsplash search terms per niche -- more specific than the raw niche
 # string so the fetched photo actually matches the trade (e.g. a mechanic
-# under a car, not a generic "vehicle" stock shot).
+# under a car, not a generic "vehicle" stock shot). Only used by the older,
+# pre-existing per-niche templates (dentist/gym/restaurant) that still
+# render a photographic hero; templates/default deliberately does NOT use
+# this -- a stock photo of someone else's van/shop reads as fake to the
+# actual owner, so its hero is a CSS-only pattern instead (see build_context).
 _NICHE_IMAGE_QUERIES = {
     "vehicle-repair": "car mechanic workshop",
     "cafe": "cozy coffee shop interior",
@@ -30,6 +34,25 @@ _NICHE_IMAGE_QUERIES = {
     "plumber": "plumber at work",
     "electrician": "electrician at work",
     "salon": "hair salon interior",
+}
+
+# Minimum Google review count before the "Rated X on Google" hero badge is
+# shown -- a handful of reviews reads worse than no badge at all.
+MIN_GOOGLE_REVIEWS_FOR_BADGE = 15
+
+# Human-readable labels for common Google Places 'types' specialties, shown
+# prominently in the hero/services section when a lead has one.
+SPECIALTY_LABELS = {
+    "hybrid_vehicle_specialist": "Hybrid & EV Specialist",
+    "electric_vehicle_specialist": "EV Specialist",
+    "organic_coffee": "Organic Coffee",
+    "emergency_service": "24/7 Emergency Service",
+    "24_hour_service": "24/7 Emergency Service",
+    "same_day_service": "Same-Day Service",
+    "mobile_service": "We Come To You",
+    "eco_friendly": "Eco-Friendly",
+    "family_owned": "Family Owned & Operated",
+    "wheelchair_accessible": "Wheelchair Accessible",
 }
 
 # Real trade services shown in the Services section, keyed by niche.
@@ -95,6 +118,28 @@ def hero_tagline(lead: dict) -> str:
 
 def nav_labels(niche: str) -> list[str]:
     return NICHE_NAV_LABELS.get(niche, DEFAULT_NAV_LABELS)
+
+
+def lead_specialty(lead: dict) -> Optional[str]:
+    """First recognized specialty from the lead's Google Places 'types'
+    array (e.g. 'hybrid_vehicle_specialist' -> 'Hybrid & EV Specialist'),
+    mapped to a human-readable label. None if the lead has no 'types' data
+    or none of it matches a known specialty."""
+    for google_type in lead.get("google_maps_types") or []:
+        label = SPECIALTY_LABELS.get(google_type)
+        if label:
+            return label
+    return None
+
+
+def google_rating_badge(lead: dict) -> Optional[float]:
+    """The lead's Google rating, but only once it's backed by enough
+    reviews to be worth highlighting (see MIN_GOOGLE_REVIEWS_FOR_BADGE)."""
+    rating = lead.get("google_rating")
+    reviews_count = lead.get("google_reviews_count") or 0
+    if rating and reviews_count > MIN_GOOGLE_REVIEWS_FOR_BADGE:
+        return rating
+    return None
 
 
 def get_hero_image_url(niche: str) -> str:
@@ -172,7 +217,10 @@ def build_context(lead: dict) -> dict:
         "hero_tagline": hero_tagline(lead),
         "services": niche_services(lead),
         "nav_labels": nav_labels(niche),
-        "google_rating": lead.get("google_rating"),
+        # Only set once the lead has enough reviews to be worth
+        # highlighting (see MIN_GOOGLE_REVIEWS_FOR_BADGE).
+        "google_rating": google_rating_badge(lead),
+        "specialty": lead_specialty(lead),
     }
 
 
