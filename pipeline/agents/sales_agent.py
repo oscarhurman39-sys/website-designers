@@ -236,6 +236,42 @@ def _can_send_now() -> bool:
     return True
 
 
+def _send_via_configured_transport(
+    to_addr: str,
+    subject: str,
+    body_text: str,
+    lead_id: int,
+    body_html: Optional[str] = None,
+    inline_image_path: Optional[str] = None,
+    inline_image_cid: Optional[str] = None,
+) -> str:
+    """Send email via configured transport: SendGrid if SENDGRID_API_KEY is set,
+    otherwise fall back to SMTP via send_email.
+    
+    Returns the message_id of the sent email.
+    """
+    if config.SENDGRID_API_KEY:
+        return email_utils.send_email_sendgrid(
+            to_addr=to_addr,
+            subject=subject,
+            body_text=body_text,
+            lead_id=lead_id,
+            body_html=body_html,
+            inline_image_path=inline_image_path,
+            inline_image_cid=inline_image_cid,
+        )
+    else:
+        return email_utils.send_email(
+            to_addr=to_addr,
+            subject=subject,
+            body_text=body_text,
+            lead_id=lead_id,
+            body_html=body_html,
+            inline_image_path=inline_image_path,
+            inline_image_cid=inline_image_cid,
+        )
+
+
 def send_cold_email(lead: dict) -> bool:
     """Send the initial cold email for one 'designed' lead. Returns True if sent.
     Wrapped in a trace -> agent -> tool span (see utils/tracer.py); the
@@ -271,7 +307,7 @@ def _send_cold_email_impl(lead: dict) -> bool:
     body_html = _build_html_body(lead["business_name"], preview_link) if cached_screenshot else None
     inline_image_path = str(cached_screenshot) if cached_screenshot else None
 
-    message_id = email_utils.send_email(
+    message_id = _send_via_configured_transport(
         to_addr=email_addr,
         subject=subject,
         body_text=body_with_link,
@@ -341,7 +377,12 @@ def _send_goodbye(lead: dict) -> None:
         f"Wishing {lead['business_name']} all the best."
     )
     try:
-        message_id = email_utils.send_email(to_addr=email_addr, subject=subject, body_text=body, lead_id=lead["id"])
+        message_id = _send_via_configured_transport(
+            to_addr=email_addr,
+            subject=subject,
+            body_text=body,
+            lead_id=lead["id"],
+        )
         db.insert_email_thread(
             lead_id=lead["id"], direction="outbound", subject=subject, body=body,
             from_addr=config.EMAIL_USER, to_addr=email_addr, message_id=message_id,
