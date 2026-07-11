@@ -1,9 +1,9 @@
 """SMTP sending and IMAP inbox polling.
 
 Deliverability & compliance notes:
-- All sends go through `send_email()`, which unconditionally attaches the
-  CAN-SPAM footer and `List-Unsubscribe` header -- there is no code path
-  that sends a cold email without them.
+- All sends go through `send_email()` or `send_email_sendgrid()`, which
+  unconditionally attaches the CAN-SPAM footer and `List-Unsubscribe` header
+  -- there is no code path that sends a cold email without them.
 - Rate limiting (delay between sends, hourly/daily caps) is enforced by the
   caller (agents/sales_agent.py), not here -- this module is a thin,
   stateless transport layer.
@@ -52,7 +52,7 @@ def send_email(
     inline_image_path: Optional[str] = None,
     inline_image_cid: str = "preview",
 ) -> str:
-    """Send a compliant cold email. Returns the generated Message-ID.
+    """Send a compliant cold email via SMTP. Returns the generated Message-ID.
 
     Raises RuntimeError if the recipient is unsubscribed -- this is a hard
     stop enforced at the transport layer as a last line of defense, in
@@ -113,55 +113,140 @@ def send_email(
 def send_email_sendgrid(
     to_addr: str,
     subject: str,
-    html_body: str,
-    attachments: Optional[list[tuple[str, bytes, str]]] = None,
-) -> bool:
-    """Send an email via SendGrid with open and click tracking enabled.
+    body_text: str,
+    lead_id: int,
+    body_html: Optional[str] = None,
+    inline_image_path: Optional[str] = None,
+    inline_image_cid: str = "preview",
+) -> str:
+    """Send a compliant cold email via SendGrid. Returns the generated Message-ID.
 
-    Returns True if the send succeeds (HTTP 202), False otherwise.
+    Raises RuntimeError if the recipient is unsubscribed -- this is a hard
+    stop enforced at the transport layer as a last line of defense, in
+    addition to the caller checking `db.is_unsubscribed()` beforehand.
+
+    Enables open and click tracking. Inline images are embedded with the given
+    Content-ID; `body_html` must reference them as `cid:<inline_image_cid>`.
 
     Args:
         to_addr: Recipient email address.
         subject: Email subject line.
-        html_body: HTML content of the email.
-        attachments: Optional list of (filename, file_bytes, mime_type) tuples.
+        body_text: Plain-text email body (footer will be appended).
+        lead_id: Lead ID for compliance footer and tracking.
+        body_html: Optional HTML email body (footer will be appended).
+        inline_image_path: Optional path to an image file to embed inline.
+        inline_image_cid: Content-ID for the inline image (default "preview").
+
+    Returns:
+        The generated Message-ID header value.
+
+    Raises:
+        RuntimeError: If recipient is unsubscribed or SendGrid API call fails.
+        ValueError: If inline_image_path is given without body_html.
     """
-    from sendgrid import SendGridAPIClient
-    from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition
+    from utils import db  # local import to avoid a circular import at module load time
+
+    if not config.SENDGRID_API_KEY:
+        raise RuntimeError("SENDGRID_API_KEY is not configured.")
+    if not config.SENDGRID_FROM_EMAIL:
+        raise RuntimeError("SENDGRID_FROM_EMAIL is not configured.")
+
+    if db.is_unsubscribed(to_addr):
+        raise RuntimeError(f"Refusing to send: {to_addr} is unsubscribed.")
+    if inline_image_path and not body_html:
+        raise ValueError("inline_image_path requires body_html (the image is referenced via cid: inside it).")
 
     try:
-        message = Mail(
-            from_email=config.SENDGRID_FROM_EMAIL,
-            to_emails=to_addr,
-            subject=subject,
-            html_content=html_body,
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import (
+            Mail,
+            Attachment,
+            FileContent,
+            FileName,
+            FileType,
+            Disposition,
+        )
+    except ImportError:
+        raise RuntimeError(
+            "SendGrid SDK not installed. Install with: pip install sendgrid"
         )
 
-        # Enable open and click tracking
-        message.mail_settings.tracking_settings.open_tracking.enable = True
-        message.mail_settings.tracking_settings.click_tracking.enable = True
+    # Generate message ID in the same format as send_email() for consistency
+    message_id = make_msgid(domain=config.SENDING_DOMAIN or None)
 
-        # Add attachments if provided
-        if attachments:
-            for filename, file_bytes, mime_type in attachments:
-                attachment = Attachment(
-                    FileContent(file_bytes),
-                    FileName(filename),
-                    FileType(mime_type),
-                    Disposition("attachment"),
-                )
-                message.attachment = attachment
+    # Append compliance footer to plain text
+    text_with_footer = compliance.append_footer(body_text, lead_id)
 
-        # Send via SendGrid
+    # Build HTML content with footer if provided
+    html_content = body_html
+    if body_html:
+        html_with_footer = compliance.append_footer_html(body_html, lead_id)
+        html_content = html_with_footer
+
+    # Create the Mail object
+    mail = Mail(
+        from_email=config.SENDGRID_FROM_EMAIL,
+        to_emails=to_addr,
+        subject=subject,
+        plain_text_content=text_with_footer,
+        html_content=html_content,
+    )
+
+    # Set custom Message-ID and List-Unsubscribe headers
+    mail.extra_headers = {
+        "Message-ID": message_id,
+        "List-Unsubscribe": compliance.list_unsubscribe_header(lead_id),
+        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+    }
+
+    # Enable open and click tracking
+    mail.mail_settings.tracking_settings.open_tracking.enable = True
+    mail.mail_settings.tracking_settings.click_tracking.enable = True
+
+    # Attach inline image if provided
+    if inline_image_path:
+        image_path = Path(inline_image_path)
+        image_bytes = image_path.read_bytes()
+        # Determine MIME type from file extension
+        mime_type = _get_mime_type(image_path.suffix)
+
+        attachment = Attachment(
+            file_content=FileContent(
+                image_bytes
+            ),
+            file_name=FileName(image_path.name),
+            file_type=FileType(mime_type),
+            disposition=Disposition("inline"),
+            content_id=inline_image_cid,
+        )
+        mail.attachment = attachment
+
+    # Send via SendGrid
+    try:
         sg = SendGridAPIClient(config.SENDGRID_API_KEY)
-        response = sg.send(message)
+        response = sg.send(mail)
+        if response.status_code != 202:
+            raise RuntimeError(
+                f"SendGrid returned status {response.status_code}: {response.body}"
+            )
+    except Exception as exc:
+        raise RuntimeError(f"SendGrid send failed for {to_addr}: {exc}")
 
-        # SendGrid returns 202 on successful send
-        return response.status_code == 202
+    return message_id
 
-    except Exception as e:
-        print(f"SendGrid send failed for {to_addr}: {e}")
-        return False
+
+def _get_mime_type(file_extension: str) -> str:
+    """Return MIME type for common image extensions."""
+    extension = file_extension.lower()
+    mime_types = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".svg": "image/svg+xml",
+    }
+    return mime_types.get(extension, "application/octet-stream")
 
 
 def _decode(value: Optional[str]) -> str:
