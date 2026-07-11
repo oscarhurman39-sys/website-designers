@@ -39,6 +39,13 @@ _PINNED_CHROMIUM_PATH = Path("/opt/pw-browsers/chromium")
 _VIEWPORT = {"width": 1280, "height": 800}
 _PAGE_LOAD_TIMEOUT_MS = 30_000
 
+# Markers Vercel's own deployment-protection interstitial ("Vercel
+# Authentication" / password wall) renders instead of the actual site.
+# Checked case-insensitively against the page title + body text so a
+# blocked preview is never screenshotted and emailed to a lead.
+_VERCEL_LOGIN_WALL_MARKERS = ("vercel authentication", "log in to vercel")
+_LOGIN_WALL_RETRY_DELAY_MS = 3_000
+
 
 def screenshot_path(lead_id: int) -> Path:
     """Where a given lead's screenshot lives (whether or not it exists yet)."""
@@ -79,6 +86,11 @@ async def capture_screenshot(preview_url: str, lead_id: int) -> str:
     return str(path)
 
 
+def _looks_like_vercel_login_wall(page) -> bool:
+    haystack = f"{page.title() or ''} {page.content() or ''}".lower()
+    return any(marker in haystack for marker in _VERCEL_LOGIN_WALL_MARKERS)
+
+
 def _capture_sync(preview_url: str, out_path: Path) -> None:
     launch_kwargs: dict = {"headless": True}
     if _PINNED_CHROMIUM_PATH.exists():
@@ -95,6 +107,25 @@ def _capture_sync(preview_url: str, out_path: Path) -> None:
             # style injection without risking a near-timeout-length hang.
             page.goto(preview_url, wait_until="load", timeout=_PAGE_LOAD_TIMEOUT_MS)
             page.wait_for_timeout(500)
+
+            # A freshly-deployed Vercel project can serve its own
+            # "Vercel Authentication" login wall instead of the site (see
+            # vercel_api.py's _disable_deployment_protection). Retry once
+            # after a short delay in case the settings change just hadn't
+            # propagated yet, so a login screen never gets screenshotted
+            # and emailed to a lead as their "website preview".
+            if _looks_like_vercel_login_wall(page):
+                page.wait_for_timeout(_LOGIN_WALL_RETRY_DELAY_MS)
+                page.goto(preview_url, wait_until="load", timeout=_PAGE_LOAD_TIMEOUT_MS)
+                page.wait_for_timeout(500)
+                if _looks_like_vercel_login_wall(page):
+                    print(
+                        f"[screenshot] {preview_url} is still showing a Vercel login wall "
+                        "after one retry -- deployment protection is likely still enabled "
+                        "for this project. Check Vercel dashboard -> project -> Settings -> "
+                        "Deployment Protection."
+                    )
+
             # Write to a temp path first and rename, so a crash mid-capture
             # never leaves a corrupt/partial file behind masquerading as a
             # valid cache hit on the next call.
