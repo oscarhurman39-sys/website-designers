@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import email
 import imaplib
+import logging
+import re
 import smtplib
 import uuid
 from dataclasses import dataclass
@@ -30,6 +32,11 @@ from typing import Optional
 import config
 from utils import compliance
 
+logger = logging.getLogger(__name__)
+
+# Simple email validation regex
+EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+
 
 @dataclass
 class InboundEmail:
@@ -41,6 +48,11 @@ class InboundEmail:
     body: str
     content_type: str
     date: str
+
+
+def _validate_email(email_addr: str) -> bool:
+    """Validate email address format."""
+    return EMAIL_REGEX.match(email_addr) is not None
 
 
 def send_email(
@@ -144,10 +156,17 @@ def send_email_sendgrid(
         The generated Message-ID header value.
 
     Raises:
-        RuntimeError: If recipient is unsubscribed or SendGrid API call fails.
-        ValueError: If inline_image_path is given without body_html.
+        RuntimeError: If recipient is unsubscribed, config is missing, or SendGrid API call fails.
+        ValueError: If inline_image_path is given without body_html or email is invalid.
     """
     from utils import db  # local import to avoid a circular import at module load time
+
+    # Validate inputs
+    if not to_addr or not subject or not body_text:
+        raise ValueError("to_addr, subject, and body_text are required.")
+    
+    if not _validate_email(to_addr):
+        raise ValueError(f"Invalid email format: {to_addr}")
 
     if not config.SENDGRID_API_KEY:
         raise RuntimeError("SENDGRID_API_KEY is not configured.")
@@ -179,6 +198,8 @@ def send_email_sendgrid(
         raise RuntimeError(
             "SendGrid SDK not installed. Install with: pip install sendgrid"
         )
+
+    logger.info(f"Sending SendGrid email to {to_addr} with subject: {subject}")
 
     # Generate message ID in the same format as send_email() for consistency
     message_id = make_msgid(domain=config.SENDING_DOMAIN or None)
@@ -243,16 +264,30 @@ def send_email_sendgrid(
             content_id=inline_image_cid,
         )
         mail.add_attachment(attachment)
+        logger.debug(f"Added inline image: {image_path.name} ({len(image_bytes)} bytes)")
 
     # Send via SendGrid
     try:
-        sg = SendGridAPIClient(config.SENDGRID_API_KEY)
+        logger.debug("Connecting to SendGrid API...")
+        sg = SendGridAPIClient(config.SENDGRID_API_KEY, request_headers={"timeout": 30})
         response = sg.send(mail)
+        
         if response.status_code != 202:
+            logger.error(f"SendGrid returned status {response.status_code} for {to_addr}: {response.body}")
             raise RuntimeError(
                 f"SendGrid returned status {response.status_code}: {response.body}"
             )
+        
+        logger.info(f"Email sent successfully to {to_addr} (Message-ID: {message_id})")
+    
+    except ValueError as e:
+        logger.error(f"Validation error sending to {to_addr}: {e}")
+        raise
+    except RuntimeError as e:
+        logger.error(f"Runtime error sending to {to_addr}: {e}")
+        raise
     except Exception as exc:
+        logger.error(f"SendGrid send failed for {to_addr}: {exc}", exc_info=True)
         raise RuntimeError(f"SendGrid send failed for {to_addr}: {exc}")
 
     return message_id
