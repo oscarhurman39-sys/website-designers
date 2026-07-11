@@ -1,15 +1,38 @@
 """LeadAgent: turns a CSV of (business_name, niche, location) rows into
-enriched leads with a contact email, a pain-point snippet, and (if found) a
-testimonial, scraped from the business's own website.
+enriched leads with business details (phone, address, hours, categories,
+rating, reviews) from Google Places, plus a contact email.
 
-This is intentionally best-effort: small local businesses often have thin,
-inconsistent websites, so we fall back gracefully at every step rather than
-raising. A lead we can't find a contact email for is marked 'lost' rather
-than blocking the pipeline.
+Business data comes from the Google Places API (New), not from scraping
+Google Maps directly: Google Maps Platform's Terms of Service explicitly
+prohibit scraping Maps/Places content, and Maps listing pages are a
+JS-rendered SPA that plain requests+BeautifulSoup can't meaningfully parse
+anyway (see utils/places_api.py). Places has no email field at all, though
+-- when it gives us the business's own website, we reuse the same
+robots.txt-respecting scraper this module always used (find_business_website
+/ _fetch / _extract_email, all unchanged) just to find a contact email
+there.
+
+This is intentionally best-effort: a Places lookup can fail to match, and
+a business's own website (if it has one) can still lack a discoverable
+email. A lead is marked 'researched' once we have at least a name and
+phone number from Places, 'lost' otherwise -- contact_email may still be
+blank on a 'researched' lead; sales_agent.py already handles that
+gracefully at send time.
+
+Two shortcuts keep leads that are already actionable from ever being
+marked 'lost' here:
+  * If the lead already has a contact_email (from CSV import or manual
+    entry), the website email-scrape is skipped entirely -- we only ever
+    scraped a site to *find* an email, and we already have one -- and the
+    lead goes straight to 'researched' regardless of what Places returns.
+  * The Google Places lookup is optional. With no GOOGLE_PLACES_API_KEY
+    configured we skip it and just use whatever data is already on the
+    lead, so the rest of the pipeline can run without a Places key.
 """
 from __future__ import annotations
 
 import csv
+import json
 import re
 import urllib.robotparser
 from dataclasses import dataclass
@@ -19,7 +42,8 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from utils import db, tracer
+import config
+from utils import db, places_api, tracer
 
 USER_AGENT = "ColdEmailSalesPipelineBot/1.0 (+mailto:contact@example.com)"
 REQUEST_TIMEOUT = 10
@@ -31,6 +55,11 @@ _EMAIL_BLOCKLIST_SUBSTR = ("example.com", "sentry.io", "wixpress.com", "godaddy.
 
 _TESTIMONIAL_HINTS = ("testimonial", "review", "quote", "client-says")
 _PAIN_POINT_HINTS = ("blog", "news", "about", "why-", "services")
+
+# Established-business targeting gate: a Google Places listing must have at
+# least this many ratings AND at least one photo to be worth pursuing.
+# Listings below the bar are set aside as 'filtered' rather than emailed.
+_MIN_REVIEWS = 5
 
 
 @dataclass
@@ -170,7 +199,7 @@ def research_lead(lead: dict) -> None:
     tracer.run_traced(
         agent_id="lead-agent",
         agent_name="LeadResearcher",
-        tool_name="scrape_business_website",
+        tool_name="google_places_lookup",
         input_data={"lead_id": lead["id"], "business_name": lead["business_name"], "niche": lead["niche"]},
         fn=lambda: _research_lead_impl(lead),
     )
@@ -178,45 +207,129 @@ def research_lead(lead: dict) -> None:
 
 def _research_lead_impl(lead: dict) -> None:
     lead_id = lead["id"]
-    website_url = find_business_website(lead["business_name"], lead["location"] or "")
+    # A lead that already has an email (CSV/manual) is workable no matter
+    # what research turns up -- we track that here so none of the paths
+    # below can mark it 'lost'.
+    existing_email = (lead.get("contact_email") or "").strip()
 
-    if not website_url:
-        db.update_lead_status(lead_id, "lost", notes="No website found during research")
+    # Google Places research is optional: without an API key we skip the
+    # lookup entirely and rely on whatever data is already on the lead.
+    place = None
+    if config.GOOGLE_PLACES_API_KEY:
+        try:
+            place = places_api.find_business(lead["business_name"], lead["location"] or "")
+        except Exception as exc:  # noqa: BLE001 - API/auth/quota errors must not crash the batch
+            if existing_email:
+                db.update_lead_status(
+                    lead_id, "researched", notes=f"Kept existing contact email; Places lookup failed: {exc}"
+                )
+                return
+            db.update_lead_status(lead_id, "lost", notes=f"Google Places lookup failed: {exc}")
+            return
+
+    if place is None:
+        # No Places match, or no API key configured. If we already have an
+        # email the lead is still actionable; otherwise there's nothing to
+        # work with.
+        if existing_email:
+            note = (
+                "No matching Google Places listing; kept existing contact email"
+                if config.GOOGLE_PLACES_API_KEY
+                else "No Places API key configured; using existing lead data"
+            )
+            db.update_lead_status(lead_id, "researched", notes=note)
+            return
+        note = (
+            "No matching Google Places listing found"
+            if config.GOOGLE_PLACES_API_KEY
+            else "No Places API key configured and no existing contact email"
+        )
+        db.update_lead_status(lead_id, "lost", notes=note)
         return
 
-    homepage = _fetch(website_url)
-    if homepage is None:
-        db.update_lead_status(lead_id, "lost", notes=f"Could not fetch website (robots.txt or network): {website_url}")
+    # Established-business targeting gate: only pursue listings with enough
+    # ratings to be real and at least one photo. This runs on the Places
+    # result regardless of any pre-existing email -- a weak listing is set
+    # aside as 'filtered' (skipped by every downstream queue), not emailed.
+    review_count = place["review_count"] or 0
+    photo_count = len(place["photo_references"])
+    if review_count < _MIN_REVIEWS or photo_count == 0:
+        db.update_lead_status(
+            lead_id,
+            "filtered",
+            notes=f"Below targeting threshold (ratings={review_count}, photos={photo_count})",
+        )
         return
 
-    email_addr = _extract_email(homepage)
-    testimonial = _extract_testimonial(homepage)
-    pain_point = _extract_pain_point(homepage, website_url)
-
-    # If nothing useful on the homepage, try a likely subpage (about/contact/blog).
-    if not email_addr or not testimonial or not pain_point:
-        subpage_url = _find_subpage(homepage, website_url, ("contact", "about", "blog", "review"))
-        if subpage_url:
-            subpage = _fetch(subpage_url)
-            if subpage is not None:
-                email_addr = email_addr or _extract_email(subpage)
-                testimonial = testimonial or _extract_testimonial(subpage)
-                pain_point = pain_point or _extract_pain_point(subpage, subpage_url)
-
-    if not email_addr:
-        db.update_lead_fields(lead_id, website_url=website_url, scraped_info=homepage.get_text(" ", strip=True)[:2000])
-        db.update_lead_status(lead_id, "lost", notes="Website found but no contact email discovered")
+    if not place["name"] or not place["phone"]:
+        db.update_lead_fields(
+            lead_id,
+            address=place["address"] or "",
+            categories=", ".join(place["categories"]),
+            rating=place["rating"],
+            review_count=place["review_count"],
+            opening_hours=json.dumps(place["opening_hours"]),
+            reviews=json.dumps(place["reviews"]),
+            scraped_info=place["editorial_summary"] or "",
+        )
+        if existing_email:
+            db.update_lead_status(
+                lead_id, "researched", notes="Places listing missing name/phone; kept existing contact email"
+            )
+            return
+        db.update_lead_status(lead_id, "lost", notes="Places listing found but missing name and/or phone")
         return
+
+    # Places has no email field at all. Only when we DON'T already have an
+    # email do we reuse the same robots.txt-respecting scraper this module
+    # always used (find_business_website / _fetch / _extract_email /
+    # _find_subpage, all unchanged) to find one on the business's own site,
+    # falling back to a DuckDuckGo search for the site if Places had no URL.
+    email_addr: Optional[str] = existing_email or None
+    website_url = place["website_uri"] or ""
+    # When we fetch the business's own homepage (only when we don't already
+    # have an email), harvest a pain_point from it too -- the first
+    # substantial paragraph / meta description of their current site. This
+    # restores the pre-Places personalization hook (sales_agent uses it as
+    # "something noticed about their current site", design_agent works it
+    # into the hero copy). Default to any existing value so we never clobber
+    # a pain_point with an empty string when we don't scrape.
+    pain_point = lead.get("pain_point") or ""
+    if not existing_email:
+        website_url = website_url or find_business_website(lead["business_name"], lead["location"] or "")
+        if website_url:
+            homepage = _fetch(website_url)
+            if homepage is not None:
+                email_addr = _extract_email(homepage)
+                extracted_pain = _extract_pain_point(homepage, website_url)
+                if extracted_pain:
+                    pain_point = extracted_pain
+                if not email_addr:
+                    subpage_url = _find_subpage(homepage, website_url, ("contact", "about"))
+                    if subpage_url:
+                        subpage = _fetch(subpage_url)
+                        if subpage is not None:
+                            email_addr = _extract_email(subpage)
 
     db.update_lead_fields(
         lead_id,
-        website_url=website_url,
-        contact_email=email_addr,
-        pain_point=pain_point or "",
-        testimonial=testimonial or "",
-        scraped_info=homepage.get_text(" ", strip=True)[:2000],
+        contact_email=email_addr or "",
+        website_url=website_url or "",
+        phone=place["phone"],
+        address=place["address"] or "",
+        categories=", ".join(place["categories"]),
+        rating=place["rating"],
+        review_count=place["review_count"],
+        opening_hours=json.dumps(place["opening_hours"]),
+        # Review text stays in the DB for the operator's own context only --
+        # design_agent renders placeholders, never this content (Google
+        # Maps Platform display terms). Deliberately NOT copied into
+        # `testimonial` anymore for the same reason.
+        reviews=json.dumps(place["reviews"]),
+        pain_point=pain_point,
+        scraped_info=place["editorial_summary"] or "",
     )
-    db.update_lead_status(lead_id, "researched", notes="Research complete")
+    db.update_lead_status(lead_id, "researched", notes="Research complete via Google Places API")
 
 
 def run(csv_path: Optional[str] = None) -> None:

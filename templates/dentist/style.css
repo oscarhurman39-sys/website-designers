@@ -51,11 +51,25 @@ nav a {
 nav a:hover { color: var(--accent); }
 
 .hero {
-  background-size: cover;
-  background-position: center;
+  background: linear-gradient(135deg, #1e293b, #0f172a);
   color: #fff;
-  padding: 120px 0;
+  padding: 88px 0;
   text-align: center;
+}
+
+.hero-photo {
+  display: block;
+  width: 100%;
+  max-width: 760px;
+  margin: 32px auto 0;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+}
+
+.photo-credit {
+  margin-top: 8px;
+  font-size: 0.8rem;
+  color: #9ca3af;
 }
 
 .hero h1 {
@@ -140,4 +154,79 @@ nav a:hover { color: var(--accent); }
   margin-top: 6px;
   color: #888;
   font-size: 0.8rem;
+}
+
+.pricing {
+  padding: 64px 0;
+  background: #fff;
+}
+
+.pricing-card {
+  max-width: 460px;
+  margin: 0 auto;
+  background: var(--bg);
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 40px 32px;
+  text-align: center;
+}
+
+.pricing-card h2 {
+  font-size: 1.75rem;
+  margin-bottom: 16px;
+  color: var(--accent-dark);
+}
+
+.price-regular {
+  font-size: 1.25rem;
+  color: #9ca3af;
+  text-decoration: line-through;
+  text-decoration-color: #ef4444;
+  margin-bottom: 4px;
+}
+
+.price-offer {
+  font-size: 2.5rem;
+  font-weight: 800;
+  color: #16a34a;
+  margin-bottom: 20px;
+}
+
+.price-includes {
+  list-style: none;
+  text-align: left;
+  max-width: 260px;
+  margin: 0 auto 20px;
+}
+
+.price-includes li {
+  padding: 6px 0;
+  color: #374151;
+}
+
+.price-includes li::before {
+  content: "\2713  ";
+  color: #16a34a;
+  font-weight: 700;
+}
+
+.price-live-note {
+  font-size: 0.9rem;
+  color: #6b7280;
+  margin-bottom: 24px;
+}
+
+.price-cta {
+  display: inline-block;
+  background: var(--accent);
+  color: #fff;
+  padding: 14px 32px;
+  border-radius: 6px;
+  text-decoration: none;
+  font-weight: 700;
+  transition: background 0.2s ease;
+}
+
+.price-cta:hover {
+  background: var(--accent-dark);
 }

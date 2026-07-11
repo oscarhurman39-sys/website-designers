@@ -53,6 +53,25 @@ def create_click_link(lead_id: int) -> str:
     return f"{config.PUBLIC_BASE_URL}/click?lead_id={lead_id}&token={quote(token)}"
 
 
+def tracking_is_public() -> bool:
+    """Whether the click-tracking redirect is actually reachable by an email
+    recipient: PUBLIC_BASE_URL must point at a real public host, not the
+    localhost default. A localhost tracking link in a sent email is dead on
+    arrival for everyone but us."""
+    host = config.PUBLIC_BASE_URL.lower()
+    return not ("localhost" in host or "127.0.0.1" in host or "0.0.0.0" in host)
+
+
+def best_preview_link(lead_id: int, direct_url: str) -> str:
+    """The preview link to put in an email: the tracked redirect when the
+    webhook server is publicly reachable (keeps click analytics), otherwise
+    the lead's real preview URL directly (a working link beats a tracked
+    dead one). Falls back to the tracked link if no direct URL exists yet."""
+    if tracking_is_public():
+        return create_click_link(lead_id)
+    return direct_url or create_click_link(lead_id)
+
+
 def resolve_click(lead_id: int, token: str) -> Optional[str]:
     """Verify the token matches lead_id, log the click, and return the preview
     URL to redirect to. Returns None if the token is invalid or no site exists."""

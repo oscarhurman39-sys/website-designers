@@ -77,6 +77,10 @@ def _run_cycle() -> None:
     if sent_lead_id:
         print(f"[main] Sent cold email to lead {sent_lead_id}")
 
+    followup_lead_id = sales_agent.send_followups()
+    if followup_lead_id:
+        print(f"[main] Sent follow-up to lead {followup_lead_id}")
+
     replies = sales_agent.check_inbox()
     if replies:
         print(f"[main] Processed {replies} inbound reply(ies)")
@@ -236,6 +240,7 @@ def _command_listener() -> None:
 
 def main() -> None:
     config.validate()
+    config.print_startup_diagnostics()
     db.init_db()
     print(f"[main] Pipeline starting. DB: {config.DB_PATH}")
     print("[main] Type 'help' for the operator command list.")

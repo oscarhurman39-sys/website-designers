@@ -95,6 +95,28 @@ def _capture_sync(preview_url: str, out_path: Path) -> None:
             # style injection without risking a near-timeout-length hang.
             page.goto(preview_url, wait_until="load", timeout=_PAGE_LOAD_TIMEOUT_MS)
             page.wait_for_timeout(500)
+            # Never screenshot a login/protection page silently: Vercel's
+            # deployment protection serves an auth screen on protected URLs,
+            # and embedding a picture of "Log in to Vercel" in a cold email
+            # is worse than no image. Detect it and fail loudly; the caller
+            # (design_agent) treats screenshots as optional and logs this.
+            title = (page.title() or "").lower()
+            if "vercel" in title and ("log in" in title or "login" in title or "authentication" in title):
+                raise RuntimeError(
+                    f"Page at {preview_url} is a Vercel login/protection screen (title: {page.title()!r}). "
+                    "Use the public production alias, or disable the project's Deployment Protection."
+                )
+            # Every generated template has a #contact section; the Vercel
+            # auth page (and any other interstitial) doesn't. Waiting for it
+            # both confirms we're on the real site and gives late-rendering
+            # pages a moment to finish.
+            try:
+                page.wait_for_selector("#contact", timeout=10_000)
+            except PlaywrightError as exc:
+                raise RuntimeError(
+                    f"Page at {preview_url} doesn't look like a generated preview site "
+                    "(no #contact section) -- refusing to screenshot it."
+                ) from exc
             # Write to a temp path first and rename, so a crash mid-capture
             # never leaves a corrupt/partial file behind masquerading as a
             # valid cache hit on the next call.

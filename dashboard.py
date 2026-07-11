@@ -24,7 +24,7 @@ sys.path.insert(0, str(_PIPELINE_DIR))
 
 import config  # noqa: E402
 from agents import design_agent, lead_agent, sales_agent  # noqa: E402
-from utils import db, tracer  # noqa: E402
+from utils import db, intelligence, stripe_utils, tracer  # noqa: E402
 
 PAUSE_FLAG = _PIPELINE_DIR / ".paused"
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
@@ -58,6 +58,43 @@ with col2:
         st.rerun()
 with col3:
     st.write("**Status:** " + ("PAUSED" if _is_paused() else "RUNNING"))
+
+st.divider()
+
+# --- Leads needing your action (positive replies awaiting takeover) ----------
+# Highest-priority operator task, so it sits up top. A lead lands in 'replied'
+# when sales_agent classifies an inbound message as positive; taking it over
+# moves it to 'negotiating', which no automated query ever selects (sending
+# skips it, and the reply classifier won't overwrite it), so all automation
+# pauses for that lead and you drive the conversation by hand.
+st.subheader("Leads needing your action")
+action_leads = db.list_leads_by_status("replied") + db.list_leads_by_status("negotiating")
+if not action_leads:
+    st.write("_Nothing waiting — no leads in 'replied' or 'negotiating' status._")
+else:
+    for action_lead in action_leads:
+        col_info, col_take, col_pay = st.columns([4, 1, 1])
+        with col_info:
+            st.write(
+                f"**{action_lead['business_name']}** ({action_lead['status']}) — "
+                f"{action_lead['contact_email'] or '(no email on file)'}  ·  lead {action_lead['id']}"
+            )
+        with col_take:
+            if action_lead["status"] == "replied":
+                if st.button("Take over", key=f"takeover_{action_lead['id']}"):
+                    db.update_lead_status(action_lead["id"], "negotiating", notes="Human took over via dashboard")
+                    st.rerun()
+        with col_pay:
+            # Creates a Stripe Checkout session and emails the lead the link
+            # (status -> 'payment_sent'). Deliberately NOT labeled "mark as
+            # paid": 'won' is only ever set by the Stripe webhook confirming
+            # the payment actually completed.
+            if st.button("Send payment link", key=f"payment_{action_lead['id']}"):
+                try:
+                    checkout_url = stripe_utils.send_payment_link(action_lead["id"])
+                    st.success(f"Payment link emailed to {action_lead['business_name']}: {checkout_url}")
+                except Exception as exc:  # noqa: BLE001 - surface in the UI, never crash the page
+                    st.error(f"Could not send payment link: {exc}")
 
 st.divider()
 
@@ -189,6 +226,11 @@ if lead_id:
             "niche": lead["niche"],
             "location": lead["location"],
             "status": lead["status"],
+            # What the generated preview site actually says (AI-drafted via
+            # Hugging Face when available, deterministic fallback otherwise;
+            # set by design_agent at design time).
+            "ai_headline": lead.get("ai_headline") or "(not designed yet)",
+            "ai_about": lead.get("ai_about") or "(not designed yet)",
             "pain_point": lead["pain_point"],
             "testimonial": lead["testimonial"],
             "preview_url": website["preview_url"] if website else None,
@@ -262,3 +304,139 @@ else:
 
     with st.expander("Raw trace JSON (most recent 20)"):
         st.json(list(reversed(traces))[:20])
+
+st.divider()
+
+# --- Subject line A/B performance --------------------------------------------
+st.header("Subject Line Performance")
+if not (config.SUBJECT_A and config.SUBJECT_B):
+    st.caption("Set SUBJECT_A and SUBJECT_B in .env to run a 50/50 subject-line A/B test.")
+else:
+    _variant_templates = {"A": config.SUBJECT_A, "B": config.SUBJECT_B}
+    _sv_stats = db.subject_variant_stats()
+    _sv_rows = []
+    for _v in ("A", "B"):
+        _s = _sv_stats[_v]
+        _sends = _s["sends"]
+        _sv_rows.append(
+            {
+                "variant": _v,
+                "subject": _variant_templates[_v],
+                "sends": _sends,
+                "opens": _s["opens"],
+                "open %": round(100.0 * _s["opens"] / _sends, 1) if _sends else 0.0,
+                "clicks": _s["clicks"],
+                "click %": round(100.0 * _s["clicks"] / _sends, 1) if _sends else 0.0,
+            }
+        )
+    st.dataframe(pd.DataFrame(_sv_rows), use_container_width=True, hide_index=True)
+    st.caption(
+        "Opens come from the SendGrid Event Webhook (POST /webhook/sendgrid); clicks from the "
+        "self-hosted preview-link tracker. Clicks work without SendGrid; opens need the webhook wired up."
+    )
+
+    _a, _b = _sv_rows[0], _sv_rows[1]
+    if _a["sends"] >= 10 and _b["sends"] >= 10:
+        if _a["open %"] != _b["open %"]:
+            _win, _lose = (_a, _b) if _a["open %"] > _b["open %"] else (_b, _a)
+            st.success(
+                f"Winner so far: Variant {_win['variant']} — {_win['open %']}% open rate "
+                f"vs {_lose['open %']}% (over {_win['sends']} and {_lose['sends']} sends)."
+            )
+        else:
+            st.info("Both variants have the same open rate so far — keep sending.")
+    else:
+        st.info(
+            f"Need at least 10 sends per variant to call a winner "
+            f"(so far A: {_a['sends']}, B: {_b['sends']})."
+        )
+
+st.divider()
+
+# --- Conversion intelligence -------------------------------------------------
+# Read-only analysis of the pipeline's own history (utils/intelligence.py):
+# a truthful ever-reached funnel, per-niche/subject/screenshot performance,
+# and plain-English recommendations -- all from data already collected, no
+# new deps or API cost. This is the "learn from your own outcomes" layer.
+st.header("📈 Conversion Intelligence")
+st.caption("What's actually working, reconstructed from every send, click, reply, and state change you've logged.")
+
+intel = intelligence.analyze()
+
+if intel.total_leads == 0:
+    st.info("No leads yet -- intelligence appears once the pipeline has history to learn from.")
+else:
+    # Headline recommendations first: the "so what" before the tables.
+    for rec in intel.recommendations:
+        if rec.startswith(("Lean", "Best", "The preview")):
+            st.success(rec)
+        else:
+            st.warning(rec)
+
+    col_a, col_b = st.columns(2)
+
+    with col_a:
+        st.subheader("Funnel (ever-reached)")
+        st.caption("Each stage counts leads that EVER got there -- a won lead still counts as 'emailed'.")
+        funnel_df = pd.DataFrame(
+            [
+                {
+                    "stage": s.stage,
+                    "reached": s.reached,
+                    "conv % from prev": s.conversion_from_prev,
+                    "leaked": s.drop_off,
+                }
+                for s in intel.funnel
+            ]
+        )
+        st.dataframe(funnel_df, use_container_width=True, hide_index=True)
+        # Visual funnel: reached count per stage.
+        chart_df = funnel_df[funnel_df["reached"] > 0].set_index("stage")["reached"]
+        if not chart_df.empty:
+            st.bar_chart(chart_df)
+
+    with col_b:
+        st.subheader("Niche performance")
+        st.caption("Sorted by reply rate. This tells you which verticals to weight your next CSV toward.")
+        niche_df = pd.DataFrame(
+            [
+                {
+                    "niche": n.niche,
+                    "sent": n.emailed,
+                    "click %": n.click_rate,
+                    "reply %": n.reply_rate,
+                    "win %": n.win_rate,
+                }
+                for n in intel.niches
+                if n.total > 0
+            ]
+        )
+        st.dataframe(niche_df, use_container_width=True, hide_index=True)
+
+        st.subheader("Screenshot lift")
+        lift = intel.screenshot_lift
+        delta = lift["lift_points"]
+        st.metric(
+            "Reply-rate lift from embedding the preview screenshot",
+            f"{lift['with_screenshot']['reply_rate']}%",
+            delta=f"{delta:+} pts vs no screenshot",
+        )
+        st.caption(
+            f"With screenshot: {lift['with_screenshot']['emailed']} sent · "
+            f"Without: {lift['without_screenshot']['emailed']} sent"
+        )
+
+    st.subheader("Subject line A/B (free, from history)")
+    st.caption("Reply rate grouped by the subject line actually sent -- feed the winner back into the drafting prompt.")
+    if intel.subjects:
+        subj_df = pd.DataFrame(
+            [{"subject": s.subject, "sent": s.sent, "replied": s.replied, "reply %": s.reply_rate} for s in intel.subjects]
+        )
+        st.dataframe(subj_df, use_container_width=True, hide_index=True)
+    else:
+        st.write("_No subjects sent yet._")
+
+    exits = intel.exits
+    st.caption(
+        f"Exits — lost: {exits['lost']} · bounced: {exits['bounced']} · unsubscribed: {exits['unsubscribed']}"
+    )

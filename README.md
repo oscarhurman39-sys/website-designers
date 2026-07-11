@@ -10,11 +10,17 @@ transfer are only ever triggered by an explicit console command.
 
 ## Quick Start
 
-1. `pip install -r requirements.txt && playwright install chromium`
-2. `cp .env.example .env` and fill in your real keys
-3. `cd pipeline && python -m agents.lead_agent ../test_lead.csv && cd ..` to load 3 sample leads
-4. `python run.py quick-test` to run one lead through the whole pipeline and watch it work
-5. `python run.py loop` (always-on) or `python run.py dashboard` (Streamlit UI) once you're ready
+1. **Fill in `.env`** — `pip install -r requirements.txt && playwright install chromium`,
+   then `cp .env.example .env` and fill in your real keys (including a real
+   `PHYSICAL_ADDRESS`; sends are refused while it's a placeholder).
+2. **Verify** — `python run.py test-email your@email.com` creates a dummy lead, runs the
+   full pipeline (real GitHub repo + Vercel preview), and sends one test email to you.
+3. **Go** — if it arrives (or prints cleanly under `DRY_RUN`), start the full pipeline:
+   `python run.py loop` (always-on) or `python run.py dashboard` (Streamlit UI).
+
+`.env.example` ships with `DRY_RUN=true`: the whole pipeline runs (research,
+deploys, status changes) but every email is printed to the console instead of
+sent. Flip to `DRY_RUN=false` only when you're ready to send for real.
 
 ## Directory structure
 
@@ -62,8 +68,9 @@ cp .env.example .env
 Required `.env` variables: `GITHUB_TOKEN`, `VERCEL_TOKEN`, `EMAIL_HOST`,
 `EMAIL_PORT`, `EMAIL_USER`, `EMAIL_PASSWORD`, `HF_API_TOKEN`,
 `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `ADMIN_EMAIL`,
-`SENDING_DOMAIN`, `PHYSICAL_ADDRESS`. `config.py` validates these at
-startup and fails loudly, listing everything missing, if any are unset.
+`SENDING_DOMAIN`, `PHYSICAL_ADDRESS`, `GOOGLE_PLACES_API_KEY` (see
+"Lead research" below). `config.py` validates these at startup and fails
+loudly, listing everything missing, if any are unset.
 
 `VERCEL_TEAM_ID`, `SLACK_BOT_TOKEN`, `UNSPLASH_ACCESS_KEY`,
 `VOLTAGENT_PUBLIC_KEY`, `VOLTAGENT_SECRET_KEY` are optional.
@@ -123,6 +130,32 @@ python webhook_server.py
 streamlit run dashboard.py
 ```
 
+## Lead research
+
+`agents/lead_agent.py` sources business data (name, phone, address,
+opening hours, categories, rating, review count, up to 3 review
+snippets) from the **Google Places API (New)**, not by scraping Google
+Maps directly. Google Maps Platform's Terms of Service explicitly
+prohibit scraping Maps/Places content, and Maps listing pages are a
+JS-rendered SPA that plain `requests`+`BeautifulSoup` can't meaningfully
+parse anyway -- the Places API is the real, working, ToS-compliant way to
+get this data. Get a key at
+https://console.cloud.google.com/google/maps-apis and set
+`GOOGLE_PLACES_API_KEY` (note opening hours are billed at the
+"Enterprise" SKU tier, higher than the base tier -- check current
+pricing before high-volume use).
+
+Places has no email field at all, though. When a listing includes the
+business's own website, `lead_agent.py` reuses its existing (unchanged)
+robots.txt-respecting scraper just to find a contact email there --
+that's the one part of research that's still done by scraping a business's
+own site, which is a different situation from scraping Google's platform.
+
+A lead is marked `'researched'` once Places returns at least a name and
+phone number; `'lost'` otherwise. `contact_email` may still be blank on a
+`'researched'` lead if no website (or no discoverable email on it) was
+found -- `sales_agent.py` already handles that gracefully at send time.
+
 ## Templates
 
 `templates/` holds one subfolder per business niche, each with an
@@ -137,10 +170,12 @@ Two template styles currently coexist:
   `{{ business_name }}`, `{{ phone }}`, `{{ hero_headline }}`,
   `{{ services_list }}` (falls back to a niche-appropriate default via
   Jinja's `default()` filter if not supplied), `{{ pain_point_solution }}`,
-  `{{ testimonial }}`, `{{ location }}`, `{{ year }}`, and
+  `{{ testimonial }}`, `{{ location }}`, `{{ year }}`,
   `{{ preview_url }}` (a real, working link back to the site's own
   click-tracked preview URL, shown at the bottom as a "share this preview"
-  link).
+  link), `{{ reviews }}` (up to 3 Google review snippets, falls back to
+  `{{ testimonial }}` if none), and `{{ opening_hours }}` (falls back to
+  "Contact us for hours" if not supplied).
 - **`restaurant`, `gym`, `dentist`** -- original hand-rolled CSS designs
   from the pipeline's first iteration. Placeholders: `{{ business_name }}`,
   `{{ phone }}`, `{{ pain_point_solution }}`, `{{ testimonial }}`,
@@ -160,6 +195,70 @@ sends, 20/hour, 50/day) are enforced in `agents/sales_agent.py`. A real
 domain warm-up tool is still recommended before high-volume sending on a
 brand-new sending domain -- this pipeline staggers send timing but does
 not warm up domain reputation for you.
+
+## Conversion intelligence
+
+The pipeline learns from its own outcomes. `pipeline/utils/intelligence.py`
+reads back everything already logged -- sends, clicks, replies,
+classifications, and every state transition -- and turns it into signal:
+
+- **A truthful funnel.** Measured from `state_history` ("did this lead
+  ever reach stage X"), not current status -- so a won lead still counts
+  toward `emailed`/`replied`, and each stage is a real superset of the
+  next. Current-status counts would undercount every earlier stage.
+- **Niche performance** ranked by reply rate -- which verticals to weight
+  your next CSV toward.
+- **Subject-line A/B**, for free, from history -- reply rate grouped by the
+  subject actually sent. Feed the winner back into the drafting prompt.
+- **Screenshot lift** -- reply rate with vs without the embedded preview
+  image, so the feature you built on faith becomes a measured one.
+- **Plain-English recommendations**, deliberately silent until there's
+  enough volume (>=5 sends per group) to not be noise.
+
+Zero new dependencies, zero API cost -- it's pure analysis over data you
+already collect. Surfaced live in the dashboard under "Conversion
+Intelligence", or as a text report:
+
+```bash
+cd pipeline && python -m utils.intelligence
+```
+
+## Subject-line A/B testing
+
+Set **both** `SUBJECT_A` and `SUBJECT_B` in `.env` to run a 50/50 subject-line
+test (leave either blank to use the drafted subject). `{business_name}`,
+`{niche}`, and `{location}` are substituted:
+
+```
+SUBJECT_A=Quick website preview for {business_name}
+SUBJECT_B={business_name} – I built you a free site draft
+```
+
+Each cold email records which variant it used (`email_threads.subject_variant`).
+The dashboard's **Subject Line Performance** section compares sends, opens, and
+clicks per variant and highlights a winner once both variants have ≥10 sends.
+
+- **Clicks** are tracked out of the box (the self-hosted preview-link redirect).
+- **Opens** require SendGrid: sends via SendGrid enable open/click tracking, and
+  a **SendGrid Event Webhook** feeds those events back in. In the SendGrid
+  dashboard (Settings → Mail Settings → Event Webhook) point the HTTP POST URL
+  at `https://<your-domain>/webhook/sendgrid` and enable the *Opened* / *Clicked*
+  events. Optionally set `SENDGRID_WEBHOOK_VERIFICATION_KEY` to require signed
+  events. Without the webhook, the section still shows clicks; opens stay at 0.
+
+## Follow-up sequence
+
+A lead that never replies gets exactly two nudges, sent by the main loop:
+
+1. **Follow-up 1** — 3 days after the cold email: a brief plain-text bump with
+   the preview link.
+2. **Follow-up 2** — 5 days after follow-up 1: a final "last chance" note.
+
+Send timestamps are stored on the lead (`followup_1_sent` / `followup_2_sent`),
+so the sequence survives restarts and never double-sends. Follow-ups only go
+to leads still in `emailed` (any reply, bounce, or unsubscribe stops the
+sequence automatically), respect the unsubscribe hard-stop, count toward the
+same hourly/daily sending caps, and pause for leads under manual takeover.
 
 ## Observability (VoltAgent)
 

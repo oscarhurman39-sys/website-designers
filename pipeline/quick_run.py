@@ -29,12 +29,15 @@ def _print_step(label: str) -> None:
 
 def main() -> None:
     config.validate()
+    config.print_startup_diagnostics()
     db.init_db()
 
-    new_leads = db.list_leads_by_status("new")
-    if not new_leads:
+    # Prioritize brand-new leads, then ones already researched (e.g. a lead
+    # imported with a contact_email that's ready to design + send).
+    candidates = db.list_leads_by_status("new") + db.list_leads_by_status("researched")
+    if not candidates:
         print(
-            "No leads with status 'new' found. Add one first:\n"
+            "No leads with status 'new' or 'researched' found. Add one first:\n"
             "  - via the dashboard (streamlit run dashboard.py -> 'Add a lead manually')\n"
             "  - via a CSV: python -m agents.lead_agent path/to/leads.csv\n"
             "  - directly: python -c \"from utils import db; db.init_db(); "
@@ -42,16 +45,19 @@ def main() -> None:
         )
         return
 
-    lead = new_leads[0]
+    lead = candidates[0]
     print(f"Processing lead {lead['id']}: {lead['business_name']} ({lead['niche']}, {lead['location']})")
 
     # --- Step 1: LeadAgent ---------------------------------------------------
-    _print_step("Step 1/3: LeadAgent -- researching contact info")
-    try:
-        lead_agent.research_lead(lead)
-    except Exception as exc:  # noqa: BLE001 - print clearly, never crash silently
-        print(f"LeadAgent FAILED: {exc}")
-        return
+    if lead["status"] == "researched":
+        _print_step("Step 1/3: LeadAgent -- already researched, skipping")
+    else:
+        _print_step("Step 1/3: LeadAgent -- researching contact info")
+        try:
+            lead_agent.research_lead(lead)
+        except Exception as exc:  # noqa: BLE001 - print clearly, never crash silently
+            print(f"LeadAgent FAILED: {exc}")
+            return
 
     lead = db.get_lead(lead["id"])
     print(f"-> status: {lead['status']}")

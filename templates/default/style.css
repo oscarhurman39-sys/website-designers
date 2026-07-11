@@ -1,14 +1,14 @@
 :root {
-  --accent: #c1440e;
-  --accent-dark: #8a300a;
-  --bg: #f7f5f2;
+  --accent: #2563eb;
+  --accent-dark: #1e40af;
+  --bg: #f5f7fb;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-  color: #222;
+  color: #1f2937;
   background: var(--bg);
   line-height: 1.6;
 }
@@ -21,7 +21,7 @@ body {
 
 .site-header {
   background: #fff;
-  border-bottom: 1px solid #e5e5e5;
+  border-bottom: 1px solid #e5e7eb;
   position: sticky;
   top: 0;
   z-index: 10;
@@ -31,6 +31,8 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
   padding-top: 16px;
   padding-bottom: 16px;
 }
@@ -44,7 +46,7 @@ body {
 nav a {
   margin-left: 24px;
   text-decoration: none;
-  color: #333;
+  color: #374151;
   font-weight: 500;
 }
 
@@ -73,12 +75,12 @@ nav a:hover { color: var(--accent); }
 }
 
 .hero h1 {
-  font-size: 3rem;
+  font-size: 2.75rem;
   margin-bottom: 12px;
 }
 
 .hero .tagline {
-  font-size: 1.25rem;
+  font-size: 1.2rem;
   margin-bottom: 28px;
 }
 
@@ -106,6 +108,11 @@ nav a:hover { color: var(--accent); }
   color: var(--accent-dark);
 }
 
+.about p {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
 .services {
   background: #fff;
   padding: 64px 0;
@@ -121,7 +128,7 @@ nav a:hover { color: var(--accent); }
 
 .service-grid li {
   background: var(--bg);
-  border: 1px solid #e5e5e5;
+  border: 1px solid #e5e7eb;
   border-radius: 8px;
   padding: 24px 16px;
   font-weight: 600;
@@ -136,15 +143,29 @@ nav a:hover { color: var(--accent); }
 }
 
 .testimonial blockquote {
-  font-size: 1.35rem;
+  font-size: 1.3rem;
   font-style: italic;
   max-width: 700px;
   margin: 0 auto;
 }
 
+.contact .phone {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--accent-dark);
+  text-decoration: none;
+}
+
+.contact .phone:hover { text-decoration: underline; }
+
+.contact .hours {
+  margin-top: 8px;
+  color: #6b7280;
+}
+
 .site-footer {
-  background: #1a1a1a;
-  color: #ccc;
+  background: #111827;
+  color: #cbd5e1;
   text-align: center;
   padding: 28px 0;
   font-size: 0.9rem;
@@ -152,7 +173,7 @@ nav a:hover { color: var(--accent); }
 
 .preview-note {
   margin-top: 6px;
-  color: #888;
+  color: #9ca3af;
   font-size: 0.8rem;
 }
 

@@ -6,10 +6,23 @@ python-dotenv==1.0.1
 PyGithub==2.4.0
 stripe==10.12.0
 Flask==3.0.3
-streamlit==1.38.0
-pandas==2.2.3
+# streamlit/pandas are ranges, not exact pins: they ship compiled wheels per
+# Python version, and an exact old pin forces a from-source build (needs
+# Visual Studio on Windows) on Pythons newer than the pin's wheel matrix.
+# A range lets pip pick the newest compatible version with a prebuilt wheel.
+streamlit>=1.38.0,<2
+pandas>=2.2.3,<3
 huggingface_hub==0.25.2
 slack-sdk==3.33.1
+# Pre-send email verification (utils/email_verify.py): RFC-compliant syntax
+# + DNS deliverability (MX / null-MX / A-AAAA fallback / SPF). Pulls in
+# dnspython transitively.
+email-validator==2.3.0
+
+# Preferred cold-email transport (100 emails/day free tier). Optional:
+# sales_agent.py uses it only when SENDGRID_API_KEY is set, otherwise it
+# falls back to the SMTP settings in .env.
+sendgrid==6.11.0
 
 # Website preview screenshots (pipeline/utils/screenshot.py). After
 # installing, run `playwright install chromium` once (not needed if

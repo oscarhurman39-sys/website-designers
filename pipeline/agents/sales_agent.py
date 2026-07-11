@@ -18,7 +18,7 @@ from typing import Optional
 from huggingface_hub import InferenceClient
 
 import config
-from utils import compliance, db, email_utils, screenshot, tracer, tracker
+from utils import compliance, db, email_utils, email_verify, screenshot, tracer, tracker
 
 try:
     from slack_sdk import WebClient
@@ -134,15 +134,22 @@ def _build_prompt(lead: dict) -> str:
 
 def _fallback_email(lead: dict) -> tuple[str, str]:
     """Deterministic template used if the HF call fails, so a bad API day
-    never stops the pipeline from sending compliant, on-brand emails."""
-    subject = f"a free preview site for {lead['business_name']}"
+    never stops the pipeline from sending compliant, on-brand emails.
+    Deliberately short and plain -- the preview image and link do the
+    talking in the HTML layout (_build_html_body); the "see it live" link
+    line and the Cheers/Casey sign-off are appended by the send path so
+    HF-drafted bodies get them too."""
+    subject = f"I built a website for {lead['business_name']} – thoughts?"
+    # Truthful opener: only claim they have no website when research
+    # actually found none -- many leads DO have one (we scraped it).
+    if (lead.get("website_url") or "").strip():
+        noticed = f"I noticed {lead['business_name']}'s website could be working harder for you"
+    else:
+        noticed = f"I noticed {lead['business_name']} didn't have a website"
     body = (
-        f"Hi there,\n\n"
-        f"I put together a free, live website preview for {lead['business_name']} -- "
-        "no strings attached, just wanted to show you what's possible. "
-        "I noticed your current online presence could use a refresh, so I figured "
-        "I'd build one and let you take a look.\n\n"
-        "Take a look whenever you get a chance -- no pressure either way."
+        "Hi there,\n\n"
+        f"{noticed}, so I put one together. Here's what it looks like. "
+        "No cost, no catch – if you like it, it's yours."
     )
     return subject, body
 
@@ -174,31 +181,190 @@ def draft_cold_email(lead: dict) -> tuple[str, str]:
     return _parse_subject_body(raw, lead)
 
 
+# --- Plain-text variant (social-proof opener + one-word reply CTA) ------------
+# An alternative, deliberately plain-text cold email: it opens with the
+# lead's Google rating/review count as social proof, keeps the body short
+# (~100 words total), and asks for a one-word reply instead of a click.
+# Plain text (no HTML) often lands better in the primary inbox than an
+# image-heavy HTML email. Not wired into the default send path -- to use it,
+# swap draft_cold_email(...) for generate_plain_text_email(...) in
+# _send_cold_email_impl (and send with body_html=None). The CAN-SPAM footer
+# and List-Unsubscribe are still added by send_email()/send_email_sendgrid()
+# at send time, exactly as for draft_cold_email.
+
+_REPLY_CTA = "Just reply 'yes' if you're interested and I'll send over the details."
+
+
+def _social_proof_opener(lead: dict) -> str:
+    """First line referencing the lead's rating + review count, when Google
+    Places gave us both. Empty string if we have neither (the drafted body
+    then becomes the opening line)."""
+    rating = lead.get("rating")
+    reviews = lead.get("review_count")
+    if rating and reviews:
+        return f"I noticed you have {rating} stars and {reviews} reviews -- that's impressive."
+    if reviews:
+        return f"I noticed you have {reviews} reviews on Google -- that's a great reputation to build on."
+    return ""
+
+
+def _build_plain_text_prompt(lead: dict) -> str:
+    pain_point = (lead.get("pain_point") or "a slow or outdated website").strip()
+    return (
+        "<s>[INST] You write short, casual, plain-text cold outreach emails for a "
+        "freelance web designer. No hype, no HTML, no links, no signature -- sound "
+        "like a real person.\n\n"
+        "Write ONLY the middle of a cold email to a local business with these facts:\n"
+        f"- Business name: {lead['business_name']}\n"
+        f"- Niche: {lead['niche']}\n"
+        f"- Location: {lead.get('location', '')}\n"
+        f"- Something noticed about their current site/reputation: {pain_point}\n\n"
+        "The middle must:\n"
+        "- Mention that you built a free, live website preview for their business, no strings attached\n"
+        "- Be under 60 words\n"
+        "- NOT open with a stat about ratings/reviews (that line is added separately)\n"
+        "- NOT include a link, CTA, signature, or unsubscribe text (all added separately)\n\n"
+        "Respond in EXACTLY this format, nothing else:\n"
+        "Subject: <short subject line>\n\n"
+        "<email middle>\n[/INST]"
+    )
+
+
+def _fallback_plain_text(lead: dict) -> tuple[str, str]:
+    """Deterministic plain-text middle used when the HF call fails."""
+    subject = f"a quick free preview for {lead['business_name']}"
+    body = (
+        f"I put together a free, live website preview for {lead['business_name']} -- "
+        "no strings attached, just wanted to show you what's possible."
+    )
+    return subject, body
+
+
+def generate_plain_text_email(lead_data: dict) -> tuple[str, str]:
+    """Draft a ~100-word, plain-text-only cold email as (subject, body).
+
+    Structure: a social-proof opener referencing the lead's Google rating +
+    review count (when available), an HF-drafted middle, the tracked preview
+    link, and a one-word reply CTA. Plain text only -- there is no HTML part.
+    Falls back to a deterministic middle if the HF call fails, so it never
+    blocks a send. The compliance footer / List-Unsubscribe are appended by
+    send_email()/send_email_sendgrid() at send time, not here (same contract
+    as draft_cold_email)."""
+    try:
+        raw = _hf_client().text_generation(
+            _build_plain_text_prompt(lead_data), max_new_tokens=200, temperature=0.7, do_sample=True
+        )
+        subject, drafted = _parse_subject_body(raw, lead_data)
+    except Exception as exc:  # noqa: BLE001 - any HF/network failure falls back gracefully
+        print(f"[sales_agent] HF plain-text drafting failed, using fallback: {exc}")
+        subject, drafted = _fallback_plain_text(lead_data)
+
+    # Keep the middle tight so the whole email stays around 100 words once the
+    # opener, preview link, and CTA are added.
+    words = drafted.split()
+    if len(words) > 70:
+        drafted = " ".join(words[:70]) + "..."
+
+    opener = _social_proof_opener(lead_data)
+    website = db.get_website_by_lead(lead_data["id"])
+    preview_link = tracker.best_preview_link(lead_data["id"], (website or {}).get("preview_url") or "")
+    blocks = [
+        block
+        for block in (opener, drafted.strip(), f"Here's the live preview: {preview_link}", _REPLY_CTA)
+        if block
+    ]
+    return subject, "\n\n".join(blocks)
+
+
+# --- Subject-line A/B selection ----------------------------------------------
+
+class _SafeSubjectDict(dict):
+    """Leaves any unknown {placeholder} intact instead of raising KeyError,
+    so a custom subject template can't crash a send."""
+
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+def _format_subject(template: str, lead: dict) -> str:
+    return template.format_map(
+        _SafeSubjectDict(
+            business_name=lead.get("business_name", ""),
+            niche=lead.get("niche", ""),
+            location=lead.get("location", ""),
+        )
+    )
+
+
+def _pick_subject_variant() -> Optional[str]:
+    """'A' or 'B' at 50/50 when both subject templates are configured;
+    None otherwise, so the caller keeps the drafted subject (feature is
+    opt-in and falls back cleanly)."""
+    if config.SUBJECT_A and config.SUBJECT_B:
+        return random.choice(("A", "B"))
+    return None
+
+
 # --- Sending (rate-limited) ----------------------------------------------------
 
 _SCREENSHOT_CID = "preview"
 
 
-def _build_html_body(body: str, preview_link: str) -> str:
-    """HTML counterpart of the plain-text drafted body, with the cached
-    screenshot embedded as a cid: inline image (alt text: "Your new
-    website preview") linking to the same tracked preview URL as the text
-    version. Only called when a screenshot is actually available -- see
-    _send_cold_email_impl."""
+def _build_html_body(body: str, preview_link: str, with_image: bool = True) -> str:
+    """Warm, image-first HTML layout for the cold email:
+
+        greeting line -> clickable preview screenshot (the dominant visual,
+        cid: inline) -> the short drafted paragraphs -> a clear button link
+        to the live preview -> one-line sign-off.
+
+    Inline CSS only (email clients strip <style> blocks). The drafted plain
+    `body` provides the greeting/copy so both MIME parts always say the
+    same thing; when no screenshot exists (`with_image=False`) the same
+    layout renders without the image block. The compliance footer is
+    appended by the transport at send time, as for every email."""
+    escaped_link = html_module.escape(preview_link)
     paragraphs = "".join(
-        f"<p>{html_module.escape(para).replace(chr(10), '<br>')}</p>"
+        f'<p style="margin:0 0 14px 0;">{html_module.escape(para).replace(chr(10), "<br>")}</p>'
         for para in body.split("\n\n")
         if para.strip()
     )
-    escaped_link = html_module.escape(preview_link)
-    link_html = f'<p><a href="{escaped_link}">Here\'s the live preview: {escaped_link}</a></p>'
     image_html = (
-        f'<p><a href="{escaped_link}">'
-        f'<img src="cid:{_SCREENSHOT_CID}" alt="Your new website preview" '
-        'style="max-width:100%;border:1px solid #ddd;border-radius:8px;">'
-        "</a></p>"
+        f'<a href="{escaped_link}" style="display:block;margin:0 0 18px 0;">'
+        f'<img src="cid:{_SCREENSHOT_CID}" alt="Your new website preview" width="600" '
+        'style="display:block;width:100%;max-width:600px;border:1px solid #e2e2e2;border-radius:10px;">'
+        "</a>"
+        if with_image
+        else ""
     )
-    return paragraphs + link_html + image_html
+    button_html = (
+        f'<p style="margin:6px 0 18px 0;"><a href="{escaped_link}" '
+        'style="display:inline-block;background:#1d4ed8;color:#ffffff;text-decoration:none;'
+        'padding:10px 22px;border-radius:8px;font-weight:600;">See your live preview</a><br>'
+        f'<span style="font-size:12px;color:#888;">or copy this link: {escaped_link}</span></p>'
+    )
+    return (
+        '<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.55;'
+        f'color:#222;max-width:600px;">{image_html}{paragraphs}{button_html}'
+        '<p style="margin:0;">Cheers,<br>Casey</p></div>'
+    )
+
+
+def _send_via_configured_transport(**kwargs) -> str:
+    """Send through SendGrid when SENDGRID_API_KEY is configured, otherwise
+    fall back to SMTP. Both transports take the same arguments and carry the
+    same compliance guarantees (unsubscribe hard-stop, CAN-SPAM footer,
+    List-Unsubscribe header), so this is a transparent swap and returns the
+    Message-ID either way.
+
+    Prints which transport it picked, every time -- this is the one place
+    that decision is made, so it's the one place that needs to say so out
+    loud rather than leave it to be inferred from a downstream error.
+    """
+    if config.SENDGRID_API_KEY:
+        print(f"[sales_agent] Sending via SendGrid to {kwargs.get('to_addr')}")
+        return email_utils.send_email_sendgrid(**kwargs)
+    print(f"[sales_agent] SENDGRID_API_KEY not set -- sending via SMTP to {kwargs.get('to_addr')}")
+    return email_utils.send_email(**kwargs)
 
 
 def _can_send_now() -> bool:
@@ -234,20 +400,49 @@ def _send_cold_email_impl(lead: dict) -> bool:
                                notes="No usable email at send time")
         return False
 
+    # Pre-send verification (syntax + MX): a provably undeliverable address
+    # is never sent to -- bounces are what poison a sending domain's
+    # reputation. Transient DNS problems fail open inside verify_email, so
+    # this only ever rejects definitive failures.
+    sendable, verify_reason = email_verify.verify_email(email_addr)
+    if not sendable:
+        db.update_lead_status(lead["id"], "bad_email", notes=f"Email failed verification: {verify_reason}")
+        return False
+
     subject, body = draft_cold_email(lead)
-    preview_link = tracker.create_click_link(lead["id"])
-    body_with_link = f"{body}\n\nHere's the live preview: {preview_link}"
+    # Subject-line A/B test: when both templates are configured, override the
+    # drafted subject with a randomly-picked variant and remember which one
+    # (logged on the email_threads row below) so the dashboard can compare
+    # open/click rates. No-op when the feature isn't configured.
+    subject_variant = _pick_subject_variant()
+    if subject_variant:
+        template = config.SUBJECT_A if subject_variant == "A" else config.SUBJECT_B
+        subject = _format_subject(template, lead)
+    # If DesignAgent flagged that the preview's hero is a placeholder (no
+    # real photos yet), tell the prospect plainly -- appended to `body` so
+    # it lands in both the plain-text and the HTML version below.
+    image_note = (lead.get("image_note") or "").strip()
+    if image_note:
+        body = f"{body}\n\n{image_note}"
+    # The link recipients see: the tracked redirect when the webhook server
+    # is publicly reachable, otherwise the lead's real preview URL directly
+    # (a localhost tracking link would be dead for every recipient).
+    website = db.get_website_by_lead(lead["id"])
+    direct_url = (website or {}).get("preview_url") or ""
+    preview_link = tracker.best_preview_link(lead["id"], direct_url)
+    if not tracker.tracking_is_public():
+        print("[sales_agent] PUBLIC_BASE_URL is localhost -- linking straight to the preview URL (no click tracking)")
+    body_with_link = f"{body}\n\nYou can see it live here: {preview_link}\n\nCheers,\nCasey"
 
     # Embed the cached preview screenshot inline (cid:) if design_agent.py
-    # already captured one for this lead; otherwise send exactly the same
-    # plain-text-only email as before -- a missing screenshot (capture
-    # failed, or an older lead from before this feature existed) must
-    # never block or change the send itself.
+    # already captured one for this lead. A missing screenshot (capture
+    # failed, or an older lead from before this feature existed) must never
+    # block the send -- the same HTML layout goes out without the image.
     cached_screenshot = screenshot.get_cached_screenshot(lead["id"])
-    body_html = _build_html_body(body, preview_link) if cached_screenshot else None
+    body_html = _build_html_body(body, preview_link, with_image=cached_screenshot is not None)
     inline_image_path = str(cached_screenshot) if cached_screenshot else None
 
-    message_id = email_utils.send_email(
+    message_id = _send_via_configured_transport(
         to_addr=email_addr,
         subject=subject,
         body_text=body_with_link,
@@ -264,6 +459,7 @@ def _send_cold_email_impl(lead: dict) -> bool:
         from_addr=config.EMAIL_USER,
         to_addr=email_addr,
         message_id=message_id,
+        subject_variant=subject_variant or "",
     )
     db.update_lead_status(lead["id"], "emailed", notes="Cold email sent")
 
@@ -283,6 +479,109 @@ def send_next_pending() -> Optional[int]:
             continue
         if send_cold_email(lead):
             return lead["id"]
+    return None
+
+
+# --- Follow-up sequence --------------------------------------------------------
+# A lead that stays in 'emailed' (no reply -- any reply moves it to replied/
+# negotiating, a bounce to 'bounced', an unsubscribe to 'unsubscribed') gets
+# exactly two nudges: a brief plain-text follow-up FOLLOWUP_1_DAYS after the
+# cold email, and a final "last chance" note FOLLOWUP_2_DAYS after that.
+# Send timestamps live on the lead row (followup_1_sent / followup_2_sent) so
+# the sequence survives restarts and never double-sends. Follow-ups go through
+# the same transport dispatcher, count toward the same hourly/daily caps, and
+# get the same CAN-SPAM footer/unsubscribe hard-stop as every other send.
+
+FOLLOWUP_1_DAYS = 3   # days after the cold email
+FOLLOWUP_2_DAYS = 5   # days after follow-up 1
+
+_DB_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"  # SQLite datetime('now'), always UTC
+
+
+def _parse_db_timestamp(raw: str) -> Optional[datetime]:
+    """Parse a DB timestamp string into an aware UTC datetime, or None."""
+    try:
+        return datetime.strptime(raw.strip(), _DB_TIMESTAMP_FORMAT).replace(tzinfo=timezone.utc)
+    except (ValueError, AttributeError):
+        return None
+
+
+def _draft_followup(lead: dict, stage: int) -> tuple[str, str]:
+    """Deterministic (no LLM) plain-text follow-up copy. Returns (subject,
+    body) without footer -- compliance is appended at send time as usual."""
+    website = db.get_website_by_lead(lead["id"])
+    preview_link = tracker.best_preview_link(lead["id"], (website or {}).get("preview_url") or "")
+    if stage == 1:
+        subject = f"re: free website preview for {lead['business_name']}"
+        body = (
+            "Hi -- just floating this back to the top of your inbox.\n\n"
+            f"The free preview site I built for {lead['business_name']} is still live here: {preview_link}\n\n"
+            "If it's not for you, no worries at all -- a quick 'no thanks' and I'll close it out."
+        )
+    else:
+        subject = f"last one from me -- {lead['business_name']} preview"
+        body = (
+            "Hi -- last note from me, promise.\n\n"
+            f"I'll be taking the {lead['business_name']} preview site down soon: {preview_link}\n\n"
+            "If you'd like to keep it, just reply and it's yours. Otherwise I'll leave you be -- thanks for reading."
+        )
+    return subject, body
+
+
+def _send_followup(lead: dict, stage: int) -> bool:
+    """Send follow-up `stage` (1 or 2) to one lead and record it. Returns
+    True if sent. Status stays 'emailed' so a later reply/bounce is handled
+    exactly like one to the original cold email."""
+    global _next_send_allowed_at
+
+    email_addr = lead.get("contact_email") or ""
+    subject, body = _draft_followup(lead, stage)
+    message_id = _send_via_configured_transport(
+        to_addr=email_addr, subject=subject, body_text=body, lead_id=lead["id"]
+    )
+    db.insert_email_thread(
+        lead_id=lead["id"], direction="outbound", subject=subject, body=body,
+        from_addr=config.EMAIL_USER, to_addr=email_addr, message_id=message_id,
+    )
+    sent_at = datetime.now(timezone.utc).strftime(_DB_TIMESTAMP_FORMAT)
+    db.update_lead_fields(lead["id"], **{f"followup_{stage}_sent": sent_at})
+    db.log_state_history(lead["id"], "emailed", "emailed", notes=f"Follow-up {stage} sent")
+
+    _next_send_allowed_at = datetime.now(timezone.utc) + timedelta(
+        seconds=random.uniform(config.EMAIL_MIN_DELAY_SECONDS, config.EMAIL_MAX_DELAY_SECONDS)
+    )
+    return True
+
+
+def send_followups() -> Optional[int]:
+    """Send at most one due follow-up this cycle, respecting the same rate
+    limits and takeover/unsubscribe guards as cold emails. Returns the
+    lead_id followed up, or None."""
+    if not _can_send_now():
+        return None
+    now = datetime.now(timezone.utc)
+
+    for lead in db.list_leads_by_status("emailed"):
+        if is_under_takeover(lead["id"]):
+            continue
+        email_addr = lead.get("contact_email") or ""
+        if not email_addr or db.is_unsubscribed(email_addr):
+            continue
+
+        if not (lead.get("followup_1_sent") or "").strip():
+            # Follow-up 1: due FOLLOWUP_1_DAYS after the last outbound email
+            # (for an untouched 'emailed' lead, that's the cold email itself).
+            last_sent = _parse_db_timestamp(db.get_last_email_timestamp(lead["id"]) or "")
+            if last_sent and now - last_sent >= timedelta(days=FOLLOWUP_1_DAYS):
+                if _send_followup(lead, 1):
+                    return lead["id"]
+        elif not (lead.get("followup_2_sent") or "").strip():
+            # Follow-up 2: due FOLLOWUP_2_DAYS after follow-up 1 went out.
+            fu1_sent = _parse_db_timestamp(lead["followup_1_sent"])
+            if fu1_sent and now - fu1_sent >= timedelta(days=FOLLOWUP_2_DAYS):
+                if _send_followup(lead, 2):
+                    return lead["id"]
+        # Both follow-ups sent: the sequence is complete; we never nudge again.
     return None
 
 
@@ -317,7 +616,7 @@ def _send_goodbye(lead: dict) -> None:
         f"Wishing {lead['business_name']} all the best."
     )
     try:
-        message_id = email_utils.send_email(to_addr=email_addr, subject=subject, body_text=body, lead_id=lead["id"])
+        message_id = _send_via_configured_transport(to_addr=email_addr, subject=subject, body_text=body, lead_id=lead["id"])
         db.insert_email_thread(
             lead_id=lead["id"], direction="outbound", subject=subject, body=body,
             from_addr=config.EMAIL_USER, to_addr=email_addr, message_id=message_id,
@@ -348,6 +647,20 @@ def _handle_inbound_impl(lead: dict, msg) -> None:  # msg: email_utils.InboundEm
             classification=classification,
         )
         db.update_lead_status(lead["id"], "bounced", notes="Bounce/DSN detected")
+        return
+
+    # An explicit unsubscribe request (including via the mailto: unsubscribe
+    # link used when no public webhook server exists) is honored directly:
+    # mark unsubscribed so every future send hard-stops. No goodbye email --
+    # they asked for silence.
+    if re.search(r"\bunsubscribe\b|\bopt out\b|\btake me off\b", f"{msg.subject}\n{msg.body}", re.IGNORECASE):
+        db.insert_email_thread(
+            lead_id=lead["id"], direction="inbound", subject=msg.subject, body=msg.body,
+            from_addr=msg.from_addr, to_addr=msg.to_addr, message_id=msg.message_id,
+            classification="unsubscribe",
+        )
+        db.mark_unsubscribed(lead["id"], lead.get("contact_email") or msg.from_addr)
+        print(f"[sales_agent] Lead {lead['id']} unsubscribed by reply; no further emails.")
         return
 
     classification = classify_reply(msg.subject, msg.body)

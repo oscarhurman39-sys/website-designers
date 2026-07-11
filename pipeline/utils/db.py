@@ -28,13 +28,20 @@ ALLOWED_STATUSES = (
     "lost",
     "bounced",
     "unsubscribed",
+    # Established-business targeting gate (lead_agent.py): a Places listing
+    # with too few reviews or no photos is set aside rather than pursued.
+    "filtered",
+    # Pre-send verification failure (utils/email_verify.py): the address has
+    # bad syntax or its domain provably can't receive mail. Never emailed.
+    "bad_email",
 )
 
 _STATUS_LIST_SQL = ", ".join(f"'{s}'" for s in ALLOWED_STATUSES)
 
-_SCHEMA = f"""
-PRAGMA foreign_keys = ON;
-
+# The full, current leads-table definition, kept as its own constant so the
+# CHECK-constraint rebuild migration (_migrate_leads_status_check) recreates
+# the table with exactly this shape rather than a hand-copied duplicate.
+_LEADS_TABLE_SQL = f"""
 CREATE TABLE IF NOT EXISTS leads (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     business_name   TEXT NOT NULL,
@@ -46,12 +53,29 @@ CREATE TABLE IF NOT EXISTS leads (
     pain_point      TEXT,
     testimonial     TEXT,
     phone           TEXT,
+    address         TEXT,
+    opening_hours   TEXT,
+    categories      TEXT,
+    rating          REAL,
+    review_count    INTEGER,
+    reviews         TEXT,
+    image_note      TEXT,
+    ai_headline     TEXT,
+    ai_about        TEXT,
+    followup_1_sent TEXT,
+    followup_2_sent TEXT,
     status          TEXT NOT NULL DEFAULT 'new'
                     CHECK (status IN ({_STATUS_LIST_SQL})),
     unsubscribed    INTEGER NOT NULL DEFAULT 0,
     notes           TEXT,
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
+"""
+
+_SCHEMA = f"""
+PRAGMA foreign_keys = ON;
+
+{_LEADS_TABLE_SQL}
 
 CREATE TABLE IF NOT EXISTS email_threads (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -100,10 +124,22 @@ CREATE TABLE IF NOT EXISTS clicks (
     timestamp   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Email engagement events ingested from the SendGrid Event Webhook
+-- (opens/clicks/etc.). sg_event_id is SendGrid's unique per-event id, used
+-- for idempotency so the same event delivered twice is only stored once.
+CREATE TABLE IF NOT EXISTS email_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_id     INTEGER NOT NULL REFERENCES leads(id),
+    event_type  TEXT NOT NULL,
+    sg_event_id TEXT UNIQUE,
+    timestamp   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status);
 CREATE INDEX IF NOT EXISTS idx_leads_email ON leads(contact_email);
 CREATE INDEX IF NOT EXISTS idx_email_threads_lead ON email_threads(lead_id);
 CREATE INDEX IF NOT EXISTS idx_websites_lead ON websites(lead_id);
+CREATE INDEX IF NOT EXISTS idx_email_events_lead ON email_events(lead_id);
 """
 
 
@@ -113,7 +149,68 @@ def init_db(db_path: Optional[str] = None) -> None:
         conn.executescript(_SCHEMA)
         _migrate_add_column(conn, "websites", "screenshot_url", "TEXT")
         _migrate_add_column(conn, "websites", "screenshot_path", "TEXT")
+        _migrate_add_column(conn, "leads", "address", "TEXT")
+        _migrate_add_column(conn, "leads", "opening_hours", "TEXT")
+        _migrate_add_column(conn, "leads", "categories", "TEXT")
+        _migrate_add_column(conn, "leads", "rating", "REAL")
+        _migrate_add_column(conn, "leads", "review_count", "INTEGER")
+        _migrate_add_column(conn, "leads", "reviews", "TEXT")
+        _migrate_add_column(conn, "leads", "image_note", "TEXT")
+        # AI-generated (or fallback) website copy, persisted by design_agent
+        # so the dashboard can show what each preview actually says.
+        _migrate_add_column(conn, "leads", "ai_headline", "TEXT")
+        _migrate_add_column(conn, "leads", "ai_about", "TEXT")
+        # UTC timestamps ("YYYY-MM-DD HH:MM:SS") of each follow-up send;
+        # NULL/empty = not sent yet (see sales_agent.send_followups).
+        _migrate_add_column(conn, "leads", "followup_1_sent", "TEXT")
+        _migrate_add_column(conn, "leads", "followup_2_sent", "TEXT")
+        _migrate_add_column(conn, "email_threads", "subject_variant", "TEXT")
+        _migrate_leads_status_check(conn)
         conn.commit()
+
+
+def _migrate_leads_status_check(conn: sqlite3.Connection) -> None:
+    """Widen the leads.status CHECK constraint to include newer statuses
+    (e.g. 'filtered') on databases created before they existed.
+
+    SQLite can't ALTER a CHECK constraint in place, so we do the documented
+    table-rebuild: rename the old table aside, recreate it with the current
+    definition, copy every row across, drop the old one. Idempotent -- it's
+    a no-op once the live constraint already lists 'filtered'. Runs with
+    foreign keys off (executescript COMMITs first, so the PRAGMA takes)
+    because child tables reference leads(id); ids are preserved by the
+    column-for-column copy, so those references stay valid."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'leads'"
+    ).fetchone()
+    if row is None:
+        return  # no table yet; the fresh CREATE above will carry the full constraint
+    live_sql = row["sql"] or ""
+    if all(f"'{status}'" in live_sql for status in ALLOWED_STATUSES):
+        return  # live constraint already covers every current status
+
+    # Copy only columns that exist on the old table (image_note was just
+    # added above, so both sides have it; any columns the new canonical
+    # shape adds are left to their defaults on rows copied across).
+    old_cols = [r["name"] for r in conn.execute("PRAGMA table_info(leads)").fetchall()]
+    collist = ", ".join(old_cols)
+    # Build the new table under a temp name, copy into it, drop the old
+    # table, then rename the new one into place. This ordering matters:
+    # renaming the *original* leads table would make SQLite auto-rewrite
+    # child tables' foreign keys to follow it (they reference "leads"), so
+    # we instead leave "leads" as the name the children point at and swap
+    # the table underneath it.
+    new_table_sql = _LEADS_TABLE_SQL.replace(
+        "CREATE TABLE IF NOT EXISTS leads", "CREATE TABLE _leads_new"
+    )
+    conn.executescript(
+        "PRAGMA foreign_keys=OFF;\n"
+        f"{new_table_sql}\n"
+        f"INSERT INTO _leads_new ({collist}) SELECT {collist} FROM leads;\n"
+        "DROP TABLE leads;\n"
+        "ALTER TABLE _leads_new RENAME TO leads;\n"
+        "PRAGMA foreign_keys=ON;\n"
+    )
 
 
 def _migrate_add_column(conn: sqlite3.Connection, table: str, column: str, coltype: str) -> None:
@@ -255,13 +352,14 @@ def insert_email_thread(
     to_addr: str,
     message_id: str = "",
     classification: str = "",
+    subject_variant: str = "",
 ) -> int:
     with get_connection() as conn:
         cur = conn.execute(
             """INSERT INTO email_threads
-               (lead_id, direction, message_id, subject, body, from_addr, to_addr, classification)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (lead_id, direction, message_id, subject, body, from_addr, to_addr, classification),
+               (lead_id, direction, message_id, subject, body, from_addr, to_addr, classification, subject_variant)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (lead_id, direction, message_id, subject, body, from_addr, to_addr, classification, subject_variant),
         )
         return cur.lastrowid
 
@@ -352,6 +450,69 @@ def mark_website_transferred(lead_id: int) -> None:
 def log_click(lead_id: int) -> None:
     with get_connection() as conn:
         conn.execute("INSERT INTO clicks (lead_id) VALUES (?)", (lead_id,))
+
+
+# --- Email engagement events (SendGrid webhook) + subject-line A/B stats ------
+
+def record_email_event(lead_id: int, event_type: str, sg_event_id: str = "") -> None:
+    """Record an engagement event (open/click/...) from the SendGrid Event
+    Webhook. Idempotent on sg_event_id: the same event redelivered is stored
+    once. An empty sg_event_id is stored as NULL (SQLite UNIQUE permits many
+    NULLs), so events without an id are never silently deduped against each
+    other."""
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO email_events (lead_id, event_type, sg_event_id) VALUES (?, ?, ?)",
+            (lead_id, event_type, sg_event_id or None),
+        )
+
+
+def _lead_variant_map(conn: sqlite3.Connection) -> dict[int, str]:
+    """lead_id -> the A/B subject variant it was sent, from its most recent
+    outbound email that carried one."""
+    mapping: dict[int, str] = {}
+    for row in conn.execute(
+        "SELECT lead_id, subject_variant FROM email_threads "
+        "WHERE direction = 'outbound' AND subject_variant IN ('A', 'B') "
+        "ORDER BY timestamp ASC"
+    ):
+        mapping[row["lead_id"]] = row["subject_variant"]  # later rows overwrite -> most recent wins
+    return mapping
+
+
+def subject_variant_stats() -> dict[str, dict[str, int]]:
+    """Per-variant engagement for the subject-line A/B test.
+
+    Returns {"A": {...}, "B": {...}} where each dict has: sends (outbound
+    emails tagged with that variant), opens and clicks (distinct leads of
+    that variant that opened / clicked). Opens come from SendGrid webhook
+    events (email_events); clicks from the self-hosted preview-link tracker
+    (clicks table) -- so clicks are available even without SendGrid, opens
+    only once the Event Webhook is wired up."""
+    stats = {v: {"sends": 0, "opens": 0, "clicks": 0} for v in ("A", "B")}
+    with get_connection() as conn:
+        for row in conn.execute(
+            "SELECT subject_variant AS v, COUNT(*) AS n FROM email_threads "
+            "WHERE direction = 'outbound' AND subject_variant IN ('A', 'B') GROUP BY subject_variant"
+        ):
+            stats[row["v"]]["sends"] = row["n"]
+
+        variant_of = _lead_variant_map(conn)
+
+        opened_leads = {r["lead_id"] for r in conn.execute(
+            "SELECT DISTINCT lead_id FROM email_events WHERE event_type = 'open'"
+        )}
+        for lead_id in opened_leads:
+            v = variant_of.get(lead_id)
+            if v in stats:
+                stats[v]["opens"] += 1
+
+        clicked_leads = {r["lead_id"] for r in conn.execute("SELECT DISTINCT lead_id FROM clicks")}
+        for lead_id in clicked_leads:
+            v = variant_of.get(lead_id)
+            if v in stats:
+                stats[v]["clicks"] += 1
+    return stats
 
 
 def get_last_email_timestamp(lead_id: int) -> Optional[str]:

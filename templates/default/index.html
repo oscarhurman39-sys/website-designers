@@ -3,17 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{{ business_name }} | Gym</title>
+  <title>{{ business_name }}</title>
   <link rel="stylesheet" href="style.css">
+  <!-- preview_url: {{ preview_url }} -->
 </head>
 <body>
   <header class="site-header">
     <div class="container header-inner">
-      <span class="logo">🏋️ {{ business_name }}</span>
+      <span class="logo">{{ business_name }}</span>
       <nav>
-        <a href="#services">Services</a>
         <a href="#about">About</a>
-        <a href="#testimonial">Reviews</a>
+        <a href="#services">Services</a>
+        <a href="#reviews">Reviews</a>
         <a href="#contact">Contact</a>
       </nav>
     </div>
@@ -21,8 +22,8 @@
 
   <section class="hero" style="background: linear-gradient(135deg, {{ hero_gradient_a }}, {{ hero_gradient_b }});">
     <div class="container hero-inner">
-      <h1>{{ business_name }}</h1>
-      <p class="tagline">Train smarter in {{ location }} -- coaching that gets results</p>
+      <h1>{{ hero_headline | default(business_name) }}</h1>
+      <p class="tagline">Trusted local service in {{ location | default('your area') }}</p>
       <a class="cta" href="#contact">Get In Touch</a>
     </div>
   </section>
@@ -36,17 +37,17 @@
     <div class="container">
       <h2>What We Offer</h2>
       <ul class="service-grid">
-        <li>Personal Training</li>
-        <li>Group Classes</li>
-        <li>Open Gym Access</li>
-        <li>Nutrition Coaching</li>
+        <li>Quality Work</li>
+        <li>Fair Pricing</li>
+        <li>Fast Response</li>
+        <li>Local &amp; Trusted</li>
       </ul>
     </div>
   </section>
 
-  <section id="testimonial" class="testimonial">
+  <section id="reviews" class="testimonial">
     <div class="container">
-      <blockquote>&ldquo;{{ testimonial }}&rdquo;</blockquote>
+      <blockquote>&ldquo;{{ reviews | default(testimonial) }}&rdquo;</blockquote>
     </div>
   </section>
 
@@ -71,7 +72,8 @@
     <div class="container">
       <h2>Get In Touch</h2>
       <p>{{ location }}</p>
-      <p><a href="tel:{{ phone }}">{{ phone }}</a></p>
+      <p><a class="phone" href="tel:{{ phone }}">{{ phone }}</a></p>
+      <p class="hours">{{ opening_hours | default('Contact us for hours') }}</p>
     </div>
   </section>
 

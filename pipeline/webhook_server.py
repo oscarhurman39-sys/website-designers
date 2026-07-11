@@ -4,6 +4,7 @@
   GET  /unsubscribe/<token>                -- one-click CAN-SPAM unsubscribe
   GET  /screenshots/<lead_id>.png          -- serves a cached preview screenshot
   POST /webhook/stripe                     -- Stripe `checkout.session.completed` events
+  POST /webhook/sendgrid                   -- SendGrid Event Webhook (opens/clicks)
 
 Run standalone with `python webhook_server.py` (dev server) or behind a real
 WSGI server (gunicorn/uwsgi) in production. Must be reachable at
@@ -85,7 +86,61 @@ def create_app() -> Flask:
                     )
         return "", 200
 
+    @app.route("/webhook/sendgrid", methods=["POST"])
+    def sendgrid_events() -> tuple[str, int]:
+        """Ingest SendGrid Event Webhook batches (opens, clicks, etc.).
+
+        Each event carries the `lead_id` custom arg we set on the outgoing
+        message (see email_utils.send_email_sendgrid), so we can attribute it
+        to a lead and store it in email_events for the dashboard's subject-
+        line A/B stats. Signature-verified when a verification key is set;
+        otherwise accepted as-is (see config.SENDGRID_WEBHOOK_VERIFICATION_KEY)."""
+        payload = request.get_data()
+        if config.SENDGRID_WEBHOOK_VERIFICATION_KEY and not _verify_sendgrid_signature(payload, request.headers):
+            abort(403)
+
+        events = request.get_json(silent=True)
+        if not isinstance(events, list):
+            abort(400)
+
+        for ev in events:
+            if not isinstance(ev, dict):
+                continue
+            lead_id_raw = str(ev.get("lead_id", "")).strip()
+            event_type = str(ev.get("event", "")).strip()
+            if not lead_id_raw.isdigit() or not event_type:
+                continue  # e.g. SendGrid's test event, which carries no lead_id
+            try:
+                db.record_email_event(int(lead_id_raw), event_type, str(ev.get("sg_event_id", "")))
+            except Exception:  # noqa: BLE001 - one bad event must not fail the whole batch (SendGrid would retry it)
+                continue
+        # 2xx so SendGrid doesn't retry a batch we've already processed.
+        return "", 204
+
     return app
+
+
+def _verify_sendgrid_signature(payload: bytes, headers) -> bool:
+    """Verify a SendGrid signed-event-webhook request against the configured
+    ECDSA public key. Returns False on any error (missing headers, bad
+    signature, helper unavailable) so verification failures fail closed."""
+    try:
+        # Correct path is sendgrid.helpers.eventwebhook (verified against the
+        # installed package + sendgrid-python source) -- NOT sendgrid.event_webhook.
+        from sendgrid.helpers.eventwebhook import EventWebhook
+
+        ew = EventWebhook()
+        public_key = ew.convert_public_key_to_ecdsa(config.SENDGRID_WEBHOOK_VERIFICATION_KEY)
+        return bool(
+            ew.verify_signature(
+                payload.decode("utf-8"),
+                headers.get("X-Twilio-Email-Event-Webhook-Signature", ""),
+                headers.get("X-Twilio-Email-Event-Webhook-Timestamp", ""),
+                public_key,
+            )
+        )
+    except Exception:  # noqa: BLE001 - any verification error is a rejection
+        return False
 
 
 app = create_app()
