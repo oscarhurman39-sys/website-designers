@@ -91,6 +91,21 @@ def main() -> None:
     config.print_startup_diagnostics()
     db.init_db()
 
+    # The self-send trap: mail sent via a third party (SendGrid) "from" the
+    # same mailbox it's addressed to looks like spoofing to Gmail, which
+    # discards it silently -- no inbox, no spam, no bounce. Exactly the
+    # hardest symptom to diagnose, so call it out before sending.
+    from_addr = (config.SENDGRID_FROM_EMAIL or config.EMAIL_USER or "").strip().lower()
+    if from_addr and from_addr == args.email.strip().lower():
+        bar = "!" * 70
+        print(
+            f"{bar}\nWARNING: From and To are the SAME mailbox ({from_addr}).\n"
+            "Gmail treats third-party mail 'from yourself' as spoofing and usually\n"
+            "discards it with no trace -- no inbox, no spam, no bounce. Send this\n"
+            "test to a DIFFERENT address you own, or (the real fix) authenticate a\n"
+            f"domain in SendGrid and send from casey@yourdomain instead.\n{bar}"
+        )
+
     # The '202 accepted but nothing arrives' check: is this address on a
     # SendGrid suppression list from an earlier bounce?
     if config.SENDGRID_API_KEY and not config.DRY_RUN:
