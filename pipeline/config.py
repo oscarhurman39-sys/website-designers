@@ -70,6 +70,10 @@ WEBSITE_PRICE_USD: int = int(os.getenv("WEBSITE_PRICE_USD", "750") or 750)
 # the amount actually charged via Stripe checkout once a lead says yes.
 WEBSITE_OFFER_PRICE: int = int(os.getenv("WEBSITE_OFFER_PRICE", "750") or 750)
 
+# --- SendGrid configuration (optional) ----------------------------------------
+SENDGRID_API_KEY: str = os.getenv("SENDGRID_API_KEY", "")
+SENDGRID_FROM_EMAIL: str = os.getenv("SENDGRID_FROM_EMAIL", "")
+
 # --- VoltAgent observability (optional) -------------------------------------
 # When both keys are set, pipeline/utils/tracer.py mirrors every agent/tool
 # span to VoltAgent Cloud in addition to the always-on local trace file
