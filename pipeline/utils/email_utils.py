@@ -258,7 +258,7 @@ def send_email_sendgrid(
     # Send via SendGrid
     try:
         logger.debug("Connecting to SendGrid API...")
-        sg = SendGridAPIClient(config.SENDGRID_API_KEY, request_headers={"timeout": 30})
+        sg = SendGridAPIClient(config.SENDGRID_API_KEY)
         response = sg.send(mail)
         
         if response.status_code != 202:
