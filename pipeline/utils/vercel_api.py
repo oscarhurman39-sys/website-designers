@@ -72,6 +72,15 @@ def deploy_files(project_name: str, files: dict[str, str]) -> dict:
     deployment_id = data["id"]
     url = data.get("url", "")
 
+    # Make the preview actually viewable by strangers. Vercel enables
+    # "Vercel Authentication" deployment protection by default on new
+    # projects -- a real emailed screenshot from this pipeline showed the
+    # Vercel login wall instead of the site, so leads clicking the link hit
+    # the same wall. ssoProtection=null disables it (per Vercel's Projects
+    # API docs; not live-verifiable from the build sandbox). Failures are
+    # non-fatal but loudly explain the manual dashboard fix.
+    _disable_deployment_protection(project_name)
+
     final_state = _poll_until_ready(deployment_id)
 
     return {
@@ -132,6 +141,34 @@ def _public_url(deployment_id: str, project_name: str, fallback_url: str) -> str
     except requests.RequestException:
         pass
     return fallback_url
+
+
+def _disable_deployment_protection(project_name: str) -> None:
+    """Turn off Vercel Authentication for a preview project so anonymous
+    visitors (the leads we email) can open it. Per Vercel's Projects API
+    (PATCH /v9/projects/{name}, body {"ssoProtection": null}); could not be
+    live-verified from the build sandbox (no route to api.vercel.com), so
+    any failure prints the exact manual dashboard path instead of raising."""
+    try:
+        resp = requests.patch(
+            f"{_API_BASE}/v9/projects/{_sanitize_project_name(project_name)}",
+            headers=_headers(),
+            params=_team_params(),
+            json={"ssoProtection": None},
+            timeout=30,
+        )
+        if resp.status_code >= 400:
+            print(
+                f"[vercel_api] Could not disable deployment protection for '{project_name}' "
+                f"(HTTP {resp.status_code}). Recipients will hit a Vercel login wall until you "
+                "disable it manually: Vercel dashboard -> project -> Settings -> "
+                "Deployment Protection -> Vercel Authentication -> Disabled."
+            )
+    except requests.RequestException as exc:
+        print(
+            f"[vercel_api] Deployment-protection request failed ({exc}) -- if the preview shows "
+            "a Vercel login page, disable protection manually in the project's settings."
+        )
 
 
 def _poll_until_ready(deployment_id: str) -> str:

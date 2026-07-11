@@ -32,6 +32,34 @@ def _print_step(label: str) -> None:
     print(f"\n{'=' * 60}\n{label}\n{'=' * 60}")
 
 
+def _check_preview_is_public(preview_url: str) -> None:
+    """Fetch the deployed preview exactly like an emailed lead would (no
+    auth, no cookies). A 401/403 means Vercel deployment protection is
+    still walling it off -- exactly what produced the Vercel login page in
+    a real emailed screenshot -- so say so loudly instead of letting a
+    login wall go out in a cold email."""
+    import requests
+
+    try:
+        resp = requests.get(preview_url, timeout=25)
+    except requests.RequestException as exc:
+        print(f"-> public reachability: could not check ({exc})")
+        return
+    if resp.status_code in (401, 403):
+        bar = "!" * 70
+        print(
+            f"{bar}\nPREVIEW IS NOT PUBLIC (HTTP {resp.status_code}): anyone clicking the emailed link\n"
+            "gets a Vercel login wall, not the website. The pipeline now tries to\n"
+            "disable this automatically; since it's still on, turn it off manually:\n"
+            "Vercel dashboard -> this project -> Settings -> Deployment Protection ->\n"
+            f"Vercel Authentication -> Disabled. Then rerun this test.\n{bar}"
+        )
+    elif resp.status_code < 400 and "web design team" in resp.text:
+        print("-> public reachability: OK (loads without login, shows the generated site)")
+    else:
+        print(f"-> public reachability: unexpected response (HTTP {resp.status_code}) -- open the URL in a private/incognito window to inspect")
+
+
 def _check_and_clear_suppressions(email: str) -> None:
     """A single historical bounce puts an address on SendGrid's suppression
     lists, after which every send to it returns 202 and is silently
@@ -92,6 +120,7 @@ def main() -> None:
         else:
             print("-> screenshot: NOT captured (email goes out without the preview image; "
                   "see the [design_agent] warning above for why)")
+        _check_preview_is_public(website["preview_url"])
     if lead["status"] != "designed":
         print(f"Stopping -- lead did not reach 'designed' (got {lead['status']!r}).")
         raise SystemExit(1)
@@ -112,9 +141,17 @@ def main() -> None:
         )
     else:
         if config.SENDGRID_API_KEY:
-            print("\nAsking SendGrid what happened to the message (waiting 15s for events)...")
-            time.sleep(15)
-            events = sendgrid_diagnostics.try_activity_lookup(args.email)
+            # Bounce/delivered events can take a minute to register; poll a
+            # few times rather than sampling once and printing 'processing'.
+            print("\nAsking SendGrid what happened to the message (polling up to 60s)...")
+            events = None
+            for _ in range(4):
+                time.sleep(15)
+                events = sendgrid_diagnostics.try_activity_lookup(args.email)
+                if events is None:
+                    break  # Activity API unavailable on this plan; stop polling
+                if events and all(ev["status"] != "processing" for ev in events):
+                    break
             if events:
                 for ev in events:
                     print(f"  - status={ev['status']}  subject={ev['subject']!r}  last_event={ev['last_event_time']}")
