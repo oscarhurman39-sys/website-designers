@@ -65,6 +65,10 @@ UNSPLASH_ACCESS_KEY: str = os.getenv("UNSPLASH_ACCESS_KEY", "")
 DB_PATH: str = os.getenv("DB_PATH", "").strip() or str(Path(__file__).resolve().parent / "leads.db")
 PUBLIC_BASE_URL: str = (os.getenv("PUBLIC_BASE_URL", "").strip() or "http://localhost:5000").rstrip("/")
 WEBSITE_PRICE_USD: int = int(os.getenv("WEBSITE_PRICE_USD", "750") or 750)
+# Discounted price quoted in cold emails for the pre-built draft (see
+# sales_agent.py's offer copy). Separate from WEBSITE_PRICE_USD, which is
+# the amount actually charged via Stripe checkout once a lead says yes.
+WEBSITE_OFFER_PRICE: int = int(os.getenv("WEBSITE_OFFER_PRICE", "750") or 750)
 
 # --- VoltAgent observability (optional) -------------------------------------
 # When both keys are set, pipeline/utils/tracer.py mirrors every agent/tool

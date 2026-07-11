@@ -177,28 +177,51 @@ def draft_cold_email(lead: dict) -> tuple[str, str]:
 # --- Sending (rate-limited) ----------------------------------------------------
 
 _SCREENSHOT_CID = "preview"
+_SENDER_NAME = "Casey"
+_STANDARD_BUILD_PRICE = "£2,000"
 
 
-def _build_html_body(body: str, preview_link: str) -> str:
-    """HTML counterpart of the plain-text drafted body, with the cached
-    screenshot embedded as a cid: inline image (alt text: "Your new
-    website preview") linking to the same tracked preview URL as the text
-    version. Only called when a screenshot is actually available -- see
-    _send_cold_email_impl."""
-    paragraphs = "".join(
-        f"<p>{html_module.escape(para).replace(chr(10), '<br>')}</p>"
-        for para in body.split("\n\n")
-        if para.strip()
+def _intro_line(business_name: str) -> str:
+    """Plain-text greeting that always sits above the screenshot image."""
+    return (
+        f"Hi there, I'm a local web designer. I noticed {business_name} didn't "
+        "have a website yet, so I built a draft for you."
     )
+
+
+def _offer_paragraphs(preview_link: str) -> list[str]:
+    """The simplified offer copy shown below the screenshot: reply-to-buy,
+    two-tier pricing (anchor vs. WEBSITE_OFFER_PRICE), and the live link."""
+    return [
+        "If you'd like to own it, just reply YES. I'll connect your domain and make any changes you'd like.",
+        f"Standard custom build: {_STANDARD_BUILD_PRICE} (4 weeks)\n"
+        f"This pre-built draft: £{config.WEBSITE_OFFER_PRICE:,} (yours today)",
+        f"View the live site: {preview_link}",
+        f"Cheers, {_SENDER_NAME}",
+    ]
+
+
+def _plain_text_body(business_name: str, preview_link: str) -> str:
+    return "\n\n".join([_intro_line(business_name), *_offer_paragraphs(preview_link)])
+
+
+def _build_html_body(business_name: str, preview_link: str) -> str:
+    """Intro greeting, then the cached screenshot, then the offer copy --
+    only called when a screenshot is actually available; see
+    _send_cold_email_impl."""
     escaped_link = html_module.escape(preview_link)
-    link_html = f'<p><a href="{escaped_link}">Here\'s the live preview: {escaped_link}</a></p>'
+    intro_html = f"<p>{html_module.escape(_intro_line(business_name))}</p>"
     image_html = (
         f'<p><a href="{escaped_link}">'
         f'<img src="cid:{_SCREENSHOT_CID}" alt="Your new website preview" '
         'style="max-width:100%;border:1px solid #ddd;border-radius:8px;">'
         "</a></p>"
     )
-    return paragraphs + link_html + image_html
+    offer_html = "".join(
+        f"<p>{html_module.escape(para).replace(chr(10), '<br>')}</p>"
+        for para in _offer_paragraphs(preview_link)
+    )
+    return intro_html + image_html + offer_html
 
 
 def _can_send_now() -> bool:
@@ -234,9 +257,9 @@ def _send_cold_email_impl(lead: dict) -> bool:
                                notes="No usable email at send time")
         return False
 
-    subject, body = draft_cold_email(lead)
+    subject = f"I built a website for {lead['business_name']}"
     preview_link = tracker.create_click_link(lead["id"])
-    body_with_link = f"{body}\n\nHere's the live preview: {preview_link}"
+    body_with_link = _plain_text_body(lead["business_name"], preview_link)
 
     # Embed the cached preview screenshot inline (cid:) if design_agent.py
     # already captured one for this lead; otherwise send exactly the same
@@ -244,7 +267,7 @@ def _send_cold_email_impl(lead: dict) -> bool:
     # failed, or an older lead from before this feature existed) must
     # never block or change the send itself.
     cached_screenshot = screenshot.get_cached_screenshot(lead["id"])
-    body_html = _build_html_body(body, preview_link) if cached_screenshot else None
+    body_html = _build_html_body(lead["business_name"], preview_link) if cached_screenshot else None
     inline_image_path = str(cached_screenshot) if cached_screenshot else None
 
     message_id = email_utils.send_email(
