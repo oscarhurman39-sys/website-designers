@@ -337,7 +337,12 @@ def _send_cold_email_impl(lead: dict) -> bool:
         return False
 
     subject = f"I built a website for {lead['business_name']}"
-    preview_link = tracker.create_click_link(lead["id"])
+    # Link straight to the actual Vercel preview (from the websites table)
+    # rather than the click-tracked localhost:5000/click redirect, so the
+    # link in the email is the real, shareable site URL. Falls back to the
+    # tracked link only if no website record/preview_url exists yet.
+    website = db.get_website_by_lead(lead["id"])
+    preview_link = website["preview_url"] if website and website.get("preview_url") else tracker.create_click_link(lead["id"])
     city = lead.get("location") or "your area"
     body_with_link = _plain_text_body(lead["business_name"], preview_link, city)
 
