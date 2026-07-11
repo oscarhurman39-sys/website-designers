@@ -128,6 +128,9 @@ def send_email_sendgrid(
     Enables open and click tracking. Inline images are embedded with the given
     Content-ID; `body_html` must reference them as `cid:<inline_image_cid>`.
 
+    Uses RFC 8058-compliant List-Unsubscribe headers with one-click + mailto
+    fallback, matching the compliance pattern in send_email().
+
     Args:
         to_addr: Recipient email address.
         subject: Email subject line.
@@ -169,6 +172,8 @@ def send_email_sendgrid(
             TrackingSettings,
             OpenTracking,
             ClickTracking,
+            ListUnsubscribe,
+            ListUnsubscribeEmail,
         )
     except ImportError:
         raise RuntimeError(
@@ -196,12 +201,26 @@ def send_email_sendgrid(
         html_content=html_content,
     )
 
-    # Set custom Message-ID and List-Unsubscribe headers
+    # Set Message-ID header
     mail.extra_headers = {
         "Message-ID": message_id,
-        "List-Unsubscribe": compliance.list_unsubscribe_header(lead_id),
         "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
     }
+
+    # Use native SendGrid ListUnsubscribe with RFC 8058-compliant format:
+    # List-Unsubscribe: <https://example.com/unsubscribe/token>, <mailto:admin@example.com?subject=unsubscribe>
+    unsubscribe_url = compliance.create_unsubscribe_link(lead_id)
+    admin_email = config.ADMIN_EMAIL
+    
+    # SendGrid's ListUnsubscribe class automatically formats the header correctly
+    mail.list_unsubscribe = ListUnsubscribe(
+        email=ListUnsubscribeEmail(email=admin_email)
+    )
+    
+    # Manually add the HTTP URL to extra_headers since ListUnsubscribe(email=...) 
+    # doesn't include the URL directly in its output. We combine both the URL
+    # and email fallback per RFC 8058.
+    mail.extra_headers["List-Unsubscribe"] = f"<{unsubscribe_url}>, <mailto:{admin_email}?subject=unsubscribe>"
 
     # Enable open and click tracking
     mail.mail_settings = MailSettings()
@@ -217,15 +236,13 @@ def send_email_sendgrid(
         mime_type = _get_mime_type(image_path.suffix)
 
         attachment = Attachment(
-            file_content=FileContent(
-                image_bytes
-            ),
+            file_content=FileContent(image_bytes),
             file_name=FileName(image_path.name),
             file_type=FileType(mime_type),
             disposition=Disposition("inline"),
             content_id=inline_image_cid,
         )
-        mail.attachment = attachment
+        mail.add_attachment(attachment)
 
     # Send via SendGrid
     try:
