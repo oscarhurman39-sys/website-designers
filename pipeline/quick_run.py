@@ -31,7 +31,7 @@ def main() -> None:
     config.validate()
     db.init_db()
 
-    new_leads = db.list_leads_by_status("new")
+    new_leads = db.list_leads_by_status("researched")
     if not new_leads:
         print(
             "No leads with status 'new' found. Add one first:\n"
