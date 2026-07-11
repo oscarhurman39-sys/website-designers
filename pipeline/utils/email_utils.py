@@ -165,6 +165,10 @@ def send_email_sendgrid(
             FileName,
             FileType,
             Disposition,
+            MailSettings,
+            TrackingSettings,
+            OpenTracking,
+            ClickTracking,
         )
     except ImportError:
         raise RuntimeError(
@@ -200,8 +204,10 @@ def send_email_sendgrid(
     }
 
     # Enable open and click tracking
-    mail.mail_settings.tracking_settings.open_tracking.enable = True
-    mail.mail_settings.tracking_settings.click_tracking.enable = True
+    mail.mail_settings = MailSettings()
+    mail.mail_settings.tracking_settings = TrackingSettings()
+    mail.mail_settings.tracking_settings.open_tracking = OpenTracking(enable=True)
+    mail.mail_settings.tracking_settings.click_tracking = ClickTracking(enable=True)
 
     # Attach inline image if provided
     if inline_image_path:
