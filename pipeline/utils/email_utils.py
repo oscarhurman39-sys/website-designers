@@ -28,6 +28,21 @@ from email.mime.text import MIMEText
 from email.utils import formatdate, make_msgid, parseaddr
 from pathlib import Path
 from typing import Optional
+import base64
+
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import (
+    Mail,
+    Attachment,
+    FileContent,
+    FileName,
+    FileType,
+    Disposition,
+    MailSettings,
+    TrackingSettings,
+    OpenTracking,
+    ClickTracking,
+)
 
 import config
 from utils import compliance
@@ -178,27 +193,6 @@ def send_email_sendgrid(
     if inline_image_path and not body_html:
         raise ValueError("inline_image_path requires body_html (the image is referenced via cid: inside it).")
 
-    try:
-        from sendgrid import SendGridAPIClient
-        from sendgrid.helpers.mail import (
-            Mail,
-            Attachment,
-            FileContent,
-            FileName,
-            FileType,
-            Disposition,
-            MailSettings,
-            TrackingSettings,
-            OpenTracking,
-            ClickTracking,
-            ListUnsubscribe,
-            ListUnsubscribeEmail,
-        )
-    except ImportError:
-        raise RuntimeError(
-            "SendGrid SDK not installed. Install with: pip install sendgrid"
-        )
-
     logger.info(f"Sending SendGrid email to {to_addr} with subject: {subject}")
 
     # Generate message ID in the same format as send_email() for consistency
@@ -228,19 +222,10 @@ def send_email_sendgrid(
         "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
     }
 
-    # Use native SendGrid ListUnsubscribe with RFC 8058-compliant format:
     # List-Unsubscribe: <https://example.com/unsubscribe/token>, <mailto:admin@example.com?subject=unsubscribe>
     unsubscribe_url = compliance.create_unsubscribe_link(lead_id)
     admin_email = config.ADMIN_EMAIL
-    
-    # SendGrid's ListUnsubscribe class automatically formats the header correctly
-    mail.list_unsubscribe = ListUnsubscribe(
-        email=ListUnsubscribeEmail(email=admin_email)
-    )
-    
-    # Manually add the HTTP URL to extra_headers since ListUnsubscribe(email=...) 
-    # doesn't include the URL directly in its output. We combine both the URL
-    # and email fallback per RFC 8058.
+
     mail.extra_headers["List-Unsubscribe"] = f"<{unsubscribe_url}>, <mailto:{admin_email}?subject=unsubscribe>"
 
     # Enable open and click tracking
@@ -256,8 +241,13 @@ def send_email_sendgrid(
         # Determine MIME type from file extension
         mime_type = _get_mime_type(image_path.suffix)
 
+        # SendGrid's FileContent expects a base64-encoded string, not raw bytes.
+        # Base64-encode the image bytes and decode to an ASCII string so the
+        # SendGrid helper can JSON-serialize it without errors.
+        image_b64 = base64.b64encode(image_bytes).decode("ascii")
+
         attachment = Attachment(
-            file_content=FileContent(image_bytes),
+            file_content=FileContent(image_b64),
             file_name=FileName(image_path.name),
             file_type=FileType(mime_type),
             disposition=Disposition("inline"),
