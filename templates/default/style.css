@@ -1,0 +1,24 @@
+/* Small, hand-authored flourishes layered on top of Tailwind (loaded via
+   CDN in index.html). Tailwind utility classes do almost all of the
+   styling here on purpose -- this file intentionally stays minimal. */
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+blockquote {
+  quotes: none;
+}
+
+/* Dark gradient + subtle diagonal-stripe pattern -- no stock photo, so it
+   never risks looking like someone else's van/shopfront. */
+.hero-pattern {
+  background-color: #0f172a;
+  background-image:
+    repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.04) 0, rgba(255, 255, 255, 0.04) 1px, transparent 1px, transparent 24px),
+    linear-gradient(135deg, #1e293b, #0f172a);
+}

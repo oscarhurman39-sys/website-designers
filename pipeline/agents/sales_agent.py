@@ -177,28 +177,94 @@ def draft_cold_email(lead: dict) -> tuple[str, str]:
 # --- Sending (rate-limited) ----------------------------------------------------
 
 _SCREENSHOT_CID = "preview"
+_SENDER_NAME = "Casey"
 
 
-def _build_html_body(body: str, preview_link: str) -> str:
-    """HTML counterpart of the plain-text drafted body, with the cached
-    screenshot embedded as a cid: inline image (alt text: "Your new
-    website preview") linking to the same tracked preview URL as the text
-    version. Only called when a screenshot is actually available -- see
-    _send_cold_email_impl."""
-    paragraphs = "".join(
-        f"<p>{html_module.escape(para).replace(chr(10), '<br>')}</p>"
-        for para in body.split("\n\n")
-        if para.strip()
+def _intro_line(business_name: str) -> str:
+    """Plain-text greeting that always sits above the screenshot image --
+    frames this as solving a discoverability problem, not just a sales pitch."""
+    return (
+        f"I noticed people searching for {business_name} only find your Google "
+        "listing. So I built a site that could help you appear more professional "
+        "online."
     )
+
+
+_CHECKLIST_HEADER = "What we improved"
+
+
+def _checklist_items(city: str) -> list[str]:
+    return [
+        "Mobile-friendly design",
+        "Faster page speed",
+        "Clear calls-to-action",
+        f"Local SEO for {city}",
+        "Professional, trust-building look",
+    ]
+
+
+def _checklist_paragraph(city: str) -> str:
+    """Plain-text equivalent of the HTML checklist card, placed right
+    after the intro (plain text has no screenshot to sit it under)."""
+    lines = "\n".join(f"✅ {item}" for item in _checklist_items(city))
+    return f"{_CHECKLIST_HEADER}:\n{lines}"
+
+
+def _checklist_html(city: str) -> str:
+    """Light-grey rounded card listing what was improved, shown right
+    after the screenshot."""
+    items_html = "".join(
+        f'<li style="padding:2px 0;">&#9989; {html_module.escape(item)}</li>'
+        for item in _checklist_items(city)
+    )
+    return (
+        '<div style="background:#f5f5f5;border-radius:8px;padding:16px 20px;margin:16px 0;">'
+        f'<p style="font-weight:600;margin:0 0 8px;color:#333;">{_CHECKLIST_HEADER}</p>'
+        f'<ul style="list-style:none;padding:0;margin:0;color:#444;">{items_html}</ul>'
+        "</div>"
+    )
+
+
+def _closing_paragraphs(preview_link: str) -> list[str]:
+    """Everything after the checklist: the live link, a no-pressure urgency
+    note, the reply-to-buy offer, plain (non-anchored) pricing, and the
+    sign-off. Deliberately just these lines -- no bullet points or feature
+    lists beyond the checklist above."""
+    return [
+        f"View the live preview: {preview_link}",
+        "This preview is live for 7 days -- after that it'll be repurposed. No pressure, just didn't want you to miss it.",
+        "If you'd like to own it, reply YES. I'll connect your domain, swap in your own photos, and make any changes you want.",
+        f"Standard package: £2,000. This completed draft: £{config.WEBSITE_OFFER_PRICE:,}.",
+        _SENDER_NAME,
+    ]
+
+
+def _plain_text_body(business_name: str, preview_link: str, city: str) -> str:
+    return "\n\n".join([
+        _intro_line(business_name),
+        _checklist_paragraph(city),
+        *_closing_paragraphs(preview_link),
+    ])
+
+
+def _build_html_body(business_name: str, preview_link: str, city: str) -> str:
+    """Intro greeting, then the cached screenshot, then the "what we
+    improved" checklist, then the closing paragraphs -- only called when a
+    screenshot is actually available; see _send_cold_email_impl."""
     escaped_link = html_module.escape(preview_link)
-    link_html = f'<p><a href="{escaped_link}">Here\'s the live preview: {escaped_link}</a></p>'
+    intro_html = f"<p>{html_module.escape(_intro_line(business_name))}</p>"
     image_html = (
         f'<p><a href="{escaped_link}">'
         f'<img src="cid:{_SCREENSHOT_CID}" alt="Your new website preview" '
         'style="max-width:100%;border:1px solid #ddd;border-radius:8px;">'
         "</a></p>"
     )
-    return paragraphs + link_html + image_html
+    checklist_html = _checklist_html(city)
+    closing_html = "".join(
+        f"<p>{html_module.escape(para).replace(chr(10), '<br>')}</p>"
+        for para in _closing_paragraphs(preview_link)
+    )
+    return intro_html + image_html + checklist_html + closing_html
 
 
 def _can_send_now() -> bool:
@@ -210,6 +276,42 @@ def _can_send_now() -> bool:
     if db.emails_sent_today() >= config.EMAIL_MAX_PER_DAY:
         return False
     return True
+
+
+def _send_via_configured_transport(
+    to_addr: str,
+    subject: str,
+    body_text: str,
+    lead_id: int,
+    body_html: Optional[str] = None,
+    inline_image_path: Optional[str] = None,
+    inline_image_cid: Optional[str] = None,
+) -> str:
+    """Send email via configured transport: SendGrid if SENDGRID_API_KEY is set,
+    otherwise fall back to SMTP via send_email.
+    
+    Returns the message_id of the sent email.
+    """
+    if config.SENDGRID_API_KEY:
+        return email_utils.send_email_sendgrid(
+            to_addr=to_addr,
+            subject=subject,
+            body_text=body_text,
+            lead_id=lead_id,
+            body_html=body_html,
+            inline_image_path=inline_image_path,
+            inline_image_cid=inline_image_cid,
+        )
+    else:
+        return email_utils.send_email(
+            to_addr=to_addr,
+            subject=subject,
+            body_text=body_text,
+            lead_id=lead_id,
+            body_html=body_html,
+            inline_image_path=inline_image_path,
+            inline_image_cid=inline_image_cid,
+        )
 
 
 def send_cold_email(lead: dict) -> bool:
@@ -234,9 +336,10 @@ def _send_cold_email_impl(lead: dict) -> bool:
                                notes="No usable email at send time")
         return False
 
-    subject, body = draft_cold_email(lead)
+    subject = f"I built a website for {lead['business_name']}"
     preview_link = tracker.create_click_link(lead["id"])
-    body_with_link = f"{body}\n\nHere's the live preview: {preview_link}"
+    city = lead.get("location") or "your area"
+    body_with_link = _plain_text_body(lead["business_name"], preview_link, city)
 
     # Embed the cached preview screenshot inline (cid:) if design_agent.py
     # already captured one for this lead; otherwise send exactly the same
@@ -244,10 +347,10 @@ def _send_cold_email_impl(lead: dict) -> bool:
     # failed, or an older lead from before this feature existed) must
     # never block or change the send itself.
     cached_screenshot = screenshot.get_cached_screenshot(lead["id"])
-    body_html = _build_html_body(body, preview_link) if cached_screenshot else None
+    body_html = _build_html_body(lead["business_name"], preview_link, city) if cached_screenshot else None
     inline_image_path = str(cached_screenshot) if cached_screenshot else None
 
-    message_id = email_utils.send_email(
+    message_id = _send_via_configured_transport(
         to_addr=email_addr,
         subject=subject,
         body_text=body_with_link,
@@ -317,7 +420,12 @@ def _send_goodbye(lead: dict) -> None:
         f"Wishing {lead['business_name']} all the best."
     )
     try:
-        message_id = email_utils.send_email(to_addr=email_addr, subject=subject, body_text=body, lead_id=lead["id"])
+        message_id = _send_via_configured_transport(
+            to_addr=email_addr,
+            subject=subject,
+            body_text=body,
+            lead_id=lead["id"],
+        )
         db.insert_email_thread(
             lead_id=lead["id"], direction="outbound", subject=subject, body=body,
             from_addr=config.EMAIL_USER, to_addr=email_addr, message_id=message_id,

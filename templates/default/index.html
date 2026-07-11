@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ business_name }} | {{ niche_display }}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="bg-white text-slate-800 antialiased">
+
+  {% set nav_anchors = ["#hero", "#services", "#why-us", "#service-area", "#call-now"] %}
+
+  <!-- Nav -->
+  <header class="sticky top-0 z-10 bg-white/90 backdrop-blur border-b border-slate-200">
+    <div class="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
+      <span class="text-lg font-bold text-slate-800">{{ business_name }}</span>
+      <nav class="hidden sm:flex gap-6 text-sm font-medium text-slate-600">
+        {% for label in nav_labels %}
+        <a href="{{ nav_anchors[loop.index0] }}" class="hover:text-slate-900">{{ label }}</a>
+        {% endfor %}
+      </nav>
+      <a href="tel:{{ phone }}"
+         class="rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-900 transition">
+        Call {{ phone }}
+      </a>
+    </div>
+  </header>
+
+  <!-- Hero: no stock photo -- a mechanic/cafe shot that isn't actually
+       theirs reads as fake, so this is a CSS-only dark pattern instead. -->
+  <section id="hero" class="hero-pattern relative text-white">
+    <span class="absolute top-4 left-4 text-xs uppercase tracking-widest text-white/30">Your logo here</span>
+    <div class="max-w-5xl mx-auto px-6 py-24 text-center">
+      <h1 class="text-4xl sm:text-5xl font-extrabold tracking-tight">{{ hero_tagline }}</h1>
+      <p class="mt-4 text-lg text-slate-200">{{ business_name }} &mdash; {{ niche_display }} in {{ location }}</p>
+      {% if specialty %}
+      <p class="mt-3 inline-block rounded-full bg-white/10 px-4 py-1 text-sm font-semibold text-white">{{ specialty }}</p>
+      {% endif %}
+      {% if google_rating %}
+      <p class="mt-3 text-amber-300 font-semibold">Rated {{ google_rating }} on Google &#11088;</p>
+      {% endif %}
+      <a href="#call-now"
+         class="mt-8 inline-block rounded-lg bg-white px-6 py-3 font-semibold text-slate-900 hover:bg-slate-100 transition">
+        Get In Touch
+      </a>
+    </div>
+  </section>
+
+  <!-- Services -->
+  <section id="services" class="bg-slate-50 border-y border-slate-200">
+    <div class="max-w-3xl mx-auto px-6 py-16 text-center">
+      <h2 class="text-2xl font-bold text-slate-800 mb-6">Our Services</h2>
+      <ul class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left max-w-xl mx-auto">
+        {% for service in services %}
+        <li class="rounded-lg bg-white border border-slate-200 px-4 py-3 text-slate-700 font-medium">{{ service }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </section>
+
+  <!-- Why Us -->
+  <section id="why-us" class="max-w-3xl mx-auto px-6 py-16 text-center">
+    <h2 class="text-2xl font-bold text-slate-800 mb-4">Why {{ business_name }}?</h2>
+    <p class="text-slate-600 leading-relaxed">{{ pain_point_solution }}</p>
+    <blockquote class="mt-8 text-lg italic text-slate-500">&ldquo;{{ testimonial }}&rdquo;</blockquote>
+  </section>
+
+  <!-- Service Area -->
+  <section id="service-area" class="bg-slate-800 text-white">
+    <div class="max-w-3xl mx-auto px-6 py-16 text-center">
+      <h2 class="text-2xl font-bold mb-4">Service Area</h2>
+      <p class="text-slate-200">Proudly serving {{ location }} and the surrounding area.</p>
+    </div>
+  </section>
+
+  <!-- Call Now -->
+  <section id="call-now" class="max-w-3xl mx-auto px-6 py-16 text-center">
+    <h2 class="text-2xl font-bold text-slate-800 mb-4">Get In Touch</h2>
+    <p class="text-slate-600">{{ location }}</p>
+    <p class="mt-2">
+      <a href="tel:{{ phone }}" class="text-lg font-semibold text-slate-800 hover:underline">{{ phone }}</a>
+    </p>
+    <a href="tel:{{ phone }}"
+       class="mt-6 inline-block rounded-lg bg-slate-800 px-6 py-3 font-semibold text-white hover:bg-slate-900 transition">
+      Call Now
+    </a>
+  </section>
+
+  <!-- Footer -->
+  <footer class="border-t border-slate-200 bg-slate-50">
+    <div class="max-w-3xl mx-auto px-6 py-8 text-center text-sm text-slate-500 space-y-2">
+      <p>&copy; {{ year }} {{ business_name }}. All rights reserved.</p>
+      <p>This is a free, live preview built by your local web design team.</p>
+      <p>
+        <a href="{{ preview_url | default('#') }}" class="text-slate-700 hover:underline">
+          View / share this preview
+        </a>
+      </p>
+    </div>
+  </footer>
+
+  <!-- Designed-by watermark -->
+  <div style="text-align: center; padding: 16px; margin-top: 8px; font-size: 12px; color: #999; border-top: 1px solid #eee;">
+    Website designed by <a href="https://caseywebsites.com" style="color: #999; text-decoration: underline;">Oscar</a>
+    &middot; <a href="https://caseywebsites.com" style="color: #999; text-decoration: underline;">Need a site like this?</a>
+  </div>
+
+  <!-- preview_url: {{ preview_url }} -->
+</body>
+</html>
