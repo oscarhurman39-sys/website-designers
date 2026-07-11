@@ -30,6 +30,20 @@ from pathlib import Path
 from typing import Optional
 import base64
 
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import (
+    Mail,
+    Attachment,
+    FileContent,
+    FileName,
+    FileType,
+    Disposition,
+    MailSettings,
+    TrackingSettings,
+    OpenTracking,
+    ClickTracking,
+)
+
 import config
 from utils import compliance
 
@@ -179,27 +193,6 @@ def send_email_sendgrid(
     if inline_image_path and not body_html:
         raise ValueError("inline_image_path requires body_html (the image is referenced via cid: inside it).")
 
-    try:
-        from sendgrid import SendGridAPIClient
-        from sendgrid.helpers.mail import (
-            Mail,
-            Attachment,
-            FileContent,
-            FileName,
-            FileType,
-            Disposition,
-            MailSettings,
-            TrackingSettings,
-            OpenTracking,
-            ClickTracking,
-            ListUnsubscribe,
-            ListUnsubscribeEmail,
-        )
-    except ImportError:
-        raise RuntimeError(
-            "SendGrid SDK not installed. Install with: pip install sendgrid"
-        )
-
     logger.info(f"Sending SendGrid email to {to_addr} with subject: {subject}")
 
     # Generate message ID in the same format as send_email() for consistency
@@ -229,19 +222,9 @@ def send_email_sendgrid(
         "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
     }
 
-    # Use native SendGrid ListUnsubscribe with RFC 8058-compliant format:
-    # List-Unsubscribe: <https://example.com/unsubscribe/token>, <mailto:admin@example.com?subject=unsubscribe>
+    # RFC 8058-compliant List-Unsubscribe header: HTTP URL + mailto fallback.
     unsubscribe_url = compliance.create_unsubscribe_link(lead_id)
     admin_email = config.ADMIN_EMAIL
-    
-    # SendGrid's ListUnsubscribe class automatically formats the header correctly
-    mail.list_unsubscribe = ListUnsubscribe(
-        email=ListUnsubscribeEmail(email=admin_email)
-    )
-    
-    # Manually add the HTTP URL to extra_headers since ListUnsubscribe(email=...) 
-    # doesn't include the URL directly in its output. We combine both the URL
-    # and email fallback per RFC 8058.
     mail.extra_headers["List-Unsubscribe"] = f"<{unsubscribe_url}>, <mailto:{admin_email}?subject=unsubscribe>"
 
     # Enable open and click tracking
