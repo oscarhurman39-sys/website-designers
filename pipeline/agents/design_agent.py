@@ -268,6 +268,11 @@ def build_context(lead: dict) -> dict:
         # third-party image to credit. Kept for when a paying client's
         # real, licensed photos are swapped in later.
         "photo_credit": "",
+        # "Your Offer" pricing card (templates/*/index.html): display-only
+        # figures from config, formatted with thousands separators + £.
+        "price_regular": f"£{config.WEBSITE_REGULAR_PRICE:,}",
+        "price_offer": f"£{config.WEBSITE_OFFER_PRICE:,}",
+        "claim_mailto": config.claim_mailto(lead["business_name"]),
     }
     # Pure-CSS hero: a per-business gradient (stable across re-renders)
     # used by the classic templates' hero section inline style.

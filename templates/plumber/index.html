@@ -65,6 +65,28 @@
     <p class="text-slate-600">{{ reviews | default(testimonial) }}</p>
   </section>
 
+  <!-- Pricing -->
+  <section id="pricing" class="bg-slate-50 border-y border-slate-200">
+    <div class="max-w-md mx-auto px-6 py-16 text-center">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-10">
+        <h2 class="text-2xl font-bold text-blue-800 mb-4">Your Offer</h2>
+        <p class="text-lg text-slate-400 line-through decoration-red-500">{{ price_regular }}</p>
+        <p class="text-4xl font-extrabold text-green-600 mt-1 mb-6">{{ price_offer }}</p>
+        <ul class="text-left max-w-xs mx-auto space-y-2 mb-6 text-slate-700">
+          <li>&#10003; Fully responsive website</li>
+          <li>&#10003; Hosting &amp; deployment</li>
+          <li>&#10003; Domain connection</li>
+          <li>&#10003; 30 days free support</li>
+        </ul>
+        <p class="text-sm text-slate-500 mb-6">This preview is already live. Yours today &ndash; no waiting, no setup.</p>
+        <a href="{{ claim_mailto }}"
+           class="inline-block rounded-lg bg-blue-600 px-6 py-3 font-semibold text-white hover:bg-blue-700 transition">
+          Claim this site &rarr;
+        </a>
+      </div>
+    </div>
+  </section>
+
   <!-- Contact -->
   <section id="contact" class="max-w-3xl mx-auto px-6 py-16 text-center">
     <h2 class="text-2xl font-bold text-blue-800 mb-4">Get In Touch</h2>

@@ -11,6 +11,7 @@ import os
 import secrets
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 
@@ -113,6 +114,18 @@ DB_PATH: str = os.getenv("DB_PATH", "").strip() or str(Path(__file__).resolve().
 PUBLIC_BASE_URL: str = (os.getenv("PUBLIC_BASE_URL", "").strip() or "http://localhost:5000").rstrip("/")
 WEBSITE_PRICE_USD: int = int(os.getenv("WEBSITE_PRICE_USD", "750") or 750)
 
+# --- On-preview pricing card (display only) ---------------------------------
+# These drive ONLY the "Your Offer" section rendered on generated preview
+# sites (templates/*/index.html, wired via design_agent.build_context) --
+# they are display strings, not currency-converted or synced with
+# WEBSITE_PRICE_USD, which is the actual amount Stripe charges (in USD,
+# stripe_utils.py). If you want the on-site offer to match what Stripe
+# collects, set these to match manually, but be mindful WEBSITE_PRICE_USD
+# is USD while the site copy defaults to a £ symbol -- adjust both if your
+# pricing/currency changes.
+WEBSITE_REGULAR_PRICE: int = int(os.getenv("WEBSITE_REGULAR_PRICE", "2000") or 2000)
+WEBSITE_OFFER_PRICE: int = int(os.getenv("WEBSITE_OFFER_PRICE", "750") or 750)
+
 # --- VoltAgent observability (optional) -------------------------------------
 # When both keys are set, pipeline/utils/tracer.py mirrors every agent/tool
 # span to VoltAgent Cloud in addition to the always-on local trace file
@@ -191,6 +204,17 @@ _ADDRESS_PLACEHOLDER_FRAGMENTS = (
     "address here",
     "placeholder",
 )
+
+
+def claim_mailto(business_name: str) -> str:
+    """mailto: link for the preview site's pricing CTA -- goes TO us (the
+    operator), not the lead, since a static site has no idea who's viewing
+    it. Same fallback chain as compliance.py's unsubscribe mailto, so it
+    lands in the mailbox sales_agent.check_inbox() actually polls (or
+    ADMIN_EMAIL if you route business replies there instead)."""
+    addr = ADMIN_EMAIL or EMAIL_USER or SENDGRID_FROM_EMAIL
+    subject = quote(f"I'd like to claim my {business_name} website")
+    return f"mailto:{addr}?subject={subject}"
 
 
 def physical_address_problem() -> Optional[str]:
