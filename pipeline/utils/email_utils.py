@@ -111,7 +111,7 @@ def send_email(
 
 
 def send_email_sendgrid(
-    to_email: str,
+    to_addr: str,
     subject: str,
     html_body: str,
     attachments: Optional[list[tuple[str, bytes, str]]] = None,
@@ -121,7 +121,7 @@ def send_email_sendgrid(
     Returns True if the send succeeds (HTTP 202), False otherwise.
 
     Args:
-        to_email: Recipient email address.
+        to_addr: Recipient email address.
         subject: Email subject line.
         html_body: HTML content of the email.
         attachments: Optional list of (filename, file_bytes, mime_type) tuples.
@@ -132,7 +132,7 @@ def send_email_sendgrid(
     try:
         message = Mail(
             from_email=config.SENDGRID_FROM_EMAIL,
-            to_emails=to_email,
+            to_emails=to_addr,
             subject=subject,
             html_content=html_body,
         )
@@ -160,7 +160,7 @@ def send_email_sendgrid(
         return response.status_code == 202
 
     except Exception as e:
-        print(f"SendGrid send failed for {to_email}: {e}")
+        print(f"SendGrid send failed for {to_addr}: {e}")
         return False
 
 
