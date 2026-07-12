@@ -13,8 +13,6 @@ links embedded in outgoing emails to work.
 """
 from __future__ import annotations
 
-import hashlib
-import hmac
 import stripe
 from flask import Flask, Response, abort, redirect, request, send_from_directory
 
@@ -22,14 +20,25 @@ import config
 from utils import compliance, db, screenshot, stripe_utils, tracker
 
 
-def _verify_sendgrid_signature(
-    payload: bytes, timestamp: str, signature: str, key: str
-) -> bool:
-    verified_string = f"{timestamp}{payload.decode('utf-8')}"
-    hash_obj = hmac.new(
-        key.encode("utf-8"), verified_string.encode("utf-8"), hashlib.sha256
-    )
-    return hmac.compare_digest(hash_obj.digest(), signature.encode("utf-8"))
+def _verify_sendgrid_signature(payload: bytes, timestamp: str, signature: str, key: str) -> bool:
+    """Verify a SendGrid signed-event-webhook request.
+
+    SendGrid signs webhook payloads with an ECDSA keypair, not a shared
+    HMAC secret -- SENDGRID_WEBHOOK_VERIFICATION_KEY is the *public* half
+    of that pair (base64-encoded), so verification must go through
+    sendgrid.helpers.eventwebhook.EventWebhook (NOT a raw hmac.new() call,
+    which would check an entirely different, incompatible construction and
+    silently reject every genuine SendGrid request). Any error here (bad
+    key, malformed signature, import failure) is treated as a rejection.
+    """
+    try:
+        from sendgrid.helpers.eventwebhook import EventWebhook
+
+        ew = EventWebhook()
+        public_key = ew.convert_public_key_to_ecdsa(key)
+        return bool(ew.verify_signature(payload.decode("utf-8"), signature, timestamp, public_key))
+    except Exception:  # noqa: BLE001 - any verification error is a rejection
+        return False
 
 
 def create_app() -> Flask:

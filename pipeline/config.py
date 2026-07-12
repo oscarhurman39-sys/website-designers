@@ -8,7 +8,6 @@ webhook_server.py, dashboard.py) before doing real work.
 from __future__ import annotations
 
 import os
-import secrets
 from pathlib import Path
 from typing import Optional
 
@@ -36,6 +35,7 @@ REQUIRED_VARS: list[str] = [
     "ADMIN_EMAIL",
     "SENDING_DOMAIN",
     "PHYSICAL_ADDRESS",
+    "SECRET_KEY",
 ]
 
 # --- Values (all optional at import time; validated via validate()) --------
@@ -115,28 +115,13 @@ INBOX_POLL_SECONDS: int = 300
 MAIN_LOOP_SLEEP_SECONDS: int = 60
 
 
-def _load_or_create_secret_key() -> str:
-    """Return SECRET_KEY from env, or a persisted generated one.
-
-    Used to HMAC-sign unsubscribe and click-tracking tokens. If not supplied
-    via .env, we generate one on first run and persist it to a gitignored
-    file next to this module so tokens already sent in emails keep working
-    across restarts.
-    """
-    env_value = os.getenv("SECRET_KEY", "").strip()
-    if env_value:
-        return env_value
-
-    secret_file = Path(__file__).resolve().parent / ".secret_key"
-    if secret_file.exists():
-        return secret_file.read_text().strip()
-
-    generated = secrets.token_hex(32)
-    secret_file.write_text(generated)
-    return generated
-
-
-SECRET_KEY: str = _load_or_create_secret_key()
+# Used to HMAC-sign unsubscribe and click-tracking tokens. Must be supplied
+# via .env and stay stable across restarts -- a regenerated key invalidates
+# every unsubscribe/click token already sent, which would silently break
+# unsubscribe links (a CAN-SPAM violation) the moment the container
+# restarts. No auto-generated fallback: config.validate() fails startup
+# loudly instead.
+SECRET_KEY: str = os.getenv("SECRET_KEY", "").strip()
 
 # Obvious leftover-placeholder fragments a real postal address would never
 # contain -- catches an unfilled .env.example value getting copied verbatim

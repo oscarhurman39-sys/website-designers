@@ -36,6 +36,7 @@ from utils import db, github_api, stripe_utils, vercel_api
 PIPELINE_DIR = Path(__file__).resolve().parent
 LEADS_INBOX = PIPELINE_DIR / "leads_inbox"
 LEADS_PROCESSED = PIPELINE_DIR / "leads_processed"
+LEADS_FAILED = PIPELINE_DIR / "leads_failed"
 PAUSE_FLAG = PIPELINE_DIR / ".paused"  # dashboard.py toggles this file to pause/resume
 
 _shutdown_event = threading.Event()
@@ -55,13 +56,15 @@ def _set_paused(paused: bool) -> None:
 def _process_inbox_csvs() -> None:
     LEADS_INBOX.mkdir(exist_ok=True)
     LEADS_PROCESSED.mkdir(exist_ok=True)
+    LEADS_FAILED.mkdir(exist_ok=True)
     for csv_file in sorted(LEADS_INBOX.glob("*.csv")):
         print(f"[main] Ingesting {csv_file.name}")
         try:
             lead_agent.ingest_csv(str(csv_file))
         except Exception as exc:  # noqa: BLE001 - a malformed CSV must not kill the loop
             print(f"[main] Failed to ingest {csv_file.name}: {exc}")
-        finally:
+            shutil.move(str(csv_file), str(LEADS_FAILED / csv_file.name))
+        else:
             shutil.move(str(csv_file), str(LEADS_PROCESSED / csv_file.name))
 
 

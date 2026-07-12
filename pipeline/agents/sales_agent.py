@@ -423,32 +423,6 @@ def classify_reply(subject: str, body: str) -> str:
     return "positive"
 
 
-def _send_goodbye(lead: dict) -> None:
-    """Automatic, polite acknowledgment sent when a lead declines -- required
-    so 'stop emailing me' always gets a confirmation, not silence."""
-    email_addr = lead.get("contact_email") or ""
-    if not email_addr or db.is_unsubscribed(email_addr):
-        return
-    subject = "No problem"
-    body = (
-        f"Hi, totally understood -- I won't reach out again about this. "
-        f"Wishing {lead['business_name']} all the best."
-    )
-    try:
-        message_id = _send_via_configured_transport(
-            to_addr=email_addr,
-            subject=subject,
-            body_text=body,
-            lead_id=lead["id"],
-        )
-        db.insert_email_thread(
-            lead_id=lead["id"], direction="outbound", subject=subject, body=body,
-            from_addr=config.EMAIL_USER, to_addr=email_addr, message_id=message_id,
-        )
-    except RuntimeError:
-        pass  # already unsubscribed between the check above and now; nothing to do
-
-
 def _handle_inbound(lead: dict, msg) -> None:  # msg: email_utils.InboundEmail
     """Classify and act on one inbound reply. Wrapped in a trace -> agent ->
     tool span (see utils/tracer.py); the actual classification/action logic
@@ -481,8 +455,9 @@ def _handle_inbound_impl(lead: dict, msg) -> None:  # msg: email_utils.InboundEm
     )
 
     if classification == "negative":
+        # No confirmation email here on purpose: someone who just said "stop
+        # emailing me" should get silence, not one more message in their inbox.
         db.update_lead_status(lead["id"], "lost", notes="Replied negative")
-        _send_goodbye(lead)
     elif classification == "out_of_office":
         db.log_state_history(lead["id"], lead["status"], lead["status"], notes="Out-of-office auto-reply")
     elif classification == "positive":

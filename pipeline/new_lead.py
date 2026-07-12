@@ -1,5 +1,4 @@
 from utils import db
-db.init_db()from utils import db
 db.init_db()
 lid = db.insert_lead('Greenleaf Landscaping', 'landscaper', 'Reigate')
 db.update_lead_status(lid, 'new')
