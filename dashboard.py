@@ -46,6 +46,19 @@ def _set_paused(paused: bool) -> None:
 
 st.title("Cold Email Sales Pipeline")
 
+all_leads_for_metrics = db.list_all_leads()
+status_counts = {}
+for _lead in all_leads_for_metrics:
+    status_counts[_lead["status"]] = status_counts.get(_lead["status"], 0) + 1
+
+metric_cols = st.columns(6)
+metric_cols[0].metric("Total", len(all_leads_for_metrics))
+metric_cols[1].metric("New", status_counts.get("new", 0))
+metric_cols[2].metric("Designed", status_counts.get("designed", 0))
+metric_cols[3].metric("Emailed", status_counts.get("emailed", 0))
+metric_cols[4].metric("Replied", status_counts.get("replied", 0) + status_counts.get("negotiating", 0))
+metric_cols[5].metric("Won", status_counts.get("won", 0))
+
 # --- Pause/resume controls ---------------------------------------------------
 col1, col2, col3 = st.columns([1, 1, 4])
 with col1:
@@ -161,7 +174,7 @@ filtered = df if selected_status == "(all)" else df[df["status"] == selected_sta
 
 st.dataframe(
     filtered,
-    use_container_width=True,
+    width="stretch",
     column_config={
         "preview_url": st.column_config.LinkColumn("Preview"),
     },
@@ -197,10 +210,15 @@ if lead_id:
         }
     )
 
-    if lead["status"] == "bounced":
-        if st.button(f"Retry bounce for lead {lead_id} (reset to 'researched')"):
-            db.update_lead_status(int(lead_id), "researched", notes="Manually retried from dashboard")
-            st.success("Lead reset to 'researched'. It will be re-designed/emailed on the next cycle.")
+    if lead["status"] in ("lost", "bounced"):
+        retry_target = "new" if lead["status"] == "lost" else "researched"
+        if st.button(f"Retry failed lead {lead_id} (reset to '{retry_target}')"):
+            db.update_lead_status(
+                int(lead_id),
+                retry_target,
+                notes=f"Manually retried from dashboard after status {lead['status']!r}",
+            )
+            st.success(f"Lead reset to '{retry_target}'. It will be picked up on the next cycle.")
             st.rerun()
 
     st.write("**Email thread**")
@@ -258,7 +276,7 @@ else:
             }
         )
     trace_df = pd.DataFrame(trace_rows).sort_values("start_time", ascending=False)
-    st.dataframe(trace_df, use_container_width=True)
+    st.dataframe(trace_df, width="stretch")
 
     with st.expander("Raw trace JSON (most recent 20)"):
         st.json(list(reversed(traces))[:20])

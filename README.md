@@ -208,6 +208,21 @@ ramp, and reputation monitoring. The pipeline's `EMAIL_MAX_PER_HOUR=20` /
 from sending too fast; they don't substitute for actually warming up a
 new domain first.
 
+## Operator health check
+
+Run this before live sending or after changing `.env`:
+
+```bash
+python pipeline/doctor.py
+```
+
+It checks required environment variables, public URL shape, important Python
+packages, and obvious SendGrid setup mistakes without calling paid/external
+APIs. Treat warnings as setup tasks before scaling outreach.
+
+GitHub Actions also runs the offline pytest suite on pull requests and pushes
+to `main`, so future PRs get a basic safety net before you merge them.
+
 ## Testing
 
 `tests/test_pipeline_real.py` is an opt-in, end-to-end integration test
