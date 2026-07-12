@@ -328,6 +328,21 @@ Then:
    moving to a real domain once you're past development) gives you a
    stable URL instead.
 
+**Automating the above (Windows):** steps 1 (minus the manual `.env` edit)
+and starting `webhook_server.py`/the dashboard can be scripted into a
+single `start_pipeline.ps1` -- it starts (or reuses) ngrok, writes the
+fetched public URL into `PUBLIC_BASE_URL` in `.env` for you, starts
+`webhook_server.py` in its own window, then launches the dashboard. This
+file is gitignored (its exact venv/ngrok assumptions are machine-specific)
+-- create your own copy in the repo root, then run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File start_pipeline.ps1
+```
+
+You'll still need to manually update the Stripe webhook endpoint (step 2
+above) whenever the printed URL changes.
+
 ### Custom domain for click tracking (optional)
 
 By default, click-tracking and unsubscribe links point at whatever
