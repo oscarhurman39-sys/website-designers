@@ -221,7 +221,6 @@ __marimo__/
 .env
 .env.test
 *.db
-pipeline/.secret_key
 pipeline/*.log
 pipeline/traces.json
 pipeline/traces.test.json
@@ -230,6 +229,7 @@ traces.test.json
 pipeline/.paused
 pipeline/leads_inbox/
 pipeline/leads_processed/
+pipeline/leads_failed/
 pipeline/.scheduler.pid
 pipeline/scheduler.log
 pipeline/screenshots/
