@@ -75,9 +75,26 @@ def push_files(repo: Repository, files: dict[str, str], commit_message: str = "I
     PyGithub's Contents API creates one commit per file (there is no native
     multi-file commit helper), which is fine for a handful of small template
     files like index.html/style.css.
+
+    If a file already exists (422 -- e.g. a retried deploy after Vercel
+    failed once, where create_repo idempotently returned the existing repo),
+    update it in place instead of raising: a single transient failure
+    downstream must never permanently brick the lead's retry loop here.
     """
     for path, content in files.items():
-        repo.create_file(path=path, message=f"{commit_message}: {path}", content=content)
+        try:
+            repo.create_file(path=path, message=f"{commit_message}: {path}", content=content)
+        except GithubException as exc:
+            if exc.status == 422:
+                existing = repo.get_contents(path)
+                repo.update_file(
+                    path=path,
+                    message=f"{commit_message}: {path}",
+                    content=content,
+                    sha=existing.sha,
+                )
+            else:
+                raise
 
 
 def create_repo_with_files(
