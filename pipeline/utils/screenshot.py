@@ -28,6 +28,8 @@ from typing import Optional
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 
+import config
+
 SCREENSHOTS_DIR = Path(__file__).resolve().parent.parent / "screenshots"
 
 # Pre-installed headless Chromium in this environment; set only when the
@@ -100,6 +102,13 @@ def _capture_sync(preview_url: str, out_path: Path) -> None:
         browser = p.chromium.launch(**launch_kwargs)
         try:
             page = browser.new_page(viewport=_VIEWPORT)
+            # Secondary defense against Vercel's login wall, on top of
+            # vercel_api.py disabling deployment protection outright: if a
+            # protection setting hasn't propagated yet (or fails to
+            # disable), this header tells Vercel to bypass it anyway.
+            # No-op (empty dict) when VERCEL_BYPASS_TOKEN isn't configured.
+            if config.VERCEL_BYPASS_TOKEN:
+                page.set_extra_http_headers({"x-vercel-protection-bypass": config.VERCEL_BYPASS_TOKEN})
             # "load" rather than "networkidle": some templates load fonts/
             # Tailwind's CDN script, and networkidle can hang waiting for
             # long-polling/keep-alive connections that never go idle. A

@@ -11,10 +11,25 @@ from typing import Optional
 
 from github import Github, GithubException
 from github.Repository import Repository
+from urllib3.util.retry import Retry
 
 import config
 
 _client: Optional[Github] = None
+
+# Transport-level retry (3 attempts, 2s/4s exponential backoff) for every
+# GitHub API call made through this client. This is deliberately done here
+# rather than with utils/retry.py's function decorator: urllib3's Retry
+# understands idempotency -- non-idempotent POSTs (create repo, create file)
+# are only retried when the connection failed before the request reached
+# the server, never after an ambiguous response, so a retry can't create
+# duplicate repos/commits. GETs/DELETEs also retry on 429/5xx responses.
+_RETRY = Retry(
+    total=3,
+    backoff_factor=2,
+    status_forcelist=(429, 500, 502, 503, 504),
+    respect_retry_after_header=True,
+)
 
 
 def _get_client() -> Github:
@@ -22,7 +37,7 @@ def _get_client() -> Github:
     if _client is None:
         if not config.GITHUB_TOKEN:
             raise RuntimeError("GITHUB_TOKEN is not configured.")
-        _client = Github(config.GITHUB_TOKEN)
+        _client = Github(config.GITHUB_TOKEN, retry=_RETRY)
     return _client
 
 
