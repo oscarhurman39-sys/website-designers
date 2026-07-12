@@ -7,6 +7,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 import requests
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -19,6 +20,14 @@ TEMPLATE_FILES = ("index.html", "style.css")
 DEFAULT_NICHE = "default"
 
 _PLACEHOLDER_IMAGE_BASE = "https://picsum.photos/seed"
+_DEPLOYMENT_VALIDATION_TIMEOUT_SECONDS = 15
+_AUTH_URL_PARTS = ("login", "signin", "sign-in", "auth", "authentication")
+_AUTH_PAGE_MARKERS = (
+    "vercel authentication",
+    "log in to vercel",
+    "login to vercel",
+    "sign in to vercel",
+)
 
 # Unsplash search terms per niche -- more specific than the raw niche
 # string so the fetched photo actually matches the trade (e.g. a mechanic
@@ -264,6 +273,44 @@ def _capture_and_publish_screenshot(lead_id: int, preview_url: str) -> tuple[str
     return f"{config.PUBLIC_BASE_URL}/screenshots/{lead_id}.png", str(local_path)
 
 
+def _validate_deployment_url(deployment: dict) -> str:
+    """Return a public website URL or raise before any email can be queued.
+
+    A deploy can technically succeed while the resulting URL is blank,
+    malformed, still pending, or hidden behind an authentication page. Those
+    states must not advance the lead to "designed", because SalesAgent sends
+    every lead in that state.
+    """
+    preview_url = (deployment.get("url") or "").strip()
+    parsed = urlparse(preview_url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise RuntimeError(f"Deployment did not return a valid public URL: {preview_url!r}")
+
+    final_state = deployment.get("ready_state")
+    if final_state and final_state != "READY":
+        raise RuntimeError(f"Deployment is not ready: ready_state={final_state!r}, url={preview_url!r}")
+
+    if any(part in parsed.path.lower() for part in _AUTH_URL_PARTS):
+        raise RuntimeError(f"Deployment URL points to an authentication path: {preview_url}")
+
+    try:
+        resp = requests.get(preview_url, allow_redirects=True, timeout=_DEPLOYMENT_VALIDATION_TIMEOUT_SECONDS)
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Deployment URL is not publicly accessible: {preview_url}") from exc
+
+    final_url = resp.url or preview_url
+    final_path = urlparse(final_url).path.lower()
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Deployment URL returned HTTP {resp.status_code}: {preview_url}")
+    if any(part in final_path for part in _AUTH_URL_PARTS):
+        raise RuntimeError(f"Deployment URL redirects to an authentication path: {final_url}")
+    page_text = resp.text.lower()
+    if any(marker in page_text for marker in _AUTH_PAGE_MARKERS):
+        raise RuntimeError(f"Deployment URL shows an authentication page: {preview_url}")
+
+    return preview_url
+
+
 def process_lead(lead: dict) -> Optional[dict]:
     """Render, deploy, and persist a website for a single 'researched' lead.
     Returns the website record, or None if the niche has no template.
@@ -298,20 +345,21 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
     deployment = vercel_api.deploy_files(
         github_api.make_repo_name(lead["business_name"], lead["id"]), files
     )
+    preview_url = _validate_deployment_url(deployment)
 
-    screenshot_url, screenshot_path = _capture_and_publish_screenshot(lead["id"], deployment["url"])
+    screenshot_url, screenshot_path = _capture_and_publish_screenshot(lead["id"], preview_url)
 
     website_id = db.insert_website(
         lead_id=lead["id"],
         template_niche=niche,
         repo_url=repo_url,
         repo_full_name=repo_full_name,
-        preview_url=deployment["url"],
+        preview_url=preview_url,
         vercel_project_id=deployment["deployment_id"],
         screenshot_url=screenshot_url,
         screenshot_path=screenshot_path,
     )
-    db.update_lead_status(lead["id"], "designed", notes=f"Preview deployed: {deployment['url']}")
+    db.update_lead_status(lead["id"], "designed", notes=f"Preview deployed: {preview_url}")
     return db.get_website_by_lead(lead["id"]) if website_id else None
 
 
