@@ -25,6 +25,19 @@ def test_validate_preview_link_for_send_accepts_public_site(monkeypatch):
     assert sales_agent._validate_preview_link_for_send("https://example.vercel.app") == "https://example.vercel.app"
 
 
+def test_validate_preview_link_for_send_strips_url_and_does_not_read_lead_db(monkeypatch):
+    request_get = Mock(return_value=_response("https://example.vercel.app"))
+    monkeypatch.setattr(sales_agent.requests, "get", request_get)
+    monkeypatch.setattr(sales_agent.db, "get_website_by_lead", Mock(side_effect=AssertionError("unexpected DB read")))
+
+    assert sales_agent._validate_preview_link_for_send("  https://example.vercel.app  ") == "https://example.vercel.app"
+    request_get.assert_called_once_with(
+        "https://example.vercel.app",
+        allow_redirects=True,
+        timeout=sales_agent._PREVIEW_VALIDATION_TIMEOUT_SECONDS,
+    )
+
+
 @pytest.mark.parametrize(
     "preview_url",
     [
@@ -43,6 +56,17 @@ def test_validate_preview_link_for_send_rejects_auth_page(monkeypatch):
         sales_agent.requests,
         "get",
         Mock(return_value=_response("https://example.vercel.app", "Vercel Authentication")),
+    )
+
+    with pytest.raises(RuntimeError):
+        sales_agent._validate_preview_link_for_send("https://example.vercel.app")
+
+
+def test_validate_preview_link_for_send_rejects_auth_redirect(monkeypatch):
+    monkeypatch.setattr(
+        sales_agent.requests,
+        "get",
+        Mock(return_value=_response("https://example.vercel.app/login")),
     )
 
     with pytest.raises(RuntimeError):
