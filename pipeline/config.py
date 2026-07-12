@@ -176,6 +176,13 @@ def validate() -> None:
             "This will embed localhost URLs in emails, making unsubscribe/tracking links unreachable.\n"
             "Set PUBLIC_BASE_URL to a real, publicly-accessible URL in .env before sending live emails.\n"
         )
+    elif PUBLIC_BASE_URL.startswith("http://") and "localhost" not in PUBLIC_BASE_URL and "127.0.0.1" not in PUBLIC_BASE_URL:
+        print(
+            f"\n[WARNING] PUBLIC_BASE_URL ({PUBLIC_BASE_URL}) is not HTTPS.\n"
+            "Stripe requires an HTTPS webhook endpoint, and browsers/mail clients flag plain-HTTP\n"
+            "links as unsafe. Put webhook_server.py behind TLS (see README.md 'Deployment') and set\n"
+            "PUBLIC_BASE_URL to the https:// URL before sending live emails.\n"
+        )
 
 
 if __name__ == "__main__":

@@ -24,7 +24,7 @@ sys.path.insert(0, str(_PIPELINE_DIR))
 
 import config  # noqa: E402
 from agents import design_agent, lead_agent, sales_agent  # noqa: E402
-from utils import db, tracer  # noqa: E402
+from utils import db, email_utils, stripe_utils, tracer  # noqa: E402
 
 PAUSE_FLAG = _PIPELINE_DIR / ".paused"
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
@@ -58,6 +58,61 @@ with col2:
         st.rerun()
 with col3:
     st.write("**Status:** " + ("PAUSED" if _is_paused() else "RUNNING"))
+
+st.divider()
+
+# --- Needs Action --------------------------------------------------------------
+# Leads that need a human to look at them right now: 'replied' means a lead
+# emailed back and is waiting on a human to take over the conversation;
+# 'negotiating' means a human already took over and may be ready to send a
+# payment link. Kept separate from the main leads table below so an
+# operator doesn't have to filter/scroll to find what actually needs them.
+st.subheader("Needs Action")
+
+replied_leads = db.list_leads_by_status("replied")
+negotiating_leads = db.list_leads_by_status("negotiating")
+
+if not replied_leads and not negotiating_leads:
+    st.caption("Nothing needs your attention right now.")
+
+for lead in replied_leads:
+    with st.container(border=True):
+        st.write(f"**{lead['business_name']}** (lead {lead['id']}) replied -- <{lead['contact_email']}>")
+        thread = db.get_email_threads(lead["id"])
+        last_inbound = next((m for m in reversed(thread) if m["direction"] == "inbound"), None)
+        if last_inbound:
+            st.caption(f"Last reply: {last_inbound['body'][:200]}")
+        if st.button("Begin takeover", key=f"takeover_{lead['id']}"):
+            sales_agent.begin_takeover(lead["id"])
+            st.success(f"Lead {lead['id']} is now under manual takeover.")
+            st.rerun()
+
+for lead in negotiating_leads:
+    with st.container(border=True):
+        st.write(f"**{lead['business_name']}** (lead {lead['id']}) is under manual negotiation -- <{lead['contact_email']}>")
+        if not lead.get("contact_email"):
+            st.warning("No contact email on file -- can't send a payment link.")
+            continue
+        if st.button("Send payment link", key=f"payment_{lead['id']}"):
+            try:
+                checkout_url = stripe_utils.create_checkout_session(
+                    lead_id=lead["id"], business_name=lead["business_name"], customer_email=lead["contact_email"]
+                )
+                subject = f"Payment link for your new {lead['business_name']} website"
+                body = (
+                    f"Hi, here's the secure payment link we discussed: {checkout_url}\n\n"
+                    "Once payment goes through, I'll get the site handed over to you right away."
+                )
+                message_id = email_utils.send_email(lead["contact_email"], subject, body, lead["id"])
+                db.insert_email_thread(
+                    lead_id=lead["id"], direction="outbound", subject=subject, body=body,
+                    from_addr=config.EMAIL_USER, to_addr=lead["contact_email"], message_id=message_id,
+                )
+                db.update_lead_status(lead["id"], "payment_sent", notes=f"Checkout link sent: {checkout_url}")
+                st.success(f"Payment link emailed to lead {lead['id']}: {checkout_url}")
+            except Exception as exc:  # noqa: BLE001 - surface it in the UI rather than crashing the page
+                st.error(f"Failed to send payment link: {exc}")
+            st.rerun()
 
 st.divider()
 
@@ -161,7 +216,7 @@ filtered = df if selected_status == "(all)" else df[df["status"] == selected_sta
 
 st.dataframe(
     filtered,
-    width="stretch",
+    use_container_width=True,
     column_config={
         "preview_url": st.column_config.LinkColumn("Preview"),
     },
@@ -258,7 +313,7 @@ else:
             }
         )
     trace_df = pd.DataFrame(trace_rows).sort_values("start_time", ascending=False)
-    st.dataframe(trace_df, width="stretch")
+    st.dataframe(trace_df, use_container_width=True)
 
     with st.expander("Raw trace JSON (most recent 20)"):
         st.json(list(reversed(traces))[:20])

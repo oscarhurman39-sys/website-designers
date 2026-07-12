@@ -36,12 +36,6 @@ HF_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
 # default for a human-in-the-loop system.
 _TAKEOVER_LEAD_IDS: set[int] = set()
 
-# Throttles the *next* automatic cold-email send. Reset on process restart,
-# which means a restart can send one email slightly earlier than the
-# previous 120-300s window would have allowed -- an acceptable tradeoff for
-# a system that otherwise enforces hard per-hour/per-day caps from the DB.
-_next_send_allowed_at: datetime = datetime.min.replace(tzinfo=timezone.utc)
-
 _NEGATIVE_PATTERNS = (
     r"\bunsubscribe\b", r"\bremove me\b", r"\bstop emailing\b", r"\bnot interested\b",
     r"\bno thanks\b", r"\btake me off\b", r"\bdo not contact\b", r"\bstop\b",
@@ -200,6 +194,26 @@ def _intro_line(business_name: str) -> str:
     )
 
 
+# Minimum Google review count before the "Rated X.X on Google" line is
+# shown in the email -- a handful of reviews reads worse than no mention at
+# all. Mirrors design_agent.py's MIN_GOOGLE_REVIEWS_FOR_BADGE threshold
+# used on the website itself.
+MIN_GOOGLE_REVIEWS_FOR_RATING_LINE = 15
+
+_WATERMARK_TEXT = "Designed by Oscar"
+
+
+def _google_rating_line(lead: dict) -> Optional[str]:
+    """'Rated X.X on Google ⭐' if the lead has a rating backed by enough
+    reviews to be worth citing, else None (omitted entirely -- no rating
+    line is better than a shaky one)."""
+    rating = lead.get("google_rating")
+    reviews_count = lead.get("google_reviews_count") or 0
+    if rating and reviews_count >= MIN_GOOGLE_REVIEWS_FOR_RATING_LINE:
+        return f"Rated {rating:.1f} on Google ⭐"
+    return None
+
+
 _CHECKLIST_HEADER = "What we improved"
 
 
@@ -249,18 +263,26 @@ def _closing_paragraphs(preview_link: str) -> list[str]:
     ]
 
 
-def _plain_text_body(business_name: str, preview_link: str, city: str) -> str:
+def _plain_text_body(lead: dict, preview_link: str, city: str) -> str:
+    business_name = lead["business_name"]
+    rating_line = _google_rating_line(lead)
     return "\n\n".join([
-        _intro_line(business_name),
-        _checklist_paragraph(city),
-        *_closing_paragraphs(preview_link),
+        p for p in [
+            _intro_line(business_name),
+            rating_line,
+            _checklist_paragraph(city),
+            _WATERMARK_TEXT,
+            *_closing_paragraphs(preview_link),
+        ] if p
     ])
 
 
-def _build_html_body(business_name: str, preview_link: str, city: str) -> str:
-    """Intro greeting, then the cached screenshot, then the "what we
-    improved" checklist, then the closing paragraphs -- only called when a
+def _build_html_body(lead: dict, preview_link: str, city: str) -> str:
+    """Intro greeting, then the cached screenshot, then an optional Google
+    rating line, the "what we improved" checklist, a small designer
+    watermark, then the closing paragraphs -- only called when a
     screenshot is actually available; see _send_cold_email_impl."""
+    business_name = lead["business_name"]
     escaped_link = html_module.escape(preview_link)
     intro_html = f"<p>{html_module.escape(_intro_line(business_name))}</p>"
     image_html = (
@@ -269,17 +291,28 @@ def _build_html_body(business_name: str, preview_link: str, city: str) -> str:
         'style="max-width:100%;border:1px solid #ddd;border-radius:8px;">'
         "</a></p>"
     )
+    rating_line = _google_rating_line(lead)
+    rating_html = (
+        f'<p style="color:#b8860b;font-weight:600;">{html_module.escape(rating_line)}</p>'
+        if rating_line else ""
+    )
     checklist_html = _checklist_html(city)
+    watermark_html = f'<p style="font-size:12px;color:#999;">{html_module.escape(_WATERMARK_TEXT)}</p>'
     closing_html = "".join(
         f"<p>{html_module.escape(para).replace(chr(10), '<br>')}</p>"
         for para in _closing_paragraphs(preview_link)
     )
-    return intro_html + image_html + checklist_html + closing_html
+    return intro_html + image_html + rating_html + checklist_html + watermark_html + closing_html
 
 
 def _can_send_now() -> bool:
     now = datetime.now(timezone.utc)
-    if now < _next_send_allowed_at:
+    # Persisted in the DB (see db.get_next_send_allowed_at/set_next_send_allowed_at)
+    # rather than an in-memory global, so a crash/restart can't forget the
+    # randomized 120-300s delay that was in flight and send a burst of
+    # cold emails back-to-back.
+    next_allowed_at = db.get_next_send_allowed_at()
+    if next_allowed_at is not None and now < next_allowed_at:
         return False
     if db.emails_sent_last_hour() >= config.EMAIL_MAX_PER_HOUR:
         return False
@@ -338,8 +371,6 @@ def send_cold_email(lead: dict) -> bool:
 
 
 def _send_cold_email_impl(lead: dict) -> bool:
-    global _next_send_allowed_at
-
     email_addr = lead.get("contact_email") or ""
     if not email_addr or db.is_unsubscribed(email_addr):
         db.update_lead_status(lead["id"], "unsubscribed" if db.is_unsubscribed(email_addr) else "lost",
@@ -354,7 +385,7 @@ def _send_cold_email_impl(lead: dict) -> bool:
     website = db.get_website_by_lead(lead["id"])
     preview_link = website["preview_url"] if website and website.get("preview_url") else tracker.create_click_link(lead["id"])
     city = lead.get("location") or "your area"
-    body_with_link = _plain_text_body(lead["business_name"], preview_link, city)
+    body_with_link = _plain_text_body(lead, preview_link, city)
 
     # Embed the cached preview screenshot inline (cid:) if design_agent.py
     # already captured one for this lead; otherwise send exactly the same
@@ -362,7 +393,7 @@ def _send_cold_email_impl(lead: dict) -> bool:
     # failed, or an older lead from before this feature existed) must
     # never block or change the send itself.
     cached_screenshot = screenshot.get_cached_screenshot(lead["id"])
-    body_html = _build_html_body(lead["business_name"], preview_link, city) if cached_screenshot else None
+    body_html = _build_html_body(lead, preview_link, city) if cached_screenshot else None
     inline_image_path = str(cached_screenshot) if cached_screenshot else None
 
     message_id = _send_via_configured_transport(
@@ -385,8 +416,9 @@ def _send_cold_email_impl(lead: dict) -> bool:
     )
     db.update_lead_status(lead["id"], "emailed", notes="Cold email sent")
 
-    _next_send_allowed_at = datetime.now(timezone.utc) + timedelta(
-        seconds=random.uniform(config.EMAIL_MIN_DELAY_SECONDS, config.EMAIL_MAX_DELAY_SECONDS)
+    db.set_next_send_allowed_at(
+        datetime.now(timezone.utc)
+        + timedelta(seconds=random.uniform(config.EMAIL_MIN_DELAY_SECONDS, config.EMAIL_MAX_DELAY_SECONDS))
     )
     return True
 

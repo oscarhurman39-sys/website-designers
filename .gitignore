@@ -233,4 +233,6 @@ pipeline/leads_failed/
 pipeline/.scheduler.pid
 pipeline/scheduler.log
 pipeline/screenshots/
+pipeline/backups/
+pipeline/backup.log
 

@@ -100,6 +100,15 @@ CREATE TABLE IF NOT EXISTS clicks (
     timestamp   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Single-row table persisting the cold-email send-pacing cursor
+-- (sales_agent.py's rate limiter) so a crash/restart can't send a burst of
+-- emails back-to-back by forgetting the randomized 120-300s delay that was
+-- in flight -- see get_next_send_allowed_at()/set_next_send_allowed_at().
+CREATE TABLE IF NOT EXISTS send_pacing (
+    id                  INTEGER PRIMARY KEY CHECK (id = 1),
+    next_allowed_at     TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status);
 CREATE INDEX IF NOT EXISTS idx_leads_email ON leads(contact_email);
 CREATE INDEX IF NOT EXISTS idx_email_threads_lead ON email_threads(lead_id);
@@ -362,6 +371,28 @@ def get_last_email_timestamp(lead_id: int) -> Optional[str]:
             (lead_id,),
         ).fetchone()
         return row["timestamp"] if row else None
+
+
+# --- Send pacing (persisted rate-limit cursor) --------------------------------
+
+def get_next_send_allowed_at() -> Optional[datetime]:
+    """Earliest time the next cold email may go out, per the last-persisted
+    randomized 120-300s delay -- None if no email has been sent yet (or the
+    row was never written), meaning sending is allowed immediately."""
+    with get_connection() as conn:
+        row = conn.execute("SELECT next_allowed_at FROM send_pacing WHERE id = 1").fetchone()
+        if row is None:
+            return None
+        return datetime.fromisoformat(row["next_allowed_at"])
+
+
+def set_next_send_allowed_at(when: datetime) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO send_pacing (id, next_allowed_at) VALUES (1, ?) "
+            "ON CONFLICT(id) DO UPDATE SET next_allowed_at = excluded.next_allowed_at",
+            (when.isoformat(),),
+        )
 
 
 # --- State history -----------------------------------------------------------

@@ -231,6 +231,20 @@ to throwaway `pipeline/leads.test.db` / `traces.test.json` regardless of
 what `.env` specifies, so even a fallback run can't write into your real
 `leads.db`. Create `.env.test` if you want explicit control instead.
 
+## Database backups
+
+`pipeline/backup_db.py` snapshots `leads.db` to `pipeline/backups/leads-<timestamp>.db`
+using SQLite's online backup API (safe to run while `main.py` has the
+database open), and prunes backups older than 14 days:
+
+```bash
+cd pipeline && python backup_db.py
+```
+
+Run it daily via cron -- see the "Daily database backup" entry in
+`crontab.example`. Restoring is just copying a backup file back over
+`leads.db` (with the pipeline stopped) or pointing `DB_PATH` at it.
+
 ## Scheduler / keeping it running
 
 `main.py` already contains its own infinite work loop -- once started, it

@@ -22,3 +22,12 @@
 #   3. Check `pipeline/scheduler.log` for main.py's output.
 
 */5 * * * * cd /home/youruser/website-designers/pipeline && /home/youruser/website-designers/venv/bin/python scheduler.py --check >> /home/youruser/website-designers/pipeline/scheduler.log 2>&1
+
+# --- Daily database backup ---------------------------------------------------
+# Snapshots pipeline/leads.db (via SQLite's online backup API, so it's safe
+# to run while main.py has the DB open) to pipeline/backups/, pruning
+# anything older than 14 days. Runs once a day at 03:00 server time.
+#
+# Setup: same as above -- adjust the paths, then paste into `crontab -e`.
+
+0 3 * * * cd /home/youruser/website-designers/pipeline && /home/youruser/website-designers/venv/bin/python backup_db.py >> /home/youruser/website-designers/pipeline/backup.log 2>&1
