@@ -12,6 +12,7 @@ from __future__ import annotations
 import html as html_module
 import random
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -27,7 +28,19 @@ except ImportError:  # slack-sdk is a soft dependency; alerts still print to con
     WebClient = None  # type: ignore[assignment,misc]
     SlackApiError = Exception  # type: ignore[assignment,misc]
 
+try:
+    import anthropic
+except ImportError:  # anthropic is a soft dependency; only needed if ANTHROPIC_API_KEY is set.
+    anthropic = None  # type: ignore[assignment]
+
 HF_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
+CLAUDE_MODEL = "claude-3-5-haiku-latest"
+
+# Bumped whenever _build_prompt()/CLAUDE_MODEL/HF_MODEL's drafting logic
+# changes meaningfully -- stored alongside each sent email (see
+# db.insert_email_thread's prompt_version) so a regression in email quality
+# can be traced back to which drafting logic produced it.
+PROMPT_VERSION = "sales-agent-v1"
 
 # In-memory set of lead ids currently under manual human takeover. A lead
 # enters this set when the operator types "takeover" at the console
@@ -83,9 +96,10 @@ def alert_positive_reply(lead: dict) -> None:
 
 # --- Human takeover state ------------------------------------------------------
 
-def begin_takeover(lead_id: int) -> None:
+def begin_takeover(lead_id: int, actor: str = "operator") -> None:
     _TAKEOVER_LEAD_IDS.add(lead_id)
     db.update_lead_status(lead_id, "negotiating", notes="Human took over negotiation")
+    db.log_lead_event(lead_id, "takeover", payload={"actor": actor}, actor=actor)
 
 
 def is_under_takeover(lead_id: int) -> bool:
@@ -156,12 +170,38 @@ def _parse_subject_body(raw_text: str, lead: dict) -> tuple[str, str]:
     return subject, body
 
 
+def _draft_with_claude(lead: dict) -> Optional[str]:
+    """Best-effort secondary LLM drafting attempt, used only when the
+    primary Hugging Face call fails. Returns raw model text in the same
+    "Subject: ...\\n\\n<body>" format as the HF prompt, or None if Claude
+    isn't configured/available/fails too -- callers fall through to the
+    deterministic template in that case, exactly as before this existed."""
+    if not config.ANTHROPIC_API_KEY or anthropic is None:
+        return None
+    try:
+        client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=280,
+            messages=[{"role": "user", "content": _build_prompt(lead)}],
+        )
+        return response.content[0].text
+    except Exception as exc:  # noqa: BLE001 - any Claude/network failure falls through
+        print(f"[sales_agent] Claude fallback drafting also failed: {exc}")
+        return None
+
+
 def draft_cold_email(lead: dict) -> tuple[str, str]:
     """Return (subject, body_text_without_footer_or_link).
 
     Refuses to draft at all (rather than only refusing to send later) if
     PHYSICAL_ADDRESS is missing/placeholder -- no point spending an HF call
-    on an email that utils/compliance.py will refuse to send anyway."""
+    on an email that utils/compliance.py will refuse to send anyway.
+
+    Drafting order: Hugging Face (primary) -> Anthropic Claude, only if
+    ANTHROPIC_API_KEY is configured (secondary, so a primary-provider outage
+    doesn't stall the pipeline) -> deterministic template (final fallback,
+    always available, no API dependency)."""
     problem = config.physical_address_problem()
     if problem:
         raise RuntimeError(
@@ -173,8 +213,10 @@ def draft_cold_email(lead: dict) -> tuple[str, str]:
             _build_prompt(lead), max_new_tokens=280, temperature=0.7, do_sample=True
         )
     except Exception as exc:  # noqa: BLE001 - any HF/network failure falls back gracefully
-        print(f"[sales_agent] HF drafting failed, using fallback template: {exc}")
-        return _fallback_email(lead)
+        print(f"[sales_agent] HF drafting failed, trying fallback provider: {exc}")
+        raw = _draft_with_claude(lead)
+        if raw is None:
+            return _fallback_email(lead)
     return _parse_subject_body(raw, lead)
 
 
@@ -329,10 +371,15 @@ def _send_via_configured_transport(
     body_html: Optional[str] = None,
     inline_image_path: Optional[str] = None,
     inline_image_cid: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
 ) -> str:
     """Send email via configured transport: SendGrid if SENDGRID_API_KEY is set,
     otherwise fall back to SMTP via send_email.
-    
+
+    `idempotency_key`, if given, is attached as a SendGrid custom_arg (or an
+    X-Idempotency-Key header for SMTP) so a send can be traced back to the
+    pending-send marker that preceded it -- see db.mark_send_pending().
+
     Returns the message_id of the sent email.
     """
     if config.SENDGRID_API_KEY:
@@ -344,6 +391,7 @@ def _send_via_configured_transport(
             body_html=body_html,
             inline_image_path=inline_image_path,
             inline_image_cid=inline_image_cid,
+            idempotency_key=idempotency_key,
         )
     else:
         return email_utils.send_email(
@@ -354,6 +402,7 @@ def _send_via_configured_transport(
             body_html=body_html,
             inline_image_path=inline_image_path,
             inline_image_cid=inline_image_cid,
+            idempotency_key=idempotency_key,
         )
 
 
@@ -372,8 +421,9 @@ def send_cold_email(lead: dict) -> bool:
 
 def _send_cold_email_impl(lead: dict) -> bool:
     email_addr = lead.get("contact_email") or ""
-    if not email_addr or db.is_unsubscribed(email_addr):
-        db.update_lead_status(lead["id"], "unsubscribed" if db.is_unsubscribed(email_addr) else "lost",
+    blocked = email_addr and (db.is_unsubscribed(email_addr) or db.is_suppressed(email_addr))
+    if not email_addr or blocked:
+        db.update_lead_status(lead["id"], "unsubscribed" if blocked else "lost",
                                notes="No usable email at send time")
         return False
 
@@ -396,6 +446,13 @@ def _send_cold_email_impl(lead: dict) -> bool:
     body_html = _build_html_body(lead, preview_link, city) if cached_screenshot else None
     inline_image_path = str(cached_screenshot) if cached_screenshot else None
 
+    # Marked BEFORE calling the transport, cleared only after a confirmed
+    # send: if the process crashes in between, pending_send_id survives the
+    # restart and send_next_pending() skips this lead rather than risk
+    # sending the same cold email twice -- see db.mark_send_pending().
+    send_uuid = str(uuid.uuid4())
+    db.mark_send_pending(lead["id"], send_uuid)
+
     message_id = _send_via_configured_transport(
         to_addr=email_addr,
         subject=subject,
@@ -404,6 +461,7 @@ def _send_cold_email_impl(lead: dict) -> bool:
         body_html=body_html,
         inline_image_path=inline_image_path,
         inline_image_cid=_SCREENSHOT_CID,
+        idempotency_key=send_uuid,
     )
     db.insert_email_thread(
         lead_id=lead["id"],
@@ -413,14 +471,36 @@ def _send_cold_email_impl(lead: dict) -> bool:
         from_addr=config.EMAIL_USER,
         to_addr=email_addr,
         message_id=message_id,
+        prompt_version=PROMPT_VERSION,
     )
     db.update_lead_status(lead["id"], "emailed", notes="Cold email sent")
+    db.clear_send_pending(lead["id"])
 
     db.set_next_send_allowed_at(
         datetime.now(timezone.utc)
         + timedelta(seconds=random.uniform(config.EMAIL_MIN_DELAY_SECONDS, config.EMAIL_MAX_DELAY_SECONDS))
     )
     return True
+
+
+_DOMAIN_COOLDOWN_HOURS = 24
+
+
+def _domain_of(email: str) -> str:
+    return email.rsplit("@", 1)[-1].lower() if email and "@" in email else ""
+
+
+def _domain_cooldown_active(domain: str) -> bool:
+    """True if this domain was emailed within the last 24h -- prevents two
+    different contacts at the same company both getting cold-emailed the
+    same day (see db.get_last_domain_email_timestamp)."""
+    if not domain:
+        return False
+    last_sent = db.get_last_domain_email_timestamp(domain)
+    if last_sent is None:
+        return False
+    last_sent_dt = datetime.fromisoformat(last_sent).replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - last_sent_dt < timedelta(hours=_DOMAIN_COOLDOWN_HOURS)
 
 
 def send_next_pending() -> Optional[int]:
@@ -430,6 +510,17 @@ def send_next_pending() -> Optional[int]:
         return None
     for lead in db.list_leads_by_status("designed"):
         if is_under_takeover(lead["id"]):
+            continue
+        if lead.get("pending_send_id"):
+            # A previous send attempt for this lead crashed between
+            # mark_send_pending() and clear_send_pending() -- we can't tell
+            # whether the email actually went out, so skip it rather than
+            # risk a duplicate send. Needs manual review (see db.leads.
+            # pending_send_id) before it'll be picked up again.
+            print(f"[sales_agent] Skipping lead {lead['id']}: a prior send attempt "
+                  f"({lead['pending_send_id']}) never confirmed complete -- needs manual review.")
+            continue
+        if _domain_cooldown_active(_domain_of(lead.get("contact_email") or "")):
             continue
         if send_cold_email(lead):
             return lead["id"]
@@ -490,6 +581,8 @@ def _handle_inbound_impl(lead: dict, msg) -> None:  # msg: email_utils.InboundEm
         # No confirmation email here on purpose: someone who just said "stop
         # emailing me" should get silence, not one more message in their inbox.
         db.update_lead_status(lead["id"], "lost", notes="Replied negative")
+        if lead.get("contact_email"):
+            db.add_to_suppression_list(lead["contact_email"], reason="Replied negative")
     elif classification == "out_of_office":
         db.log_state_history(lead["id"], lead["status"], lead["status"], notes="Out-of-office auto-reply")
     elif classification == "positive":

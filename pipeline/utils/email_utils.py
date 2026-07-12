@@ -35,6 +35,7 @@ from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import (
     Mail,
     Attachment,
+    CustomArg,
     FileContent,
     FileName,
     FileType,
@@ -91,6 +92,41 @@ def _log_dry_run(transport: str, to_addr: str, subject: str, body_with_footer: s
         f.write(entry)
 
 
+# --- Content/size validation (never send a broken or oversized email) --------
+
+_MAX_HTML_BYTES = 150 * 1024
+_MAX_IMAGE_BYTES = 2 * 1024 * 1024
+_MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
+_HTML_LEAK_MARKERS_CI = ("localhost", "127.0.0.1", "{{", "}}")
+_HTML_LEAK_MARKERS_CS = ("None", "null")
+
+
+def _validate_html_content(body_html: Optional[str], inline_image_path: Optional[str]) -> None:
+    """Raise ValueError before sending if the rendered HTML leaked a
+    template placeholder / dev URL, references an inline image that isn't
+    actually attached, or exceeds size limits (clipped emails, spam
+    penalties). Called by both send_email() and send_email_sendgrid()."""
+    if not body_html:
+        return
+    for marker in _HTML_LEAK_MARKERS_CI:
+        if marker in body_html.lower():
+            raise ValueError(f"Refusing to send: HTML body contains {marker!r} -- looks like a template/dev leak.")
+    for marker in _HTML_LEAK_MARKERS_CS:
+        if marker in body_html:
+            raise ValueError(f"Refusing to send: HTML body contains literal {marker!r} -- looks like an unrendered value.")
+    has_attachment = bool(inline_image_path and Path(inline_image_path).exists())
+    if "cid:preview" in body_html.lower() and not has_attachment:
+        raise ValueError("Refusing to send: HTML references cid:preview but no inline image attachment is present.")
+
+    html_bytes = len(body_html.encode("utf-8"))
+    if html_bytes > _MAX_HTML_BYTES:
+        raise ValueError(f"Refusing to send: HTML body is {html_bytes} bytes, over the {_MAX_HTML_BYTES}-byte limit.")
+    if has_attachment:
+        image_bytes = Path(inline_image_path).stat().st_size
+        if image_bytes > _MAX_IMAGE_BYTES:
+            raise ValueError(f"Refusing to send: inline image is {image_bytes} bytes, over the {_MAX_IMAGE_BYTES}-byte limit.")
+
+
 def send_email(
     to_addr: str,
     subject: str,
@@ -99,6 +135,7 @@ def send_email(
     body_html: Optional[str] = None,
     inline_image_path: Optional[str] = None,
     inline_image_cid: str = "preview",
+    idempotency_key: Optional[str] = None,
 ) -> str:
     """Send a compliant cold email via SMTP. Returns the generated Message-ID.
 
@@ -128,6 +165,7 @@ def send_email(
     content.attach(MIMEText(text_with_footer, "plain"))
     if body_html:
         html_with_footer = compliance.append_footer_html(body_html, lead_id)
+        _validate_html_content(html_with_footer, inline_image_path)
         content.attach(MIMEText(html_with_footer, "html"))
 
     if inline_image_path and Path(inline_image_path).exists():
@@ -146,13 +184,15 @@ def send_email(
     msg["Subject"] = subject
     msg["From"] = f"{config.SENDING_DOMAIN} <{config.EMAIL_USER}>"
     msg["To"] = to_addr
+    if idempotency_key:
+        msg["X-Idempotency-Key"] = idempotency_key
     msg["Date"] = formatdate(localtime=True)
     message_id = make_msgid(domain=config.SENDING_DOMAIN or None)
     msg["Message-ID"] = message_id
     msg["List-Unsubscribe"] = compliance.list_unsubscribe_header(lead_id)
     msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
 
-    if not config.ENABLE_LIVE_SEND:
+    if not config.ENABLE_LIVE_SEND or config.SAFE_MODE:
         _log_dry_run("SMTP", to_addr, subject, text_with_footer)
         return message_id
 
@@ -172,6 +212,7 @@ def send_email_sendgrid(
     body_html: Optional[str] = None,
     inline_image_path: Optional[str] = None,
     inline_image_cid: str = "preview",
+    idempotency_key: Optional[str] = None,
 ) -> str:
     """Send a compliant cold email via SendGrid. Returns the generated Message-ID.
 
@@ -232,6 +273,7 @@ def send_email_sendgrid(
     html_content = body_html
     if body_html:
         html_with_footer = compliance.append_footer_html(body_html, lead_id)
+        _validate_html_content(html_with_footer, inline_image_path)
         html_content = html_with_footer
 
     # Create the Mail object
@@ -242,6 +284,9 @@ def send_email_sendgrid(
         plain_text_content=text_with_footer,
         html_content=html_content,
     )
+
+    if idempotency_key:
+        mail.add_custom_arg(CustomArg("idempotency_key", idempotency_key))
 
     # Set Message-ID header
     mail.extra_headers = {
@@ -286,7 +331,7 @@ def send_email_sendgrid(
     elif inline_image_path:
         logger.warning(f"Inline image path {inline_image_path!r} does not exist; sending without it.")
 
-    if not config.ENABLE_LIVE_SEND:
+    if not config.ENABLE_LIVE_SEND or config.SAFE_MODE:
         _log_dry_run("SendGrid", to_addr, subject, text_with_footer)
         return message_id
 

@@ -35,9 +35,15 @@ from utils import db, github_api, stripe_utils, vercel_api
 
 PIPELINE_DIR = Path(__file__).resolve().parent
 LEADS_INBOX = PIPELINE_DIR / "leads_inbox"
+LEADS_PROCESSING = PIPELINE_DIR / "leads_processing"
 LEADS_PROCESSED = PIPELINE_DIR / "leads_processed"
 LEADS_FAILED = PIPELINE_DIR / "leads_failed"
 PAUSE_FLAG = PIPELINE_DIR / ".paused"  # dashboard.py toggles this file to pause/resume
+
+# A CSV sitting in leads_processing/ longer than this means whatever was
+# processing it crashed mid-run (a healthy ingest completes in well under a
+# second) -- see _reset_stale_processing_files().
+_STALE_PROCESSING_SECONDS = 3600
 
 _shutdown_event = threading.Event()
 
@@ -53,19 +59,51 @@ def _set_paused(paused: bool) -> None:
         PAUSE_FLAG.unlink(missing_ok=True)
 
 
+def _reset_stale_processing_files() -> None:
+    """A CSV stuck in leads_processing/ past _STALE_PROCESSING_SECONDS means
+    the process that claimed it crashed before finishing -- move it back to
+    leads_inbox/ so the next cycle picks it up again instead of leaving it
+    stuck there forever."""
+    cutoff = time.time() - _STALE_PROCESSING_SECONDS
+    for stuck_file in LEADS_PROCESSING.glob("*.csv"):
+        if stuck_file.stat().st_mtime < cutoff:
+            print(
+                f"[main] {stuck_file.name} has been stuck in leads_processing/ for over "
+                f"{_STALE_PROCESSING_SECONDS // 60} minutes -- flagging as crashed and "
+                "resetting to leads_inbox/."
+            )
+            shutil.move(str(stuck_file), str(LEADS_INBOX / stuck_file.name))
+
+
 def _process_inbox_csvs() -> None:
     LEADS_INBOX.mkdir(exist_ok=True)
+    LEADS_PROCESSING.mkdir(exist_ok=True)
     LEADS_PROCESSED.mkdir(exist_ok=True)
     LEADS_FAILED.mkdir(exist_ok=True)
+
+    _reset_stale_processing_files()
+
     for csv_file in sorted(LEADS_INBOX.glob("*.csv")):
-        print(f"[main] Ingesting {csv_file.name}")
+        processing_path = LEADS_PROCESSING / csv_file.name
         try:
-            lead_agent.ingest_csv(str(csv_file))
+            # Atomic rename "claims" the file before it's ever read: this
+            # both avoids picking up a file mid-copy/mid-write (a reader
+            # only ever sees it once it's a stable entry in leads_processing/)
+            # and prevents two scheduler instances from both processing the
+            # same CSV -- if two processes race this rename, only one wins;
+            # the other gets an OSError and moves on.
+            csv_file.rename(processing_path)
+        except OSError:
+            continue
+
+        print(f"[main] Ingesting {processing_path.name}")
+        try:
+            lead_agent.ingest_csv(str(processing_path))
         except Exception as exc:  # noqa: BLE001 - a malformed CSV must not kill the loop
-            print(f"[main] Failed to ingest {csv_file.name}: {exc}")
-            shutil.move(str(csv_file), str(LEADS_FAILED / csv_file.name))
+            print(f"[main] Failed to ingest {processing_path.name}: {exc}")
+            shutil.move(str(processing_path), str(LEADS_FAILED / processing_path.name))
         else:
-            shutil.move(str(csv_file), str(LEADS_PROCESSED / csv_file.name))
+            shutil.move(str(processing_path), str(LEADS_PROCESSED / processing_path.name))
 
 
 def _run_cycle() -> None:
@@ -204,7 +242,7 @@ def _handle_command(line: str) -> None:
     cmd = parts[0].lower()
 
     if cmd == "takeover" and len(parts) == 2 and parts[1].isdigit():
-        sales_agent.begin_takeover(int(parts[1]))
+        sales_agent.begin_takeover(int(parts[1]), actor="console")
         print(f"[main] Lead {parts[1]} is now under manual takeover. Automation paused for this lead.")
     elif cmd == "payment" and len(parts) == 3 and parts[1] == "ready" and parts[2].isdigit():
         _handle_payment_ready(int(parts[2]))

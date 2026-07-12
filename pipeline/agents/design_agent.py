@@ -18,7 +18,14 @@ TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 TEMPLATE_FILES = ("index.html", "style.css")
 DEFAULT_NICHE = "default"
 
+# Bumped whenever build_context()/render_template_files()'s rendering logic
+# changes meaningfully -- stored alongside each deployed site (see
+# db.insert_website's template_version) so a quality regression can be
+# traced back to which rendering logic produced it.
+TEMPLATE_VERSION = "design-agent-v1"
+
 _PLACEHOLDER_IMAGE_BASE = "https://picsum.photos/seed"
+_PLACEHOLDER_IMAGE_MARKERS = ("your photo here", "your logo here", "image coming soon", "photo coming soon")
 
 # Unsplash search terms per niche -- more specific than the raw niche
 # string so the fetched photo actually matches the trade (e.g. a mechanic
@@ -246,6 +253,37 @@ def render_template_files(niche: str, context: dict) -> dict[str, str]:
     return rendered
 
 
+def _quality_check(html: str) -> list[str]:
+    """Return a list of problems with rendered index.html, empty if it
+    passes every minimum-quality check. Deliberately lenient (matches what
+    every template under templates/ already produces -- see the per-niche
+    survey this was calibrated against) so it only catches a genuinely
+    broken/incomplete render, not a stylistic difference between templates."""
+    problems = []
+    lower = html.lower()
+    if "<title" not in lower or "<title></title>" in lower.replace(" ", ""):
+        problems.append("missing or empty <title>")
+    if "<nav" not in lower and 'class="nav' not in lower:
+        problems.append("missing navigation")
+    if "<h1" not in lower:
+        problems.append("missing hero section (<h1>)")
+    # A tel: link doubles as both the primary CTA and the contact
+    # mechanism on these single-page local-business sites -- see
+    # templates/default/index.html's "Get In Touch" section.
+    has_tel_link = "tel:" in lower
+    if not has_tel_link and "<button" not in lower and "cta" not in lower:
+        problems.append("missing call-to-action")
+    if not has_tel_link and "contact" not in lower:
+        problems.append("missing contact section")
+    if 'name="viewport"' not in lower:
+        problems.append("missing responsive viewport meta tag")
+    if "lorem ipsum" in lower:
+        problems.append("contains 'lorem ipsum' placeholder text")
+    if any(marker in lower for marker in _PLACEHOLDER_IMAGE_MARKERS):
+        problems.append("contains a placeholder image reference")
+    return problems
+
+
 def _capture_and_publish_screenshot(lead_id: int, preview_url: str) -> tuple[str, str]:
     """Capture (or reuse a cached) screenshot of the freshly-deployed
     preview. Returns (public_screenshot_url, local_screenshot_path) -- the
@@ -292,6 +330,16 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
     context = build_context(lead)
     files = render_template_files(niche, context)
 
+    # Reject the deployment outright rather than shipping (and emailing) a
+    # broken/incomplete preview -- see _quality_check(). Never reaches
+    # GitHub/Vercel if this fails.
+    problems = _quality_check(files.get("index.html", ""))
+    if problems:
+        db.update_lead_status(
+            lead["id"], "lost", notes=f"Rendered site failed quality gate: {'; '.join(problems)}"
+        )
+        return None
+
     _repo, repo_url, repo_full_name = github_api.create_repo_with_files(
         lead["business_name"], lead["id"], files
     )
@@ -310,6 +358,7 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
         vercel_project_id=deployment["deployment_id"],
         screenshot_url=screenshot_url,
         screenshot_path=screenshot_path,
+        template_version=TEMPLATE_VERSION,
     )
     db.update_lead_status(lead["id"], "designed", notes=f"Preview deployed: {deployment['url']}")
     return db.get_website_by_lead(lead["id"]) if website_id else None

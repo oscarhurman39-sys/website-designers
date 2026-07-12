@@ -90,6 +90,22 @@ SENDGRID_WEBHOOK_VERIFICATION_KEY: str = os.getenv("SENDGRID_WEBHOOK_VERIFICATIO
 # Set ENABLE_LIVE_SEND=true in .env once you're ready to actually send.
 ENABLE_LIVE_SEND: bool = os.getenv("ENABLE_LIVE_SEND", "").strip().lower() in ("1", "true", "yes")
 
+# --- Safe mode (full pipeline test run with zero external side effects) -----
+# When true: email sending stays dry-run regardless of ENABLE_LIVE_SEND,
+# github_api.py/vercel_api.py return stub data instead of calling their real
+# APIs, stripe_utils.create_checkout_session() returns a fake URL, and
+# webhook_server.py's /webhook/stripe and /webhook/sendgrid routes refuse
+# requests (503) rather than act on them. Lets you exercise the whole
+# pipeline locally without touching any real GitHub/Vercel/Stripe/email
+# account. Set SAFE_MODE=true in .env to enable.
+SAFE_MODE: bool = os.getenv("SAFE_MODE", "").strip().lower() in ("1", "true", "yes")
+
+# --- Optional secondary LLM provider (drafting fallback) --------------------
+# If set, agents/sales_agent.py's draft_cold_email() tries Anthropic Claude
+# when the primary Hugging Face call fails, before falling back to the
+# deterministic template. Purely additive -- unset, behavior is unchanged.
+ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+
 # --- VoltAgent observability (optional) -------------------------------------
 # When both keys are set, pipeline/utils/tracer.py mirrors every agent/tool
 # span to VoltAgent Cloud in addition to the always-on local trace file
@@ -155,6 +171,29 @@ def physical_address_problem() -> Optional[str]:
     return None
 
 
+_REQUIRED_DIRS = ("leads_inbox", "leads_processing", "leads_processed", "leads_failed", "screenshots", "backups")
+
+
+def _validate_filesystem() -> None:
+    """Ensure the directories the pipeline writes to exist and are writable,
+    creating them if missing. Failing fast here (rather than mid-run inside
+    whichever agent first tries to write) makes a bad host/permissions setup
+    obvious at startup instead of as a random crash hours later."""
+    pipeline_dir = Path(__file__).resolve().parent
+    problems = []
+    for name in _REQUIRED_DIRS:
+        d = pipeline_dir / name
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            probe = d / ".write_test"
+            probe.write_text("ok")
+            probe.unlink()
+        except OSError as exc:
+            problems.append(f"{d}: {exc}")
+    if problems:
+        raise RuntimeError("Filesystem check failed for required director(y/ies):\n" + "\n".join(problems))
+
+
 def validate() -> None:
     """Raise RuntimeError listing every missing required variable.
 
@@ -169,6 +208,15 @@ def validate() -> None:
             + ", ".join(missing)
             + f"\nCopy .env.example to .env ({_ENV_PATH}) and fill them in."
         )
+
+    if len(SECRET_KEY) < 32:
+        raise RuntimeError(
+            f"SECRET_KEY is only {len(SECRET_KEY)} characters -- it must be at least 32 "
+            "for adequate HMAC entropy (unsubscribe/click tokens are signed with it). "
+            "Generate one with: openssl rand -hex 32"
+        )
+
+    _validate_filesystem()
 
     if PUBLIC_BASE_URL == "http://localhost:5000":
         print(

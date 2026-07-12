@@ -19,12 +19,15 @@ duplicate would cost:
     mean the mail already went out, and a retry would send the same cold
     email twice. A 5xx response is SendGrid saying "not accepted" -- safe.
 
-Backoff: base_delay * 2^(attempt-1), i.e. 2s then 4s for the default
-3 attempts -- the same 2/4/8 convention used elsewhere in this project.
+Backoff: base_delay * 2^(attempt-1) plus up to 25% random jitter, i.e.
+~2-2.5s then ~4-5s for the default 3 attempts -- the jitter spreads out
+retries that would otherwise all fire at the same offset (e.g. several
+leads hitting a rate limit in the same cycle and retrying in lockstep).
 """
 from __future__ import annotations
 
 import functools
+import random
 import time
 from typing import Any, Callable, Optional, TypeVar
 
@@ -85,6 +88,7 @@ def with_retries(
                     if attempt == attempts or not transient(exc):
                         raise
                     delay = base_delay * (2 ** (attempt - 1))
+                    delay += random.uniform(0, delay * 0.25)  # jitter: avoid synchronized thundering-herd retries
                     print(
                         f"[retry] {label or fn.__name__}: attempt {attempt}/{attempts} failed "
                         f"({exc.__class__.__name__}: {exc}); retrying in {delay:.0f}s"

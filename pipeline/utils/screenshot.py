@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
+from PIL import Image
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 
@@ -48,6 +49,42 @@ _PAGE_LOAD_TIMEOUT_MS = 30_000
 _VERCEL_LOGIN_WALL_MARKERS = ("vercel authentication", "log in to vercel")
 _LOGIN_WALL_RETRY_DELAY_MS = 3_000
 
+# Sanity thresholds for a captured screenshot -- catches a corrupt/truncated
+# write or a blank capture (e.g. the page hadn't rendered yet) that the
+# pre-capture login-wall text check above wouldn't catch, since those
+# failure modes only show up in the image itself. See _is_valid_screenshot().
+_MIN_SCREENSHOT_BYTES = 10 * 1024
+_MIN_DIMENSION_PX = 500
+_MIN_VARIANCE = 5.0  # near-zero variance means an effectively solid-color image
+
+
+def _is_valid_screenshot(path: Path) -> bool:
+    """True if `path` exists and looks like a real, usable preview
+    screenshot: non-trivial file size, a valid decodable PNG, large enough
+    dimensions, and not an (almost) solid-color image (a blank white/black
+    capture, which usually means the page hadn't finished rendering)."""
+    try:
+        if not path.exists() or path.stat().st_size < _MIN_SCREENSHOT_BYTES:
+            return False
+        with Image.open(path) as img:
+            img.verify()  # raises if the file isn't a valid, complete image
+        with Image.open(path) as img:
+            if img.format != "PNG":
+                return False
+            width, height = img.size
+            if width < _MIN_DIMENSION_PX or height < _MIN_DIMENSION_PX:
+                return False
+            grayscale = img.convert("L")
+            histogram = grayscale.histogram()
+            total_pixels = width * height
+            mean = sum(i * count for i, count in enumerate(histogram)) / total_pixels
+            variance = sum(count * (i - mean) ** 2 for i, count in enumerate(histogram)) / total_pixels
+            if variance < _MIN_VARIANCE:
+                return False
+    except Exception:  # noqa: BLE001 - any decode/IO error means "not valid"
+        return False
+    return True
+
 
 def screenshot_path(lead_id: int) -> Path:
     """Where a given lead's screenshot lives (whether or not it exists yet)."""
@@ -56,17 +93,21 @@ def screenshot_path(lead_id: int) -> Path:
 
 def capture_screenshot_sync(preview_url: str, lead_id: int) -> Path:
     """Capture a full-page screenshot of `preview_url` and save it to
-    pipeline/screenshots/{lead_id}.png. Cached: if that file already
-    exists, returns it immediately without launching a browser.
+    pipeline/screenshots/{lead_id}.png. Cached: if that file already exists
+    AND passes _is_valid_screenshot(), returns it immediately without
+    launching a browser. An existing-but-invalid file (corrupt, blank,
+    truncated) is discarded and recaptured once rather than trusted as-is.
 
-    Raises on failure (e.g. the preview isn't reachable yet, or no
-    Chromium is available) -- callers that consider a screenshot optional
-    (design_agent.py does) should catch and log rather than let this stop
-    an otherwise-successful deployment.
+    Raises on failure (e.g. the preview isn't reachable yet, no Chromium is
+    available, or the capture is still invalid after one retry) -- callers
+    that consider a screenshot optional (design_agent.py does) should catch
+    and log rather than let this stop an otherwise-successful deployment.
     """
     out_path = screenshot_path(lead_id)
     if out_path.exists():
-        return out_path
+        if _is_valid_screenshot(out_path):
+            return out_path
+        out_path.unlink()
 
     SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -75,6 +116,17 @@ def capture_screenshot_sync(preview_url: str, lead_id: int) -> Path:
     # not, without the caller needing to know or care which.
     with ThreadPoolExecutor(max_workers=1) as executor:
         executor.submit(_capture_sync, preview_url, out_path).result()
+
+    if not _is_valid_screenshot(out_path):
+        # One regeneration attempt -- a transient render glitch (page not
+        # fully painted yet) is worth retrying once; a second failure is
+        # more likely a real problem, so give up rather than loop forever.
+        out_path.unlink(missing_ok=True)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(_capture_sync, preview_url, out_path).result()
+        if not _is_valid_screenshot(out_path):
+            out_path.unlink(missing_ok=True)
+            raise PlaywrightError(f"Screenshot for lead {lead_id} failed validation after regeneration.")
 
     return out_path
 
@@ -151,11 +203,14 @@ def _capture_sync(preview_url: str, out_path: Path) -> None:
 
 def get_cached_screenshot(lead_id: int) -> Optional[Path]:
     """Return the screenshot path for `lead_id` if one has already been
-    captured, else None. Never triggers a new capture -- used by
-    sales_agent.py, which should only embed a screenshot that's already
-    there, not block/slow down sending to take one."""
+    captured AND passes _is_valid_screenshot(), else None. Never triggers a
+    new capture -- used by sales_agent.py, which should only embed a
+    screenshot that's already there and known-good, not block/slow down
+    sending to take (or validate) one. A missing, empty, or invalid file
+    means the caller sends without an inline image entirely -- see
+    sales_agent.py's _send_cold_email_impl()."""
     path = screenshot_path(lead_id)
-    return path if path.exists() else None
+    return path if _is_valid_screenshot(path) else None
 
 
 __all__ = [

@@ -24,10 +24,14 @@ _client: Optional[Github] = None
 # are only retried when the connection failed before the request reached
 # the server, never after an ambiguous response, so a retry can't create
 # duplicate repos/commits. GETs/DELETEs also retry on 429/5xx responses.
+# 403 is included alongside 429 for GitHub's *secondary* rate limit, which
+# (unlike the primary limit) is signaled with a plain 403 + Retry-After
+# rather than 429 -- see respect_retry_after_header below, and GitHub's own
+# guidance: https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#about-secondary-rate-limits
 _RETRY = Retry(
     total=3,
     backoff_factor=2,
-    status_forcelist=(429, 500, 502, 503, 504),
+    status_forcelist=(403, 429, 500, 502, 503, 504),
     respect_retry_after_header=True,
 )
 
@@ -101,12 +105,17 @@ def create_repo_with_files(
     business_name: str,
     lead_id: int,
     files: dict[str, str],
-) -> tuple[Repository, str, str]:
+) -> tuple[Optional[Repository], str, str]:
     """Convenience wrapper: create the repo and push all template files.
 
-    Returns (repo_object, html_url, full_name).
+    Returns (repo_object, html_url, full_name). In SAFE_MODE, makes no real
+    GitHub API calls and returns stub values instead (repo_object is None
+    in that case -- design_agent.py's only caller discards it already).
     """
     repo_name = make_repo_name(business_name, lead_id)
+    if config.SAFE_MODE:
+        print(f"[github_api] SAFE_MODE: skipping real repo creation for {repo_name}.")
+        return None, f"https://github.com/safe-mode/{repo_name}", f"safe-mode/{repo_name}"
     repo = create_repo(repo_name, private=True, description=f"Website preview for {business_name}")
     push_files(repo, files)
     return repo, repo.html_url, repo.full_name

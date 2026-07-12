@@ -40,6 +40,14 @@ def _sanitize_project_name(name: str) -> str:
 @_vercel_retry
 def deploy_files(project_name: str, files: dict[str, str]) -> dict:
     project_name = _sanitize_project_name(project_name)
+    if config.SAFE_MODE:
+        print(f"[vercel_api] SAFE_MODE: skipping real Vercel deployment for '{project_name}'.")
+        return {
+            "deployment_id": f"safe-mode-{project_name}",
+            "url": f"https://{project_name}.safe-mode.invalid",
+            "project_name": project_name,
+            "ready_state": "READY",
+        }
     payload = {
         "name": project_name,
         "files": [{"file": path, "data": content} for path, content in files.items()],
@@ -102,15 +110,17 @@ def _disable_deployment_protection(project_name: str) -> None:
 
 
 _LOGIN_WALL_MARKERS = ("vercel authentication", "log in to vercel")
+_NOT_FOUND_MARKERS = ("404: not_found", "this page could not be found")
 
 
 def _wait_until_publicly_accessible(url: str, timeout_seconds: float = _PROTECTION_CHECK_TIMEOUT_SECONDS) -> bool:
     """Poll `url` right after disabling deployment protection to confirm an
     anonymous visitor (a lead clicking the emailed link) actually gets the
-    site rather than a Vercel login wall. Settings changes can lag a few
-    seconds behind the PATCH response, so this retries for up to
-    `timeout_seconds` before giving up. Non-fatal either way -- the caller
-    only uses the result to decide whether to print a warning."""
+    real site -- not a Vercel login wall, and not a 404 (deployment not
+    ready/propagated yet). Settings changes can lag a few seconds behind
+    the PATCH response, so this retries for up to `timeout_seconds` before
+    giving up. Non-fatal either way -- the caller only uses the result to
+    decide whether to print a warning."""
     if not url:
         return True
     headers = {"x-vercel-protection-bypass": config.VERCEL_BYPASS_TOKEN} if config.VERCEL_BYPASS_TOKEN else {}
@@ -118,7 +128,12 @@ def _wait_until_publicly_accessible(url: str, timeout_seconds: float = _PROTECTI
     while True:
         try:
             resp = requests.get(url, headers=headers, timeout=10)
-            if resp.status_code < 400 and not any(m in resp.text.lower() for m in _LOGIN_WALL_MARKERS):
+            body_lower = resp.text.lower()
+            if (
+                resp.status_code == 200
+                and not any(m in body_lower for m in _LOGIN_WALL_MARKERS)
+                and not any(m in body_lower for m in _NOT_FOUND_MARKERS)
+            ):
                 return True
         except requests.RequestException:
             pass

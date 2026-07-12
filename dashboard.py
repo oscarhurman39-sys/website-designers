@@ -83,7 +83,7 @@ for lead in replied_leads:
         if last_inbound:
             st.caption(f"Last reply: {last_inbound['body'][:200]}")
         if st.button("Begin takeover", key=f"takeover_{lead['id']}"):
-            sales_agent.begin_takeover(lead["id"])
+            sales_agent.begin_takeover(lead["id"], actor="dashboard")
             st.success(f"Lead {lead['id']} is now under manual takeover.")
             st.rerun()
 
@@ -113,6 +113,32 @@ for lead in negotiating_leads:
             except Exception as exc:  # noqa: BLE001 - surface it in the UI rather than crashing the page
                 st.error(f"Failed to send payment link: {exc}")
             st.rerun()
+
+st.divider()
+
+# --- Metrics -------------------------------------------------------------------
+# All derived from existing tables (email_threads, leads, unsubscribes) --
+# see db.get_metrics_summary(). Open/delivery rate aren't shown: this
+# pipeline doesn't process SendGrid's 'delivered'/'open' event types (only
+# bounce/dropped/spamreport/unsubscribe), so there's no reliable source yet.
+st.subheader("Metrics")
+_metrics = db.get_metrics_summary()
+_m_col1, _m_col2, _m_col3, _m_col4 = st.columns(4)
+with _m_col1:
+    st.metric("Emails sent", _metrics["emails_sent"])
+    st.metric("Bounce rate", f"{_metrics['bounce_rate']:.1%}")
+with _m_col2:
+    st.metric("Reply rate", f"{_metrics['reply_rate']:.1%}")
+    st.metric("Unsubscribe rate", f"{_metrics['unsubscribe_rate']:.1%}")
+with _m_col3:
+    st.metric("Positive replies", _metrics["positive_replies"])
+    st.metric("Negative replies", _metrics["negative_replies"])
+with _m_col4:
+    st.metric("Conversion rate", f"{_metrics['conversion_rate']:.1%}")
+    st.metric("Closed revenue", f"${_metrics['closed_revenue_usd']:,}")
+if _metrics["avg_response_time_seconds"] is not None:
+    _avg_hours = _metrics["avg_response_time_seconds"] / 3600
+    st.caption(f"Average time to first reply: {_avg_hours:.1f} hours")
 
 st.divider()
 
