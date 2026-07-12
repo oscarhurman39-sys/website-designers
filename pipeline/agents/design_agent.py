@@ -298,6 +298,11 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
     deployment = vercel_api.deploy_files(
         github_api.make_repo_name(lead["business_name"], lead["id"]), files
     )
+    if deployment["ready_state"] in ("ERROR", "CANCELED"):
+        raise RuntimeError(
+            f"Vercel deployment for lead {lead['id']} ended in state "
+            f"{deployment['ready_state']!r} (deployment_id={deployment['deployment_id']})"
+        )
 
     screenshot_url, screenshot_path = _capture_and_publish_screenshot(lead["id"], deployment["url"])
 
