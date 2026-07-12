@@ -161,7 +161,7 @@ filtered = df if selected_status == "(all)" else df[df["status"] == selected_sta
 
 st.dataframe(
     filtered,
-    use_container_width=True,
+    width="stretch",
     column_config={
         "preview_url": st.column_config.LinkColumn("Preview"),
     },
@@ -258,7 +258,7 @@ else:
             }
         )
     trace_df = pd.DataFrame(trace_rows).sort_values("start_time", ascending=False)
-    st.dataframe(trace_df, use_container_width=True)
+    st.dataframe(trace_df, width="stretch")
 
     with st.expander("Raw trace JSON (most recent 20)"):
         st.json(list(reversed(traces))[:20])
