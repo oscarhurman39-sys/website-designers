@@ -3,7 +3,7 @@
 Run with: `streamlit run dashboard.py` (from the repo root).
 
 Shows every lead with status/preview link/last email timestamp, lets you
-filter by status, drill into a lead's email thread, retry a bounce, pause/
+filter by status, drill into a lead's email thread, retry failed leads, pause/
 resume the main.py loop (via a shared flag file), and export the leads
 table to CSV.
 """
