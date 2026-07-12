@@ -260,9 +260,15 @@ def _build_html_body(business_name: str, preview_link: str, city: str) -> str:
         "</a></p>"
     )
     checklist_html = _checklist_html(city)
-    closing_html = "".join(
+    preview_button_html = (
+        f'<a href="{escaped_link}" style="display:inline-block;padding:14px 28px;'
+        'background:#2563eb;color:white;border-radius:8px;text-decoration:none;'
+        'font-size:16px;font-weight:bold;margin:16px 0">View Your Free Website &rarr;</a>'
+    )
+    closing_paragraphs = _closing_paragraphs(preview_link)
+    closing_html = preview_button_html + "".join(
         f"<p>{html_module.escape(para).replace(chr(10), '<br>')}</p>"
-        for para in _closing_paragraphs(preview_link)
+        for para in closing_paragraphs[1:]
     )
     return intro_html + image_html + checklist_html + closing_html
 
