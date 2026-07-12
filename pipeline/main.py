@@ -16,6 +16,8 @@ actions (takeover / payment / transfer) don't have to wait for the loop:
   takeover <lead_id>        - pause automation, hand negotiation to a human
   payment ready <lead_id>   - create + email a Stripe Checkout link
   transfer <lead_id>        - hand the GitHub repo / Vercel project to the client
+  unstick <lead_id>         - clear a crashed send's unconfirmed-send flag
+                              (only after checking whether the email went out)
   status                    - print a lead-count-by-status summary
   pause / resume            - pause/resume the automated loop
   help                      - list commands
@@ -248,6 +250,19 @@ def _handle_command(line: str) -> None:
         _handle_payment_ready(int(parts[2]))
     elif cmd == "transfer" and len(parts) == 2 and parts[1].isdigit():
         _handle_transfer(int(parts[1]))
+    elif cmd == "unstick" and len(parts) == 2 and parts[1].isdigit():
+        lead_id = int(parts[1])
+        lead = db.get_lead(lead_id)
+        if lead is None:
+            print(f"[main] No such lead {lead_id}")
+        elif not lead.get("pending_send_id"):
+            print(f"[main] Lead {lead_id} has no stuck send flag -- nothing to clear.")
+        else:
+            db.clear_send_pending(lead_id)
+            db.log_lead_event(lead_id, "unstick", payload={"cleared": lead["pending_send_id"]}, actor="console")
+            print(f"[main] Cleared stuck send flag for lead {lead_id}. It will be picked up "
+                  "on the next cycle -- make sure the original email did NOT go out, or it "
+                  "will be sent again.")
     elif cmd == "status":
         _print_status()
     elif cmd == "pause":

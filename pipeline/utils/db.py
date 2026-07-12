@@ -290,6 +290,24 @@ def is_unsubscribed(email: str) -> bool:
 
 # --- Global suppression list --------------------------------------------------
 
+# Shared/public mailbox providers where a domain is NOT one company: small
+# local businesses very often use these for their contact address, so
+# domain-level logic (domain-wide suppression matching, the 24h per-domain
+# send cooldown in sales_agent.py) must treat them as exact-address-only --
+# otherwise one negative reply from any @gmail.com lead would permanently
+# suppress EVERY future @gmail.com lead, and the cooldown would throttle
+# all gmail leads to one per day.
+PUBLIC_MAILBOX_DOMAINS = frozenset({
+    "gmail.com", "googlemail.com",
+    "yahoo.com", "yahoo.co.uk", "ymail.com",
+    "hotmail.com", "hotmail.co.uk", "outlook.com", "live.com", "live.co.uk", "msn.com",
+    "aol.com", "icloud.com", "me.com", "mac.com",
+    "protonmail.com", "proton.me", "gmx.com", "gmx.co.uk", "mail.com", "zoho.com",
+    "btinternet.com", "sky.com", "talktalk.net", "virginmedia.com",
+    "blueyonder.co.uk", "ntlworld.com",
+})
+
+
 def _email_domain(email: str) -> str:
     return email.rsplit("@", 1)[-1].lower() if "@" in email else ""
 
@@ -316,16 +334,25 @@ def add_to_suppression_list(email: str, reason: str = "") -> None:
 
 
 def is_suppressed(email: str) -> bool:
-    """True if `email` (or any address at the same domain) is on the
-    permanent do-not-contact list."""
+    """True if `email` is on the permanent do-not-contact list -- matched by
+    exact address always, and additionally by domain for company domains.
+    Public mailbox providers (see PUBLIC_MAILBOX_DOMAINS) only ever match
+    the exact address, so one suppressed @gmail.com lead can never block
+    unrelated @gmail.com leads."""
     email = (email or "").strip().lower()
     if not email:
         return False
+    domain = _email_domain(email)
     with get_connection() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM global_suppression_list WHERE email = ? OR domain = ? LIMIT 1",
-            (email, _email_domain(email)),
-        ).fetchone()
+        if domain and domain not in PUBLIC_MAILBOX_DOMAINS:
+            row = conn.execute(
+                "SELECT 1 FROM global_suppression_list WHERE email = ? OR domain = ? LIMIT 1",
+                (email, domain),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT 1 FROM global_suppression_list WHERE email = ? LIMIT 1", (email,)
+            ).fetchone()
         return row is not None
 
 
@@ -502,6 +529,19 @@ def mark_send_pending(lead_id: int, send_uuid: str) -> None:
 def clear_send_pending(lead_id: int) -> None:
     with get_connection() as conn:
         conn.execute("UPDATE leads SET pending_send_id = NULL WHERE id = ?", (lead_id,))
+
+
+def list_stuck_sends() -> list[dict[str, Any]]:
+    """Leads whose pending_send_id survived a crash (set before a send,
+    never cleared by a confirmed completion). These are skipped by
+    send_next_pending() until an operator reviews whether the email
+    actually went out and clears the flag -- via main.py's `unstick`
+    command or the dashboard's "Clear stuck send" button."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM leads WHERE pending_send_id IS NOT NULL ORDER BY id ASC"
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 # --- Lead events (JSON-payload timeline, e.g. takeover audit log) ------------

@@ -453,16 +453,26 @@ def _send_cold_email_impl(lead: dict) -> bool:
     send_uuid = str(uuid.uuid4())
     db.mark_send_pending(lead["id"], send_uuid)
 
-    message_id = _send_via_configured_transport(
-        to_addr=email_addr,
-        subject=subject,
-        body_text=body_with_link,
-        lead_id=lead["id"],
-        body_html=body_html,
-        inline_image_path=inline_image_path,
-        inline_image_cid=_SCREENSHOT_CID,
-        idempotency_key=send_uuid,
-    )
+    try:
+        message_id = _send_via_configured_transport(
+            to_addr=email_addr,
+            subject=subject,
+            body_text=body_with_link,
+            lead_id=lead["id"],
+            body_html=body_html,
+            inline_image_path=inline_image_path,
+            inline_image_cid=_SCREENSHOT_CID,
+            idempotency_key=send_uuid,
+        )
+    except ValueError:
+        # Both transports raise ValueError only from pre-network validation
+        # (HTML content/size checks, bad recipient format) -- the email
+        # definitively did NOT go out, so clearing the pending marker is
+        # safe and the lead isn't permanently bricked by a fixable
+        # validation problem. Ambiguous failures (timeouts, connection
+        # resets) deliberately do NOT clear it -- those might have sent.
+        db.clear_send_pending(lead["id"])
+        raise
     db.insert_email_thread(
         lead_id=lead["id"],
         direction="outbound",
@@ -493,8 +503,10 @@ def _domain_of(email: str) -> str:
 def _domain_cooldown_active(domain: str) -> bool:
     """True if this domain was emailed within the last 24h -- prevents two
     different contacts at the same company both getting cold-emailed the
-    same day (see db.get_last_domain_email_timestamp)."""
-    if not domain:
+    same day (see db.get_last_domain_email_timestamp). Public mailbox
+    providers (gmail etc.) are exempt: their domain isn't one company, so
+    the cooldown would wrongly throttle unrelated leads to one per day."""
+    if not domain or domain in db.PUBLIC_MAILBOX_DOMAINS:
         return False
     last_sent = db.get_last_domain_email_timestamp(domain)
     if last_sent is None:
@@ -515,10 +527,12 @@ def send_next_pending() -> Optional[int]:
             # A previous send attempt for this lead crashed between
             # mark_send_pending() and clear_send_pending() -- we can't tell
             # whether the email actually went out, so skip it rather than
-            # risk a duplicate send. Needs manual review (see db.leads.
-            # pending_send_id) before it'll be picked up again.
+            # risk a duplicate send. After checking your provider's activity
+            # feed / dry_run.log, clear it with the `unstick <lead_id>`
+            # console command or the dashboard's "Clear stuck send" button.
             print(f"[sales_agent] Skipping lead {lead['id']}: a prior send attempt "
-                  f"({lead['pending_send_id']}) never confirmed complete -- needs manual review.")
+                  f"({lead['pending_send_id']}) never confirmed complete -- after manual "
+                  f"review, run 'unstick {lead['id']}' to release it.")
             continue
         if _domain_cooldown_active(_domain_of(lead.get("contact_email") or "")):
             continue

@@ -71,9 +71,27 @@ st.subheader("Needs Action")
 
 replied_leads = db.list_leads_by_status("replied")
 negotiating_leads = db.list_leads_by_status("negotiating")
+stuck_leads = db.list_stuck_sends()
 
-if not replied_leads and not negotiating_leads:
+if not replied_leads and not negotiating_leads and not stuck_leads:
     st.caption("Nothing needs your attention right now.")
+
+for lead in stuck_leads:
+    with st.container(border=True):
+        st.write(
+            f"**{lead['business_name']}** (lead {lead['id']}) has an unconfirmed send -- "
+            f"a send attempt crashed before completing and automation is skipping it."
+        )
+        st.caption(
+            "Check pipeline/dry_run.log and your email provider's activity feed first: "
+            "clearing this flag lets the pipeline send again, which duplicates the email "
+            "if the crashed attempt actually went out."
+        )
+        if st.button("Clear stuck send flag", key=f"unstick_{lead['id']}"):
+            db.clear_send_pending(lead["id"])
+            db.log_lead_event(lead["id"], "unstick", payload={"cleared": lead["pending_send_id"]}, actor="dashboard")
+            st.success(f"Cleared. Lead {lead['id']} will be picked up on the next cycle.")
+            st.rerun()
 
 for lead in replied_leads:
     with st.container(border=True):
