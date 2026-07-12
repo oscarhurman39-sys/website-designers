@@ -57,7 +57,8 @@ with col2:
         _set_paused(False)
         st.rerun()
 with col3:
-    st.write("**Status:** " + ("PAUSED" if _is_paused() else "RUNNING"))
+    live_send_label = "LIVE SEND ON" if config.ENABLE_LIVE_SEND else "DRY RUN"
+    st.write("**Status:** " + ("PAUSED" if _is_paused() else "RUNNING") + f" | **Email:** {live_send_label}")
 
 st.divider()
 
@@ -94,7 +95,7 @@ st.divider()
 st.subheader("Quick-run next lead")
 st.caption(
     "Runs LeadAgent -> DesignAgent -> SalesAgent on the oldest 'new' lead, right now, "
-    "in this dashboard process. Sends a real cold email if it gets that far -- this "
+    "in this dashboard process. Records a dry-run email unless ENABLE_LIVE_SEND=true -- this "
     "bypasses the hourly/daily rate-limit gate that main.py's normal loop enforces "
     "(sales_agent._can_send_now), since it's a single deliberate manual action, not "
     "automation. Each step still stops early if the previous one didn't succeed."
@@ -138,6 +139,17 @@ if not leads:
     st.info("No leads yet. Add one above, drop a CSV into pipeline/leads_inbox/, and start main.py.")
     st.stop()
 
+status_counts = db.count_leads_by_status()
+click_counts = db.get_click_counts()
+total_clicks = sum(click_counts.values())
+metric_cols = st.columns(6)
+metric_cols[0].metric("Total leads", len(leads))
+metric_cols[1].metric("Researched", status_counts.get("researched", 0))
+metric_cols[2].metric("Designed", status_counts.get("designed", 0))
+metric_cols[3].metric("Emailed", status_counts.get("emailed", 0))
+metric_cols[4].metric("Replied", status_counts.get("replied", 0) + status_counts.get("negotiating", 0))
+metric_cols[5].metric("Clicks", total_clicks)
+
 rows = []
 for lead in leads:
     website = db.get_website_by_lead(lead["id"])
@@ -146,11 +158,14 @@ for lead in leads:
             "id": lead["id"],
             "business_name": lead["business_name"],
             "niche": lead["niche"],
+            "lead_score": lead.get("lead_score", 0),
             "status": lead["status"],
             "contact_email": lead["contact_email"],
             "preview_url": website["preview_url"] if website else "",
+            "clicks": click_counts.get(lead["id"], 0),
             "last_email": db.get_last_email_timestamp(lead["id"]) or "",
             "unsubscribed": bool(lead["unsubscribed"]),
+            "score_notes": lead.get("score_notes") or "",
         }
     )
 df = pd.DataFrame(rows)
@@ -188,19 +203,28 @@ if lead_id:
             "business_name": lead["business_name"],
             "niche": lead["niche"],
             "location": lead["location"],
+            "lead_score": lead.get("lead_score", 0),
+            "score_notes": lead.get("score_notes"),
             "status": lead["status"],
             "pain_point": lead["pain_point"],
             "testimonial": lead["testimonial"],
+            "clicks": db.get_click_count(int(lead_id)),
             "preview_url": website["preview_url"] if website else None,
             "repo_url": website["repo_url"] if website else None,
             "transferred": bool(website["transferred"]) if website else None,
         }
     )
 
-    if lead["status"] == "bounced":
-        if st.button(f"Retry bounce for lead {lead_id} (reset to 'researched')"):
-            db.update_lead_status(int(lead_id), "researched", notes="Manually retried from dashboard")
-            st.success("Lead reset to 'researched'. It will be re-designed/emailed on the next cycle.")
+    if st.button(f"Refresh score for lead {lead_id}"):
+        score, score_notes = db.refresh_lead_score(int(lead_id))
+        st.success(f"Lead score updated to {score}: {score_notes}")
+        st.rerun()
+
+    if lead["status"] in {"bounced", "lost"}:
+        target_status = "researched" if lead.get("contact_email") else "new"
+        if st.button(f"Retry failed lead {lead_id} (reset to '{target_status}')"):
+            db.update_lead_status(int(lead_id), target_status, notes="Manually retried from dashboard")
+            st.success(f"Lead reset to '{target_status}'.")
             st.rerun()
 
     st.write("**Email thread**")

@@ -46,6 +46,8 @@ CREATE TABLE IF NOT EXISTS leads (
     pain_point      TEXT,
     testimonial     TEXT,
     phone           TEXT,
+    lead_score      INTEGER NOT NULL DEFAULT 0,
+    score_notes     TEXT,
     status          TEXT NOT NULL DEFAULT 'new'
                     CHECK (status IN ({_STATUS_LIST_SQL})),
     unsubscribed    INTEGER NOT NULL DEFAULT 0,
@@ -111,6 +113,8 @@ def init_db(db_path: Optional[str] = None) -> None:
     """Create all tables/indexes if they don't already exist. Idempotent."""
     with _connect(db_path) as conn:
         conn.executescript(_SCHEMA)
+        _migrate_add_column(conn, "leads", "lead_score", "INTEGER NOT NULL DEFAULT 0")
+        _migrate_add_column(conn, "leads", "score_notes", "TEXT")
         _migrate_add_column(conn, "websites", "screenshot_url", "TEXT")
         _migrate_add_column(conn, "websites", "screenshot_path", "TEXT")
         conn.commit()
@@ -194,10 +198,25 @@ def list_leads_by_status(status: str) -> list[dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
+def list_leads_by_status_priority(status: str) -> list[dict[str, Any]]:
+    """Return leads in the order the revenue path should handle them."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM leads WHERE status = ? ORDER BY lead_score DESC, id ASC", (status,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def list_all_leads() -> list[dict[str, Any]]:
     with get_connection() as conn:
         rows = conn.execute("SELECT * FROM leads ORDER BY id DESC").fetchall()
         return [dict(r) for r in rows]
+
+
+def count_leads_by_status() -> dict[str, int]:
+    with get_connection() as conn:
+        rows = conn.execute("SELECT status, COUNT(*) AS n FROM leads GROUP BY status").fetchall()
+        return {row["status"]: int(row["n"]) for row in rows}
 
 
 def update_lead_fields(lead_id: int, **fields: Any) -> None:
@@ -208,6 +227,52 @@ def update_lead_fields(lead_id: int, **fields: Any) -> None:
     values = list(fields.values()) + [lead_id]
     with get_connection() as conn:
         conn.execute(f"UPDATE leads SET {columns} WHERE id = ?", values)
+
+
+_HIGH_VALUE_NICHES = {
+    "dentist",
+    "electrician",
+    "plumber",
+    "vehicle-repair",
+    "salon",
+    "landscaper",
+}
+
+
+def score_lead(lead: dict[str, Any]) -> tuple[int, str]:
+    """Simple deterministic score for prioritizing the next best sales action."""
+    score = 0
+    reasons: list[str] = []
+
+    if lead.get("contact_email"):
+        score += 35
+        reasons.append("has email")
+    if lead.get("website_url"):
+        score += 15
+        reasons.append("has existing site")
+    if lead.get("pain_point"):
+        score += 20
+        reasons.append("personalized pain point")
+    if lead.get("testimonial"):
+        score += 10
+        reasons.append("social proof")
+    if lead.get("location"):
+        score += 5
+        reasons.append("local context")
+    if (lead.get("niche") or "").lower() in _HIGH_VALUE_NICHES:
+        score += 15
+        reasons.append("high-value niche")
+
+    return min(score, 100), ", ".join(reasons) if reasons else "not enough data yet"
+
+
+def refresh_lead_score(lead_id: int) -> tuple[int, str]:
+    lead = get_lead(lead_id)
+    if lead is None:
+        raise ValueError(f"No such lead {lead_id}")
+    score, notes = score_lead(lead)
+    update_lead_fields(lead_id, lead_score=score, score_notes=notes)
+    return score, notes
 
 
 def update_lead_status(lead_id: int, new_status: str, notes: str = "") -> None:
@@ -352,6 +417,18 @@ def mark_website_transferred(lead_id: int) -> None:
 def log_click(lead_id: int) -> None:
     with get_connection() as conn:
         conn.execute("INSERT INTO clicks (lead_id) VALUES (?)", (lead_id,))
+
+
+def get_click_count(lead_id: int) -> int:
+    with get_connection() as conn:
+        row = conn.execute("SELECT COUNT(*) AS n FROM clicks WHERE lead_id = ?", (lead_id,)).fetchone()
+        return int(row["n"])
+
+
+def get_click_counts() -> dict[int, int]:
+    with get_connection() as conn:
+        rows = conn.execute("SELECT lead_id, COUNT(*) AS n FROM clicks GROUP BY lead_id").fetchall()
+        return {int(row["lead_id"]): int(row["n"]) for row in rows}
 
 
 def get_last_email_timestamp(lead_id: int) -> Optional[str]:

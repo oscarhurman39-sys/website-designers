@@ -366,7 +366,7 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
 def run() -> None:
     """Main entrypoint called by main.py: design a site for every
     'researched' lead that has a matching template."""
-    for lead in db.list_leads_by_status("researched"):
+    for lead in db.list_leads_by_status_priority("researched"):
         try:
             process_lead(lead)
         except Exception as exc:  # noqa: BLE001 - one bad lead must not kill the batch

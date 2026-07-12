@@ -12,6 +12,7 @@ from __future__ import annotations
 import html as html_module
 import random
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlparse
@@ -357,6 +358,25 @@ def _send_via_configured_transport(
         )
 
 
+def _record_dry_run_send(lead: dict, email_addr: str, subject: str, body_text: str) -> str:
+    message_id = f"<dry-run-{lead['id']}-{uuid.uuid4()}@local>"
+    db.insert_email_thread(
+        lead_id=lead["id"],
+        direction="outbound",
+        subject=subject,
+        body=body_text,
+        from_addr=config.EMAIL_USER,
+        to_addr=email_addr,
+        message_id=message_id,
+    )
+    db.update_lead_status(lead["id"], "emailed", notes="Dry-run email recorded; ENABLE_LIVE_SEND is false")
+    print(
+        f"[sales_agent] Dry-run send recorded for lead {lead['id']} ({email_addr}). "
+        "Set ENABLE_LIVE_SEND=true to send real email."
+    )
+    return message_id
+
+
 def send_cold_email(lead: dict) -> bool:
     """Send the initial cold email for one 'designed' lead. Returns True if sent.
     Wrapped in a trace -> agent -> tool span (see utils/tracer.py); the
@@ -403,25 +423,28 @@ def _send_cold_email_impl(lead: dict) -> bool:
     body_html = _build_html_body(lead["business_name"], preview_link, city) if cached_screenshot else None
     inline_image_path = str(cached_screenshot) if cached_screenshot else None
 
-    message_id = _send_via_configured_transport(
-        to_addr=email_addr,
-        subject=subject,
-        body_text=body_with_link,
-        lead_id=lead["id"],
-        body_html=body_html,
-        inline_image_path=inline_image_path,
-        inline_image_cid=_SCREENSHOT_CID,
-    )
-    db.insert_email_thread(
-        lead_id=lead["id"],
-        direction="outbound",
-        subject=subject,
-        body=body_with_link,
-        from_addr=config.EMAIL_USER,
-        to_addr=email_addr,
-        message_id=message_id,
-    )
-    db.update_lead_status(lead["id"], "emailed", notes="Cold email sent")
+    if config.ENABLE_LIVE_SEND:
+        message_id = _send_via_configured_transport(
+            to_addr=email_addr,
+            subject=subject,
+            body_text=body_with_link,
+            lead_id=lead["id"],
+            body_html=body_html,
+            inline_image_path=inline_image_path,
+            inline_image_cid=_SCREENSHOT_CID,
+        )
+        db.insert_email_thread(
+            lead_id=lead["id"],
+            direction="outbound",
+            subject=subject,
+            body=body_with_link,
+            from_addr=config.EMAIL_USER,
+            to_addr=email_addr,
+            message_id=message_id,
+        )
+        db.update_lead_status(lead["id"], "emailed", notes="Cold email sent")
+    else:
+        _record_dry_run_send(lead, email_addr, subject, body_with_link)
 
     _next_send_allowed_at = datetime.now(timezone.utc) + timedelta(
         seconds=random.uniform(config.EMAIL_MIN_DELAY_SECONDS, config.EMAIL_MAX_DELAY_SECONDS)
@@ -434,7 +457,7 @@ def send_next_pending() -> Optional[int]:
     the lead_id sent to, or None if nothing was sent this cycle."""
     if not _can_send_now():
         return None
-    for lead in db.list_leads_by_status("designed"):
+    for lead in db.list_leads_by_status_priority("designed"):
         if is_under_takeover(lead["id"]):
             continue
         if send_cold_email(lead):

@@ -18,6 +18,13 @@ from dotenv import load_dotenv
 _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(dotenv_path=_ENV_PATH)
 
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
 # --- Required variables -----------------------------------------------------
 # These MUST be set for the pipeline to run. Missing any of these means the
 # system cannot send compliant email, deploy sites, or take payment, so we
@@ -69,6 +76,11 @@ WEBSITE_PRICE_USD: int = int(os.getenv("WEBSITE_PRICE_USD", "750") or 750)
 # sales_agent.py's offer copy). Separate from WEBSITE_PRICE_USD, which is
 # the amount actually charged via Stripe checkout once a lead says yes.
 WEBSITE_OFFER_PRICE: int = int(os.getenv("WEBSITE_OFFER_PRICE", "750") or 750)
+
+# Live-send safety. Keep this false while testing the pipeline end-to-end;
+# SalesAgent will record a dry-run outbound thread instead of contacting SMTP
+# or SendGrid. Set ENABLE_LIVE_SEND=true only after domain/email setup is ready.
+ENABLE_LIVE_SEND: bool = _env_bool("ENABLE_LIVE_SEND", default=False)
 
 # --- SendGrid configuration (optional) ----------------------------------------
 SENDGRID_API_KEY: str = os.getenv("SENDGRID_API_KEY", "")

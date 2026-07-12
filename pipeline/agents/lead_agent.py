@@ -216,7 +216,8 @@ def _research_lead_impl(lead: dict) -> None:
         testimonial=testimonial or "",
         scraped_info=homepage.get_text(" ", strip=True)[:2000],
     )
-    db.update_lead_status(lead_id, "researched", notes="Research complete")
+    score, score_notes = db.refresh_lead_score(lead_id)
+    db.update_lead_status(lead_id, "researched", notes=f"Research complete; lead score {score}: {score_notes}")
 
 
 def run(csv_path: Optional[str] = None) -> None:

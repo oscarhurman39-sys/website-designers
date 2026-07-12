@@ -13,8 +13,10 @@ transfer are only ever triggered by an explicit console command.
 1. `pip install -r requirements.txt && playwright install chromium`
 2. `cp .env.example .env` and fill in your real keys
 3. `cd pipeline && python -m agents.lead_agent ../test_lead.csv && cd ..` to load 3 sample leads
-4. `python run.py quick-test` to run one lead through the whole pipeline and watch it work
-5. `python run.py loop` (always-on) or `python run.py dashboard` (Streamlit UI) once you're ready
+4. `python run.py doctor` to check setup, safety mode, templates, DB, and test tooling
+5. `python run.py quick-test` to run one lead through the whole pipeline and watch it work
+   (records a dry-run email unless `ENABLE_LIVE_SEND=true`)
+6. `python run.py loop` (always-on) or `python run.py dashboard` (Streamlit UI) once you're ready
 
 ## Directory structure
 
@@ -40,7 +42,7 @@ website-designers/
 │   └── requirements.txt
 ├── templates/                   # one subfolder per niche (index.html + style.css)
 ├── dashboard.py                 # Streamlit monitoring UI
-├── run.py                       # entrypoint: quick-test / loop / dashboard
+├── run.py                       # entrypoint: doctor / test / quick-test / loop / dashboard
 ├── test_lead.csv                # 3 sample leads for a first test run
 ├── .claude/agents/               # Claude Code subagent personas (see below)
 ├── .env.example
@@ -68,6 +70,11 @@ startup and fails loudly, listing everything missing, if any are unset.
 `VERCEL_TEAM_ID`, `SLACK_BOT_TOKEN`, `UNSPLASH_ACCESS_KEY`,
 `VOLTAGENT_PUBLIC_KEY`, `VOLTAGENT_SECRET_KEY` are optional.
 
+Safety switch: `ENABLE_LIVE_SEND=false` by default. In that mode SalesAgent
+records the outbound email and marks the lead as emailed, but does not call
+SMTP or SendGrid. Set `ENABLE_LIVE_SEND=true` only after your sending domain,
+unsubscribe URL, and test sends are ready.
+
 ## Running it
 
 All commands below are run from the repo root with the venv active.
@@ -85,7 +92,25 @@ LeadAgent -> DesignAgent -> SalesAgent once, no loop, no rate limits --
 good for a first end-to-end smoke test):
 
 ```bash
-python pipeline/quick_run.py
+python run.py quick-test
+```
+
+**Check local setup and safety mode**:
+
+```bash
+python run.py doctor
+```
+
+**Run offline tests**:
+
+```bash
+python run.py test
+```
+
+**Retry one failed lead**:
+
+```bash
+python run.py retry-lead <lead_id>
 ```
 
 **Start the orchestrator loop** (researches leads, builds/deploys sites,
