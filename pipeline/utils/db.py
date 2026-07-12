@@ -127,7 +127,7 @@ def _migrate_add_column(conn: sqlite3.Connection, table: str, column: str, colty
 
 
 def _connect(db_path: Optional[str] = None) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path or config.DB_PATH)
+    conn = sqlite3.connect(db_path or config.DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn

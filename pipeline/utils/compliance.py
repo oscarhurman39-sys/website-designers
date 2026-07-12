@@ -71,8 +71,23 @@ def list_unsubscribe_header(lead_id: int) -> str:
     return f"<{link}>, <mailto:{config.ADMIN_EMAIL}?subject=unsubscribe>"
 
 
+def _require_valid_physical_address() -> None:
+    """Raise if PHYSICAL_ADDRESS is empty or looks like leftover placeholder
+    text -- a legally required postal address must never be silently blank
+    or fake in a sent email. This is the last-line-of-defense check: every
+    email (cold, goodbye, payment-link) passes through append_footer() or
+    append_footer_html() before it can be sent."""
+    problem = config.physical_address_problem()
+    if problem:
+        raise RuntimeError(
+            f"Refusing to send: PHYSICAL_ADDRESS is {problem}. Set a real postal "
+            "address in .env (PHYSICAL_ADDRESS=...) before sending."
+        )
+
+
 def append_footer(body_text: str, lead_id: int) -> str:
     """Append the mandatory CAN-SPAM footer to a plain-text email body."""
+    _require_valid_physical_address()
     link = create_unsubscribe_link(lead_id)
     footer = (
         "\n\n--\n"
@@ -85,6 +100,7 @@ def append_footer(body_text: str, lead_id: int) -> str:
 
 def append_footer_html(body_html: str, lead_id: int) -> str:
     """Append the mandatory CAN-SPAM footer to an HTML email body."""
+    _require_valid_physical_address()
     link = create_unsubscribe_link(lead_id)
     footer = (
         "<br><br><hr>"

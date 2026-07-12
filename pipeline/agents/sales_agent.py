@@ -163,7 +163,17 @@ def _parse_subject_body(raw_text: str, lead: dict) -> tuple[str, str]:
 
 
 def draft_cold_email(lead: dict) -> tuple[str, str]:
-    """Return (subject, body_text_without_footer_or_link)."""
+    """Return (subject, body_text_without_footer_or_link).
+
+    Refuses to draft at all (rather than only refusing to send later) if
+    PHYSICAL_ADDRESS is missing/placeholder -- no point spending an HF call
+    on an email that utils/compliance.py will refuse to send anyway."""
+    problem = config.physical_address_problem()
+    if problem:
+        raise RuntimeError(
+            f"Refusing to draft cold email: PHYSICAL_ADDRESS is {problem}. Set a real "
+            "postal address in .env (PHYSICAL_ADDRESS=...) before drafting."
+        )
     try:
         raw = _hf_client().text_generation(
             _build_prompt(lead), max_new_tokens=280, temperature=0.7, do_sample=True

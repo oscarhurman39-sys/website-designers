@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import secrets
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -41,6 +42,11 @@ REQUIRED_VARS: list[str] = [
 GITHUB_TOKEN: str = os.getenv("GITHUB_TOKEN", "")
 VERCEL_TOKEN: str = os.getenv("VERCEL_TOKEN", "")
 VERCEL_TEAM_ID: str = os.getenv("VERCEL_TEAM_ID", "")
+# Sent as the `x-vercel-protection-bypass` header by screenshot.py as a
+# secondary defense against Vercel's own login wall, on top of
+# vercel_api.py disabling deployment protection outright. Optional --
+# only needed if disabling protection ever lags or fails.
+VERCEL_BYPASS_TOKEN: str = os.getenv("VERCEL_BYPASS_TOKEN", "")
 
 EMAIL_HOST: str = os.getenv("EMAIL_HOST", "")
 EMAIL_PORT: int = int(os.getenv("EMAIL_PORT", "587") or 587)
@@ -73,6 +79,15 @@ WEBSITE_OFFER_PRICE: int = int(os.getenv("WEBSITE_OFFER_PRICE", "750") or 750)
 # --- SendGrid configuration (optional) ----------------------------------------
 SENDGRID_API_KEY: str = os.getenv("SENDGRID_API_KEY", "")
 SENDGRID_FROM_EMAIL: str = os.getenv("SENDGRID_FROM_EMAIL", "")
+
+# --- Live-send safety valve --------------------------------------------------
+# Defaults to OFF (dry run) so a fresh checkout / misconfigured .env can
+# never blast real cold emails by accident. Every send funnels through
+# utils/email_utils.py's send_email()/send_email_sendgrid(), so gating there
+# covers every caller (sales_agent.py's cold + goodbye emails, main.py's
+# payment-link email) without needing a separate check in each entrypoint.
+# Set ENABLE_LIVE_SEND=true in .env once you're ready to actually send.
+ENABLE_LIVE_SEND: bool = os.getenv("ENABLE_LIVE_SEND", "").strip().lower() in ("1", "true", "yes")
 
 # --- VoltAgent observability (optional) -------------------------------------
 # When both keys are set, pipeline/utils/tracer.py mirrors every agent/tool
@@ -121,6 +136,37 @@ def _load_or_create_secret_key() -> str:
 
 
 SECRET_KEY: str = _load_or_create_secret_key()
+
+# Obvious leftover-placeholder fragments a real postal address would never
+# contain -- catches an unfilled .env.example value getting copied verbatim
+# into .env, which config.validate()'s mere non-empty check can't catch.
+_ADDRESS_PLACEHOLDER_FRAGMENTS = (
+    "your the walk",
+    "123 street",
+    "123 test",
+    "123 main st",
+    "testville",
+    "your address here",
+    "your address",
+    "address here",
+    "placeholder",
+)
+
+
+def physical_address_problem() -> Optional[str]:
+    """Return why PHYSICAL_ADDRESS is unusable (empty, or contains an
+    obvious placeholder fragment), or None if it looks like a real postal
+    address. CAN-SPAM (and UK PECR/GDPR transparency) require a genuine
+    postal address in every cold email's footer, so utils/compliance.py and
+    agents/sales_agent.py refuse to draft/send while this returns a problem."""
+    address = PHYSICAL_ADDRESS.strip()
+    if not address:
+        return "empty"
+    lowered = address.lower()
+    for fragment in _ADDRESS_PLACEHOLDER_FRAGMENTS:
+        if fragment in lowered:
+            return f"contains placeholder text {fragment!r}"
+    return None
 
 
 def validate() -> None:

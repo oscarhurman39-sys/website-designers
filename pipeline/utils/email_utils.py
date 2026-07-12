@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Optional
 import base64
 
+from python_http_client.exceptions import HTTPError as SendGridHTTPError
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import (
     Mail,
@@ -45,9 +46,11 @@ from sendgrid.helpers.mail import (
 )
 
 import config
-from utils import compliance
+from utils import compliance, retry
 
 logger = logging.getLogger(__name__)
+
+_DRY_RUN_LOG_PATH = Path(__file__).resolve().parent.parent / "dry_run.log"
 
 # Simple email validation regex
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
@@ -68,6 +71,24 @@ class InboundEmail:
 def _validate_email(email_addr: str) -> bool:
     """Validate email address format."""
     return EMAIL_REGEX.match(email_addr) is not None
+
+
+def _log_dry_run(transport: str, to_addr: str, subject: str, body_with_footer: str) -> None:
+    """Console + file record of an email a live run would have sent
+    (config.ENABLE_LIVE_SEND is not true). Appended to pipeline/dry_run.log
+    so a full dry-run pass leaves a durable record, not just console
+    scrollback -- placed after every other guard (unsubscribe check,
+    compliance footer, message construction) so a dry run still exercises
+    everything a real send would, short of the actual network call."""
+    bar = "=" * 66
+    entry = (
+        f"\n{bar}\nDRY RUN -- email NOT sent (transport: {transport})\n"
+        f"Time: {datetime.utcnow().isoformat()}Z\n"
+        f"To: {to_addr}\nSubject: {subject}\n{'-' * 66}\n{body_with_footer}\n{bar}\n"
+    )
+    print(entry)
+    with open(_DRY_RUN_LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(entry)
 
 
 def send_email(
@@ -109,7 +130,7 @@ def send_email(
         html_with_footer = compliance.append_footer_html(body_html, lead_id)
         content.attach(MIMEText(html_with_footer, "html"))
 
-    if inline_image_path:
+    if inline_image_path and Path(inline_image_path).exists():
         msg = MIMEMultipart("related")
         msg.attach(content)
         image_path = Path(inline_image_path)
@@ -118,6 +139,8 @@ def send_email(
         image_part.add_header("Content-Disposition", "inline", filename=image_path.name)
         msg.attach(image_part)
     else:
+        if inline_image_path:
+            logger.warning(f"Inline image path {inline_image_path!r} does not exist; sending without it.")
         msg = content
 
     msg["Subject"] = subject
@@ -128,6 +151,10 @@ def send_email(
     msg["Message-ID"] = message_id
     msg["List-Unsubscribe"] = compliance.list_unsubscribe_header(lead_id)
     msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+
+    if not config.ENABLE_LIVE_SEND:
+        _log_dry_run("SMTP", to_addr, subject, text_with_footer)
+        return message_id
 
     with smtplib.SMTP(config.EMAIL_HOST, config.EMAIL_PORT, timeout=30) as server:
         server.starttls()
@@ -233,8 +260,10 @@ def send_email_sendgrid(
     mail.mail_settings.tracking_settings.open_tracking = OpenTracking(enable=True)
     mail.mail_settings.tracking_settings.click_tracking = ClickTracking(enable=True)
 
-    # Attach inline image if provided
-    if inline_image_path:
+    # Attach inline image if provided (and the file actually exists -- a
+    # missing file must never turn into a broken "image not found" icon in
+    # the recipient's inbox, so we just skip the attachment and log it).
+    if inline_image_path and Path(inline_image_path).exists():
         image_path = Path(inline_image_path)
         image_bytes = image_path.read_bytes()
         # Determine MIME type from file extension
@@ -254,13 +283,29 @@ def send_email_sendgrid(
         )
         mail.add_attachment(attachment)
         logger.debug(f"Added inline image: {image_path.name} ({len(image_bytes)} bytes)")
+    elif inline_image_path:
+        logger.warning(f"Inline image path {inline_image_path!r} does not exist; sending without it.")
 
-    # Send via SendGrid
+    if not config.ENABLE_LIVE_SEND:
+        _log_dry_run("SendGrid", to_addr, subject, text_with_footer)
+        return message_id
+
+    # Send via SendGrid. Retry ONLY definitive 429/5xx API rejections (3
+    # attempts, 2s/4s backoff) -- ambiguous failures (timeouts/resets) are
+    # deliberately NOT retried, since the message may have already been
+    # accepted and a retry would send the same cold email twice.
+    @retry.with_retries(
+        retriable=(SendGridHTTPError,),
+        transient=retry.is_retriable_http_response,
+        label="sendgrid.send",
+    )
+    def _send_once():
+        return SendGridAPIClient(config.SENDGRID_API_KEY).send(mail)
+
     try:
         logger.debug("Connecting to SendGrid API...")
-        sg = SendGridAPIClient(config.SENDGRID_API_KEY)
-        response = sg.send(mail)
-        
+        response = _send_once()
+
         if response.status_code != 202:
             logger.error(f"SendGrid returned status {response.status_code} for {to_addr}: {response.body}")
             raise RuntimeError(
