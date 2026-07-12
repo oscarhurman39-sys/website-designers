@@ -7,20 +7,21 @@ status 'researched'; runs DesignAgent -> SalesAgent same as quick_run.py.
 
 Run with (either works, same as quick_run.py):
 
-    python test_email.py you@example.com                # from inside pipeline/
-    python pipeline/test_email.py you@example.com        # from the repo root
+    python test_email.py you@example.com                                      # from inside pipeline/
+    python test_email.py you@example.com --business-name "Surrey Auto Mobile" # with custom business name
+    python pipeline/test_email.py you@example.com                              # from the repo root
 
 Needs a populated .env at the repo root first (see .env.example).
 """
 from __future__ import annotations
 
+import argparse
 import sys
 
 import config
 from agents import design_agent, sales_agent
 from utils import db
 
-_DUMMY_BUSINESS_NAME = "Test Business"
 _DUMMY_NICHE = "vehicle-repair"
 _DUMMY_LOCATION = "Testville"
 
@@ -29,11 +30,11 @@ def _print_step(label: str) -> None:
     print(f"\n{'=' * 60}\n{label}\n{'=' * 60}")
 
 
-def main(to_addr: str) -> None:
+def main(to_addr: str, business_name: str = "Test Business") -> None:
     config.validate()
     db.init_db()
 
-    lead_id = db.insert_lead(_DUMMY_BUSINESS_NAME, _DUMMY_NICHE, _DUMMY_LOCATION, status="new")
+    lead_id = db.insert_lead(business_name, _DUMMY_NICHE, _DUMMY_LOCATION, status="new")
     db.update_lead_fields(lead_id, contact_email=to_addr)
     db.update_lead_status(lead_id, "researched", notes="Dummy lead created by test_email.py")
     lead = db.get_lead(lead_id)
@@ -70,7 +71,12 @@ def main(to_addr: str) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: python test_email.py <email-address>")
-        raise SystemExit(1)
-    main(sys.argv[1])
+    parser = argparse.ArgumentParser(description="Send a test email to verify the full pipeline.")
+    parser.add_argument("email", help="Email address to send the test email to")
+    parser.add_argument(
+        "--business-name",
+        default="Test Business",
+        help="Business name for the dummy lead (default: 'Test Business')",
+    )
+    args = parser.parse_args()
+    main(args.email, args.business_name)

@@ -37,12 +37,13 @@ def run_dashboard(extra_args: list[str]) -> int:
 
 
 def run_test_email(extra_args: list[str]) -> int:
-    if len(extra_args) != 1:
-        print("Usage: python run.py test-email <email-address>")
+    if len(extra_args) < 1:
+        print("Usage: python run.py test-email <email-address> [--business-name NAME]")
         return 1
-    return subprocess.call(
-        [sys.executable, str(PIPELINE_DIR / "test_email.py"), extra_args[0]], cwd=str(PIPELINE_DIR)
-    )
+    cmd = [sys.executable, str(PIPELINE_DIR / "test_email.py"), extra_args[0]]
+    if len(extra_args) > 1:
+        cmd.extend(extra_args[1:])
+    return subprocess.call(cmd, cwd=str(PIPELINE_DIR))
 
 
 _MODES = {

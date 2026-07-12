@@ -79,6 +79,7 @@ WEBSITE_OFFER_PRICE: int = int(os.getenv("WEBSITE_OFFER_PRICE", "750") or 750)
 # --- SendGrid configuration (optional) ----------------------------------------
 SENDGRID_API_KEY: str = os.getenv("SENDGRID_API_KEY", "")
 SENDGRID_FROM_EMAIL: str = os.getenv("SENDGRID_FROM_EMAIL", "")
+SENDGRID_WEBHOOK_VERIFICATION_KEY: str = os.getenv("SENDGRID_WEBHOOK_VERIFICATION_KEY", "")
 
 # --- Live-send safety valve --------------------------------------------------
 # Defaults to OFF (dry run) so a fresh checkout / misconfigured .env can
@@ -182,6 +183,13 @@ def validate() -> None:
             "Missing required environment variable(s): "
             + ", ".join(missing)
             + f"\nCopy .env.example to .env ({_ENV_PATH}) and fill them in."
+        )
+
+    if PUBLIC_BASE_URL == "http://localhost:5000":
+        print(
+            "\n[WARNING] PUBLIC_BASE_URL is set to http://localhost:5000 (the default).\n"
+            "This will embed localhost URLs in emails, making unsubscribe/tracking links unreachable.\n"
+            "Set PUBLIC_BASE_URL to a real, publicly-accessible URL in .env before sending live emails.\n"
         )
 
 

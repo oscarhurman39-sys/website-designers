@@ -4,6 +4,7 @@
   GET  /unsubscribe/<token>                -- one-click CAN-SPAM unsubscribe
   GET  /screenshots/<lead_id>.png          -- serves a cached preview screenshot
   POST /webhook/stripe                     -- Stripe `checkout.session.completed` events
+  POST /webhook/sendgrid                   -- SendGrid bounce/drop/spam events
 
 Run standalone with `python webhook_server.py` (dev server) or behind a real
 WSGI server (gunicorn/uwsgi) in production. Must be reachable at
@@ -12,11 +13,23 @@ links embedded in outgoing emails to work.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import stripe
 from flask import Flask, Response, abort, redirect, request, send_from_directory
 
 import config
 from utils import compliance, db, screenshot, stripe_utils, tracker
+
+
+def _verify_sendgrid_signature(
+    payload: bytes, timestamp: str, signature: str, key: str
+) -> bool:
+    verified_string = f"{timestamp}{payload.decode('utf-8')}"
+    hash_obj = hmac.new(
+        key.encode("utf-8"), verified_string.encode("utf-8"), hashlib.sha256
+    )
+    return hmac.compare_digest(hash_obj.digest(), signature.encode("utf-8"))
 
 
 def create_app() -> Flask:
@@ -83,6 +96,53 @@ def create_app() -> Flask:
                         f"Run 'transfer {lead_id}' in the pipeline console to hand over the "
                         f"GitHub repo and Vercel project.\n{banner}\n"
                     )
+        return "", 200
+
+    @app.route("/webhook/sendgrid", methods=["POST"])
+    def sendgrid_webhook() -> tuple[str, int]:
+        if not config.SENDGRID_WEBHOOK_VERIFICATION_KEY:
+            abort(401)
+
+        payload = request.get_data()
+        sig_header = request.headers.get("X-Twilio-Email-Event-Webhook-Signature", "")
+        timestamp_header = request.headers.get("X-Twilio-Email-Event-Webhook-Timestamp", "")
+
+        if not sig_header or not timestamp_header:
+            abort(400)
+
+        try:
+            if not _verify_sendgrid_signature(
+                payload, timestamp_header, sig_header, config.SENDGRID_WEBHOOK_VERIFICATION_KEY
+            ):
+                abort(401)
+        except Exception:
+            abort(401)
+
+        try:
+            events = request.json or []
+        except Exception:
+            abort(400)
+
+        if not isinstance(events, list):
+            events = [events]
+
+        for event in events:
+            event_type = event.get("event", "").lower()
+            email = event.get("email", "").lower()
+
+            if not email:
+                continue
+
+            if event_type == "bounce" or event_type == "dropped" or event_type == "spamreport":
+                lead = db.get_lead_by_email(email)
+                if lead is not None:
+                    new_status = "unsubscribed" if event_type == "spamreport" else "bounced"
+                    db.update_lead_status(
+                        lead["id"],
+                        new_status,
+                        notes=f"SendGrid webhook: {event_type} event",
+                    )
+
         return "", 200
 
     return app
