@@ -48,6 +48,7 @@ REQUIRED_VARS: list[str] = [
 GITHUB_TOKEN: str = os.getenv("GITHUB_TOKEN", "")
 VERCEL_TOKEN: str = os.getenv("VERCEL_TOKEN", "")
 VERCEL_TEAM_ID: str = os.getenv("VERCEL_TEAM_ID", "")
+VERCEL_AUTOMATION_BYPASS_SECRET: str = os.getenv("VERCEL_AUTOMATION_BYPASS_SECRET", "")
 
 EMAIL_HOST: str = os.getenv("EMAIL_HOST", "")
 EMAIL_PORT: int = int(os.getenv("EMAIL_PORT", "587") or 587)

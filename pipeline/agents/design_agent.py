@@ -28,6 +28,10 @@ _AUTH_PAGE_MARKERS = (
     "login to vercel",
     "sign in to vercel",
 )
+_VERCEL_PROTECTION_DOCS_URL = (
+    "https://vercel.com/docs/deployment-protection/"
+    "methods-to-bypass-deployment-protection/protection-bypass-automation"
+)
 
 # Unsplash search terms per niche -- more specific than the raw niche
 # string so the fetched photo actually matches the trade (e.g. a mechanic
@@ -293,8 +297,16 @@ def _validate_deployment_url(deployment: dict) -> str:
     if any(part in parsed.path.lower() for part in _AUTH_URL_PARTS):
         raise RuntimeError(f"Deployment URL points to an authentication path: {preview_url}")
 
+    headers = {}
+    if not config.ENABLE_LIVE_SEND and config.VERCEL_AUTOMATION_BYPASS_SECRET:
+        headers["x-vercel-protection-bypass"] = config.VERCEL_AUTOMATION_BYPASS_SECRET
     try:
-        resp = requests.get(preview_url, allow_redirects=True, timeout=_DEPLOYMENT_VALIDATION_TIMEOUT_SECONDS)
+        resp = requests.get(
+            preview_url,
+            allow_redirects=True,
+            headers=headers,
+            timeout=_DEPLOYMENT_VALIDATION_TIMEOUT_SECONDS,
+        )
     except requests.RequestException as exc:
         raise RuntimeError(f"Deployment URL is not publicly accessible: {preview_url}") from exc
 
@@ -303,10 +315,19 @@ def _validate_deployment_url(deployment: dict) -> str:
     if resp.status_code >= 400:
         raise RuntimeError(f"Deployment URL returned HTTP {resp.status_code}: {preview_url}")
     if any(part in final_path for part in _AUTH_URL_PARTS):
-        raise RuntimeError(f"Deployment URL redirects to an authentication path: {final_url}")
+        raise RuntimeError(
+            "Deployment URL redirects to Vercel authentication. Turn off Deployment "
+            "Protection for prospect previews, or set VERCEL_AUTOMATION_BYPASS_SECRET "
+            f"for dry-run testing only. Docs: {_VERCEL_PROTECTION_DOCS_URL}. "
+            f"Redirected URL: {final_url}"
+        )
     page_text = resp.text.lower()
     if any(marker in page_text for marker in _AUTH_PAGE_MARKERS):
-        raise RuntimeError(f"Deployment URL shows an authentication page: {preview_url}")
+        raise RuntimeError(
+            "Deployment URL shows Vercel authentication. Turn off Deployment Protection "
+            "for prospect previews, or set VERCEL_AUTOMATION_BYPASS_SECRET for dry-run "
+            f"testing only. Docs: {_VERCEL_PROTECTION_DOCS_URL}. URL: {preview_url}"
+        )
 
     return preview_url
 

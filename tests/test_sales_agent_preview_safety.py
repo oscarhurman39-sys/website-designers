@@ -34,6 +34,22 @@ def test_validate_preview_link_for_send_strips_url_and_does_not_read_lead_db(mon
     request_get.assert_called_once_with(
         "https://example.vercel.app",
         allow_redirects=True,
+        headers={},
+        timeout=sales_agent._PREVIEW_VALIDATION_TIMEOUT_SECONDS,
+    )
+
+
+def test_validate_preview_link_for_send_uses_bypass_header_only_in_dry_run(monkeypatch):
+    request_get = Mock(return_value=_response("https://example.vercel.app"))
+    monkeypatch.setattr(sales_agent.requests, "get", request_get)
+    monkeypatch.setattr(sales_agent.config, "ENABLE_LIVE_SEND", False)
+    monkeypatch.setattr(sales_agent.config, "VERCEL_AUTOMATION_BYPASS_SECRET", "secret")
+
+    assert sales_agent._validate_preview_link_for_send("https://example.vercel.app") == "https://example.vercel.app"
+    request_get.assert_called_once_with(
+        "https://example.vercel.app",
+        allow_redirects=True,
+        headers={"x-vercel-protection-bypass": "secret"},
         timeout=sales_agent._PREVIEW_VALIDATION_TIMEOUT_SECONDS,
     )
 

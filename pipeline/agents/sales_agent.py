@@ -189,6 +189,10 @@ _AUTH_PAGE_MARKERS = (
     "login to vercel",
     "sign in to vercel",
 )
+_VERCEL_PROTECTION_DOCS_URL = (
+    "https://vercel.com/docs/deployment-protection/"
+    "methods-to-bypass-deployment-protection/protection-bypass-automation"
+)
 
 
 def _intro_line(business_name: str) -> str:
@@ -260,8 +264,16 @@ def _validate_preview_link_for_send(preview_link: str) -> str:
     if any(part in parsed.path.lower() for part in _AUTH_URL_PARTS):
         raise RuntimeError(f"Preview URL points to an authentication path: {preview_link}")
 
+    headers = {}
+    if not config.ENABLE_LIVE_SEND and config.VERCEL_AUTOMATION_BYPASS_SECRET:
+        headers["x-vercel-protection-bypass"] = config.VERCEL_AUTOMATION_BYPASS_SECRET
     try:
-        resp = requests.get(preview_link, allow_redirects=True, timeout=_PREVIEW_VALIDATION_TIMEOUT_SECONDS)
+        resp = requests.get(
+            preview_link,
+            allow_redirects=True,
+            headers=headers,
+            timeout=_PREVIEW_VALIDATION_TIMEOUT_SECONDS,
+        )
     except requests.RequestException as exc:
         raise RuntimeError(f"Preview URL is not publicly accessible: {preview_link}") from exc
 
@@ -270,9 +282,17 @@ def _validate_preview_link_for_send(preview_link: str) -> str:
     if resp.status_code >= 400:
         raise RuntimeError(f"Preview URL returned HTTP {resp.status_code}: {preview_link}")
     if any(part in final_path for part in _AUTH_URL_PARTS):
-        raise RuntimeError(f"Preview URL redirects to an authentication path: {final_url}")
+        raise RuntimeError(
+            "Preview URL redirects to Vercel authentication. Turn off Deployment Protection "
+            "before live outreach, or set VERCEL_AUTOMATION_BYPASS_SECRET for dry-run "
+            f"testing only. Docs: {_VERCEL_PROTECTION_DOCS_URL}. Redirected URL: {final_url}"
+        )
     if any(marker in resp.text.lower() for marker in _AUTH_PAGE_MARKERS):
-        raise RuntimeError(f"Preview URL shows an authentication page: {preview_link}")
+        raise RuntimeError(
+            "Preview URL shows Vercel authentication. Turn off Deployment Protection before "
+            "live outreach, or set VERCEL_AUTOMATION_BYPASS_SECRET for dry-run testing only. "
+            f"Docs: {_VERCEL_PROTECTION_DOCS_URL}. URL: {preview_link}"
+        )
 
     return preview_link
 

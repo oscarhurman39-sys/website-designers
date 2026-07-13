@@ -29,6 +29,22 @@ def test_validate_deployment_url_accepts_public_ready_site(monkeypatch):
     assert url == "https://example.vercel.app"
 
 
+def test_validate_deployment_url_uses_bypass_header_only_in_dry_run(monkeypatch):
+    request_get = Mock(return_value=_response("https://example.vercel.app"))
+    monkeypatch.setattr(design_agent.requests, "get", request_get)
+    monkeypatch.setattr(design_agent.config, "ENABLE_LIVE_SEND", False)
+    monkeypatch.setattr(design_agent.config, "VERCEL_AUTOMATION_BYPASS_SECRET", "secret")
+
+    design_agent._validate_deployment_url({"url": "https://example.vercel.app", "ready_state": "READY"})
+
+    request_get.assert_called_once_with(
+        "https://example.vercel.app",
+        allow_redirects=True,
+        headers={"x-vercel-protection-bypass": "secret"},
+        timeout=design_agent._DEPLOYMENT_VALIDATION_TIMEOUT_SECONDS,
+    )
+
+
 @pytest.mark.parametrize(
     "deployment",
     [
