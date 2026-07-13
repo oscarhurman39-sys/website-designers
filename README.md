@@ -67,7 +67,7 @@ Required `.env` variables: `GITHUB_TOKEN`, `VERCEL_TOKEN`, `EMAIL_HOST`,
 `SENDING_DOMAIN`, `PHYSICAL_ADDRESS`. `config.py` validates these at
 startup and fails loudly, listing everything missing, if any are unset.
 
-`VERCEL_TEAM_ID`, `SLACK_BOT_TOKEN`, `UNSPLASH_ACCESS_KEY`,
+`VERCEL_TEAM_ID`, `SLACK_BOT_TOKEN`,
 `VOLTAGENT_PUBLIC_KEY`, `VOLTAGENT_SECRET_KEY` are optional.
 
 Safety switch: `ENABLE_LIVE_SEND=false` by default. In that mode SalesAgent
@@ -148,33 +148,25 @@ python webhook_server.py
 streamlit run dashboard.py
 ```
 
-## Templates
+## Website design system
 
-`templates/` holds one subfolder per business niche, each with an
-`index.html` and a matching `style.css`. `design_agent.py` only builds a
-site for a lead if a subfolder matching its `niche` column exists -- add
-more niches by adding more subfolders.
+Every lead now renders through `templates/studio`, a responsive editorial
+template whose palette, copy, services, and visual treatment are selected by
+the niche art director in `pipeline/utils/visuals.py`. Gardening uses botanical
+macro imagery, plastering uses mineral/trowel textures, mechanics use parts and
+oil details, and other trades have their own material-based direction.
 
-Two template styles currently coexist:
+The image brief explicitly forbids people, premises, finished jobs, branded
+uniforms, vehicles, rooms, logos, text, and anything that could be mistaken for
+the client's real portfolio. Generated images are cached per lead under
+`pipeline/generated_assets/` and embedded in the static site. If generation
+fails, the template uses its designed graphic fallback; it never inserts random
+stock photography. Each preview repo also receives `ART-DIRECTION.txt` with the
+exact positive and negative prompts used for the hero.
 
-- **`landscaper`, `cafe`, `plumber`, `salon`, `electrician`** -- newer,
-  Tailwind CSS (via CDN, no build step) single-page designs. Placeholders:
-  `{{ business_name }}`, `{{ phone }}`, `{{ hero_headline }}`,
-  `{{ services_list }}` (falls back to a niche-appropriate default via
-  Jinja's `default()` filter if not supplied), `{{ pain_point_solution }}`,
-  `{{ testimonial }}`, `{{ location }}`, `{{ year }}`, and
-  `{{ preview_url }}` (a real, working link back to the site's own
-  click-tracked preview URL, shown at the bottom as a "share this preview"
-  link).
-- **`restaurant`, `gym`, `dentist`** -- original hand-rolled CSS designs
-  from the pipeline's first iteration. Placeholders: `{{ business_name }}`,
-  `{{ phone }}`, `{{ pain_point_solution }}`, `{{ testimonial }}`,
-  `{{ location }}`, `{{ hero_image_url }}`, `{{ year }}`.
-
-`design_agent.py`'s `build_context()` supplies the union of both
-placeholder sets to every render, so either style works regardless of
-which niche a lead matches -- unused keys are simply ignored by whichever
-template doesn't reference them.
+Set `ENABLE_AI_IMAGES=false` to use the graphic fallback only. The generation
+model and dimensions can be changed with `HF_IMAGE_MODEL`, `AI_IMAGE_WIDTH`,
+`AI_IMAGE_HEIGHT`, `AI_IMAGE_STEPS`, and `AI_IMAGE_GUIDANCE`.
 
 ## Compliance
 

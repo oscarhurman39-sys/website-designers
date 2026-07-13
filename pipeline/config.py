@@ -57,6 +57,18 @@ EMAIL_PASSWORD: str = os.getenv("EMAIL_PASSWORD", "")
 
 HF_API_TOKEN: str = os.getenv("HF_API_TOKEN", "")
 
+# Art-directed hero generation. Images are cached per lead and embedded in
+# the static preview. Failure uses designed CSS, never random stock imagery.
+ENABLE_AI_IMAGES: bool = _env_bool("ENABLE_AI_IMAGES", default=True)
+HF_IMAGE_MODEL: str = os.getenv("HF_IMAGE_MODEL", "black-forest-labs/FLUX.1-schnell")
+AI_IMAGE_WIDTH: int = int(os.getenv("AI_IMAGE_WIDTH", "1024") or 1024)
+AI_IMAGE_HEIGHT: int = int(os.getenv("AI_IMAGE_HEIGHT", "576") or 576)
+AI_IMAGE_STEPS: int = int(os.getenv("AI_IMAGE_STEPS", "4") or 4)
+AI_IMAGE_GUIDANCE: float = float(os.getenv("AI_IMAGE_GUIDANCE", "3.5") or 3.5)
+GENERATED_ASSETS_DIR: str = os.getenv("GENERATED_ASSETS_DIR", "").strip() or str(
+    Path(__file__).resolve().parent / "generated_assets"
+)
+
 STRIPE_SECRET_KEY: str = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET: str = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 
@@ -67,7 +79,6 @@ ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "")
 SENDING_DOMAIN: str = os.getenv("SENDING_DOMAIN", "")
 PHYSICAL_ADDRESS: str = os.getenv("PHYSICAL_ADDRESS", "")
 
-UNSPLASH_ACCESS_KEY: str = os.getenv("UNSPLASH_ACCESS_KEY", "")
 # `.strip() or default` (rather than getenv's own default) so an empty
 # `DB_PATH=` line in .env falls back too, not just a fully-absent key.
 DB_PATH: str = os.getenv("DB_PATH", "").strip() or str(Path(__file__).resolve().parent / "leads.db")

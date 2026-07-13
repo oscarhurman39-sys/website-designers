@@ -233,4 +233,5 @@ pipeline/leads_processed/
 pipeline/.scheduler.pid
 pipeline/scheduler.log
 pipeline/screenshots/
+pipeline/generated_assets/
 

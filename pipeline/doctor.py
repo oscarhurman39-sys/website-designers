@@ -57,11 +57,18 @@ def _check_env() -> list[tuple[bool, str, str]]:
 def _check_files() -> list[tuple[bool, str, str]]:
     checks: list[tuple[bool, str, str]] = []
     template_niches = design_agent.available_niches()
-    if "default" in template_niches:
-        checks.append(_ok("Default template", "templates/default is available"))
+    if design_agent.STUDIO_TEMPLATE in template_niches:
+        checks.append(_ok("Core template", f"templates/{design_agent.STUDIO_TEMPLATE} is available"))
     else:
-        checks.append(_warn("Default template", "templates/default is missing"))
+        checks.append(_warn("Core template", f"templates/{design_agent.STUDIO_TEMPLATE} is missing"))
     checks.append(_ok("Template count", str(len(template_niches))))
+
+    if config.ENABLE_AI_IMAGES and config.HF_API_TOKEN:
+        checks.append(_ok("AI imagery", f"enabled; {config.HF_IMAGE_MODEL}"))
+    elif config.ENABLE_AI_IMAGES:
+        checks.append(_warn("AI imagery", "enabled but HF_API_TOKEN is missing; designed fallback will be used"))
+    else:
+        checks.append(_ok("AI imagery", "disabled; designed fallback will be used"))
 
     if importlib.util.find_spec("pytest"):
         checks.append(_ok("pytest", "installed"))
