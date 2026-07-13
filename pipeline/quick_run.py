@@ -31,10 +31,14 @@ def main() -> None:
     config.validate()
     db.init_db()
 
-    new_leads = db.list_leads_by_status("new")
-    if not new_leads:
+    candidates = (
+        db.list_leads_by_status_priority("designed")
+        + db.list_leads_by_status_priority("researched")
+        + db.list_leads_by_status_priority("new")
+    )
+    if not candidates:
         print(
-            "No leads with status 'new' found. Add one first:\n"
+            "No runnable leads found. Add one first:\n"
             "  - via the dashboard (streamlit run dashboard.py -> 'Add a lead manually')\n"
             "  - via a CSV: python -m agents.lead_agent path/to/leads.csv\n"
             "  - directly: python -c \"from utils import db; db.init_db(); "
@@ -42,16 +46,22 @@ def main() -> None:
         )
         return
 
-    lead = new_leads[0]
-    print(f"Processing lead {lead['id']}: {lead['business_name']} ({lead['niche']}, {lead['location']})")
+    lead = candidates[0]
+    print(
+        f"Processing lead {lead['id']}: {lead['business_name']} "
+        f"({lead['niche']}, {lead['location']}) from status '{lead['status']}'"
+    )
 
     # --- Step 1: LeadAgent ---------------------------------------------------
-    _print_step("Step 1/3: LeadAgent -- researching contact info")
-    try:
-        lead_agent.research_lead(lead)
-    except Exception as exc:  # noqa: BLE001 - print clearly, never crash silently
-        print(f"LeadAgent FAILED: {exc}")
-        return
+    if lead["status"] == "new":
+        _print_step("Step 1/3: LeadAgent -- researching contact info")
+        try:
+            lead_agent.research_lead(lead)
+        except Exception as exc:  # noqa: BLE001 - print clearly, never crash silently
+            print(f"LeadAgent FAILED: {exc}")
+            return
+    else:
+        _print_step(f"Step 1/3: LeadAgent -- skipped because lead is already '{lead['status']}'")
 
     lead = db.get_lead(lead["id"])
     print(f"-> status: {lead['status']}")
@@ -64,12 +74,16 @@ def main() -> None:
         return
 
     # --- Step 2: DesignAgent --------------------------------------------------
-    _print_step("Step 2/3: DesignAgent -- building + deploying preview")
-    try:
-        website = design_agent.process_lead(lead)
-    except Exception as exc:  # noqa: BLE001
-        print(f"DesignAgent FAILED: {exc}")
-        return
+    website = db.get_website_by_lead(lead["id"])
+    if lead["status"] == "researched":
+        _print_step("Step 2/3: DesignAgent -- building + deploying preview")
+        try:
+            website = design_agent.process_lead(lead)
+        except Exception as exc:  # noqa: BLE001
+            print(f"DesignAgent FAILED: {exc}")
+            return
+    else:
+        _print_step(f"Step 2/3: DesignAgent -- skipped because lead is already '{lead['status']}'")
 
     lead = db.get_lead(lead["id"])
     print(f"-> status: {lead['status']}")

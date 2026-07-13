@@ -24,6 +24,10 @@ def _warn(label: str, detail: str = "") -> tuple[bool, str, str]:
     return False, label, detail
 
 
+def _ascii_detail(value: str) -> str:
+    return value.encode("ascii", errors="replace").decode("ascii")
+
+
 def _check_env() -> list[tuple[bool, str, str]]:
     checks: list[tuple[bool, str, str]] = []
     missing = [name for name in config.REQUIRED_VARS if not os.getenv(name)]
@@ -85,7 +89,7 @@ def run() -> int:
         marker = "OK" if passed else "WARN"
         if not passed:
             failures += 1
-        print(f"{marker:4s} {label:{width}s} {detail}")
+        print(f"{marker:4s} {label:{width}s} {_ascii_detail(detail)}")
     print("=" * 60)
     print(f"{len(checks) - failures} OK, {failures} warning(s)")
     return 0 if failures == 0 else 1
