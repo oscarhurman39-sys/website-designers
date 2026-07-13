@@ -55,14 +55,27 @@ def create_repo(repo_name: str, private: bool = True, description: str = "") -> 
 
 
 def push_files(repo: Repository, files: dict[str, str], commit_message: str = "Initial preview site") -> None:
-    """Create each file in `files` (path -> text content) in a single-ish batch.
+    """Create or update each file in `files` (path -> text content).
 
     PyGithub's Contents API creates one commit per file (there is no native
     multi-file commit helper), which is fine for a handful of small template
-    files like index.html/style.css.
+    files like index.html/style.css. Existing preview repos are common when
+    retrying a lead, so updates include the current blob SHA as required by
+    GitHub's Contents API.
     """
     for path, content in files.items():
-        repo.create_file(path=path, message=f"{commit_message}: {path}", content=content)
+        message = f"{commit_message}: {path}"
+        try:
+            existing = repo.get_contents(path)
+        except GithubException as exc:
+            if exc.status != 404:
+                raise
+            repo.create_file(path=path, message=message, content=content)
+            continue
+
+        if isinstance(existing, list):
+            raise RuntimeError(f"Expected file at {path!r}, found a directory.")
+        repo.update_file(path=path, message=message, content=content, sha=existing.sha)
 
 
 def create_repo_with_files(
