@@ -62,13 +62,18 @@ def deploy_files(project_name: str, files: dict[str, str]) -> dict:
     resp.raise_for_status()
     data = resp.json()
     deployment_id = data["id"]
-    url = data.get("url", "")
+    deployment_url = data.get("url", "")
 
     final_state = _poll_until_ready(deployment_id)
+    public_url = _get_public_production_url(project_name)
 
     return {
         "deployment_id": deployment_id,
-        "url": f"https://{url}" if url else "",
+        # Vercel's unique deployment URL is protected by default, even for
+        # production deploys. The stable production alias is the public URL
+        # intended for prospects.
+        "url": public_url or (f"https://{deployment_url}" if deployment_url else ""),
+        "deployment_url": f"https://{deployment_url}" if deployment_url else "",
         "project_name": project_name,
         "ready_state": final_state,
     }
@@ -103,6 +108,32 @@ def get_deployment_url(deployment_id: str) -> Optional[str]:
     resp.raise_for_status()
     url = resp.json().get("url")
     return f"https://{url}" if url else None
+
+
+def _get_public_production_url(project_name: str) -> Optional[str]:
+    """Return the stable production alias assigned to a Vercel project.
+
+    Vercel's standard deployment protection redirects generated deployment
+    hostnames to login while leaving the project's primary production alias
+    public. Prefer the exact ``<project>.vercel.app`` alias and only use
+    another production alias when it is the sole option.
+    """
+    project_name = _sanitize_project_name(project_name)
+    resp = requests.get(
+        f"{_API_BASE}/v9/projects/{project_name}",
+        headers=_headers(),
+        params=_team_params(),
+        timeout=30,
+    )
+    resp.raise_for_status()
+    aliases = resp.json().get("targets", {}).get("production", {}).get("alias", []) or []
+    aliases = [alias.strip() for alias in aliases if isinstance(alias, str) and alias.strip()]
+    if not aliases:
+        return None
+
+    preferred = f"{project_name}.vercel.app"
+    hostname = preferred if preferred in aliases else aliases[0]
+    return f"https://{hostname}"
 
 
 def _get_project_id(project_name: str) -> str:

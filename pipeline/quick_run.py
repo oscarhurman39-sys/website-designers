@@ -107,7 +107,10 @@ def main() -> None:
     lead = db.get_lead(lead["id"])
     print(f"-> status: {lead['status']}, email sent: {sent}")
 
-    print("\nDone. Check your inbox.")
+    if config.ENABLE_LIVE_SEND:
+        print("\nDone. Check your inbox.")
+    else:
+        print("\nDone. Dry run completed; no real email was sent.")
 
 
 if __name__ == "__main__":
