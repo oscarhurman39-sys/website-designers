@@ -10,6 +10,7 @@ streamlit==1.38.0
 pandas==2.2.3
 huggingface_hub==0.25.2
 slack-sdk==3.33.1
+sendgrid==6.12.5
 
 # Website preview screenshots (pipeline/utils/screenshot.py). After
 # installing, run `playwright install chromium` once (not needed if

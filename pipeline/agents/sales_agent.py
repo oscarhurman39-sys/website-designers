@@ -20,7 +20,7 @@ import requests
 from huggingface_hub import InferenceClient
 
 import config
-from utils import compliance, db, email_utils, screenshot, tracer, tracker
+from utils import compliance, db, email_utils, email_verify, screenshot, tracer, tracker
 
 try:
     from slack_sdk import WebClient
@@ -181,6 +181,19 @@ def draft_cold_email(lead: dict) -> tuple[str, str]:
 _SCREENSHOT_CID = "preview"
 _SENDER_NAME = "Casey"
 
+# Preview-URL safety net, mirroring design_agent.py's deployment validation:
+# even though design_agent already validated the URL at deploy time, a
+# deployment can expire or flip to password-protection between then and the
+# send, so the same checks run again immediately before every cold email.
+_PREVIEW_VALIDATION_TIMEOUT_SECONDS = 15
+_AUTH_URL_PARTS = ("login", "signin", "sign-in", "auth", "authentication")
+_AUTH_PAGE_MARKERS = (
+    "vercel authentication",
+    "log in to vercel",
+    "login to vercel",
+    "sign in to vercel",
+)
+
 
 def _intro_line(business_name: str) -> str:
     """Plain-text greeting that always sits above the screenshot image --
@@ -243,17 +256,6 @@ def _closing_paragraphs(preview_link: str) -> list[str]:
 
 def _validate_preview_link_for_send(preview_link: str) -> str:
     """Return a public preview URL or raise before any cold email is sent."""
-    website = db.get_website_by_lead(lead["id"])
-    preview_link = website["preview_url"] if website and website.get("preview_url") else ""
-    try:
-        preview_link = _validate_preview_link_for_send(preview_link)
-    except RuntimeError as exc:
-        db.update_lead_status(
-            lead["id"],
-            "researched",
-            notes=f"Email blocked: preview URL is not publicly sendable ({exc})",
-        )
-        return False
     parsed = urlparse(preview_link)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise RuntimeError(f"Preview URL is missing or invalid: {preview_link!r}")
@@ -379,6 +381,10 @@ def _send_cold_email_impl(lead: dict) -> bool:
     if not email_addr or db.is_unsubscribed(email_addr):
         db.update_lead_status(lead["id"], "unsubscribed" if db.is_unsubscribed(email_addr) else "lost",
                                notes="No usable email at send time")
+        return False
+    if not email_verify.verify_email(email_addr):
+        db.update_lead_status(lead["id"], "lost",
+                               notes=f"Invalid contact email at send time: {email_addr!r}")
         return False
 
     subject = f"I built a website for {lead['business_name']}"

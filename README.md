@@ -66,7 +66,12 @@ Required `.env` variables: `GITHUB_TOKEN`, `VERCEL_TOKEN`, `EMAIL_HOST`,
 startup and fails loudly, listing everything missing, if any are unset.
 
 `VERCEL_TEAM_ID`, `SLACK_BOT_TOKEN`, `UNSPLASH_ACCESS_KEY`,
-`VOLTAGENT_PUBLIC_KEY`, `VOLTAGENT_SECRET_KEY` are optional.
+`VOLTAGENT_PUBLIC_KEY`, `VOLTAGENT_SECRET_KEY`, `SENDGRID_API_KEY`,
+`SENDGRID_FROM_EMAIL` are optional. If `SENDGRID_API_KEY` is set, outbound
+email goes through the SendGrid API (with `SENDGRID_FROM_EMAIL` as the
+verified sender) instead of SMTP; otherwise the `EMAIL_*` SMTP settings are
+used. Inbox polling always uses IMAP via `EMAIL_HOST`/`EMAIL_USER`
+regardless of the sending transport.
 
 ## Running it
 

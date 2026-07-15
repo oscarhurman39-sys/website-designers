@@ -19,7 +19,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from utils import db, tracer
+from utils import db, email_verify, tracer
 
 USER_AGENT = "ColdEmailSalesPipelineBot/1.0 (+mailto:contact@example.com)"
 REQUEST_TIMEOUT = 10
@@ -122,11 +122,17 @@ def _fetch(url: str) -> Optional[BeautifulSoup]:
 def _extract_email(soup: BeautifulSoup) -> Optional[str]:
     for a in soup.select("a[href^=mailto]"):
         addr = a["href"].split("mailto:")[-1].split("?")[0].strip()
-        if addr and not any(bad in addr.lower() for bad in _EMAIL_BLOCKLIST_SUBSTR):
+        if (
+            addr
+            and email_verify.verify_email(addr)
+            and not any(bad in addr.lower() for bad in _EMAIL_BLOCKLIST_SUBSTR)
+        ):
             return addr
     text = soup.get_text(" ")
     for match in _EMAIL_RE.findall(text):
-        if not any(bad in match.lower() for bad in _EMAIL_BLOCKLIST_SUBSTR):
+        if email_verify.verify_email(match) and not any(
+            bad in match.lower() for bad in _EMAIL_BLOCKLIST_SUBSTR
+        ):
             return match
     return None
 
