@@ -249,7 +249,7 @@ def _closing_paragraphs(preview_link: str) -> list[str]:
         f"View the live preview: {preview_link}",
         "This preview is live for 7 days -- after that it'll be repurposed. No pressure, just didn't want you to miss it.",
         "If you'd like to own it, reply YES. I'll connect your domain, swap in your own photos, and make any changes you want.",
-        f"Standard package: £2,000. This completed draft: £{config.WEBSITE_OFFER_PRICE:,}.",
+        f"Standard package: $2,000. This completed draft: ${config.WEBSITE_OFFER_PRICE:,}.",
         _SENDER_NAME,
     ]
 
