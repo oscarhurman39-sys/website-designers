@@ -20,7 +20,7 @@ import requests
 from huggingface_hub import InferenceClient
 
 import config
-from utils import compliance, db, email_utils, email_verify, screenshot, tracer, tracker
+from utils import compliance, db, email_utils, email_verify, screenshot, tracer
 
 try:
     from slack_sdk import WebClient

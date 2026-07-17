@@ -9,7 +9,6 @@ from __future__ import annotations
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any, Iterator, Optional
 
 import config
