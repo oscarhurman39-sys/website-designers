@@ -16,8 +16,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
+import anthropic
 import requests
-from huggingface_hub import InferenceClient
 
 import config
 from utils import compliance, db, email_utils, screenshot, tracer, tracker
@@ -29,7 +29,10 @@ except ImportError:  # slack-sdk is a soft dependency; alerts still print to con
     WebClient = None  # type: ignore[assignment,misc]
     SlackApiError = Exception  # type: ignore[assignment,misc]
 
-HF_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
+# Max output tokens for a drafted email. The email itself is capped at 150
+# words (~200 tokens) plus a short subject line, so 400 leaves comfortable
+# headroom without risking a mid-sentence truncation.
+_DRAFT_MAX_TOKENS = 400
 
 # In-memory set of lead ids currently under manual human takeover. A lead
 # enters this set when the operator types "takeover" at the console
@@ -104,20 +107,27 @@ def end_takeover(lead_id: int) -> None:
     _TAKEOVER_LEAD_IDS.discard(lead_id)
 
 
-# --- Email drafting (Hugging Face) --------------------------------------------
+# --- Email drafting (Claude) --------------------------------------------------
 
-def _hf_client() -> InferenceClient:
-    if not config.HF_API_TOKEN:
-        raise RuntimeError("HF_API_TOKEN is not configured.")
-    return InferenceClient(model=HF_MODEL, token=config.HF_API_TOKEN)
+# Persona/behaviour stays constant across every lead, so it lives in the
+# system prompt; the per-lead facts and output-format contract go in the user
+# turn (see _build_user_prompt).
+_DRAFT_SYSTEM_PROMPT = (
+    "You write short, casual, human-sounding cold outreach emails for a "
+    "freelance web designer. No hype, no exclamation-point energy, no hyperbole. "
+    "Sound like a real person, not a marketer."
+)
 
 
-def _build_prompt(lead: dict) -> str:
+def _anthropic_client() -> anthropic.Anthropic:
+    if not config.ANTHROPIC_API_KEY:
+        raise RuntimeError("ANTHROPIC_API_KEY is not configured.")
+    return anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+
+
+def _build_user_prompt(lead: dict) -> str:
     pain_point = (lead.get("pain_point") or "a slow or outdated website").strip()
     return (
-        "<s>[INST] You write short, casual, human-sounding cold outreach emails for a "
-        "freelance web designer. No hype, no exclamation-point energy, no hyperbole. "
-        "Sound like a real person, not a marketer.\n\n"
         "Write a cold email to a local business with these facts:\n"
         f"- Business name: {lead['business_name']}\n"
         f"- Niche: {lead['niche']}\n"
@@ -130,7 +140,7 @@ def _build_prompt(lead: dict) -> str:
         "- NOT include a signature, footer, or unsubscribe text (appended separately)\n\n"
         "Respond in EXACTLY this format, nothing else:\n"
         "Subject: <short subject line>\n\n"
-        "<email body>\n[/INST]"
+        "<email body>"
     )
 
 
@@ -167,12 +177,16 @@ def _parse_subject_body(raw_text: str, lead: dict) -> tuple[str, str]:
 def draft_cold_email(lead: dict) -> tuple[str, str]:
     """Return (subject, body_text_without_footer_or_link)."""
     try:
-        raw = _hf_client().text_generation(
-            _build_prompt(lead), max_new_tokens=280, temperature=0.7, do_sample=True
+        response = _anthropic_client().messages.create(
+            model=config.ANTHROPIC_MODEL,
+            max_tokens=_DRAFT_MAX_TOKENS,
+            system=_DRAFT_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": _build_user_prompt(lead)}],
         )
-    except Exception as exc:  # noqa: BLE001 - any HF/network failure falls back gracefully
-        print(f"[sales_agent] HF drafting failed, using fallback template: {exc}")
+    except Exception as exc:  # noqa: BLE001 - any Claude/network failure falls back gracefully
+        print(f"[sales_agent] Claude drafting failed, using fallback template: {exc}")
         return _fallback_email(lead)
+    raw = "".join(block.text for block in response.content if block.type == "text")
     return _parse_subject_body(raw, lead)
 
 
