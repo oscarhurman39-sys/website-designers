@@ -255,19 +255,46 @@ def _closing_paragraphs(preview_link: str) -> list[str]:
     ]
 
 
+# --- Preview-link validation --------------------------------------------------
+# A cold email is worthless -- and looks like a scam -- if its preview link 404s
+# or drops the prospect on a login wall (e.g. Vercel deployment protection).
+# These heuristics let _send_cold_email_impl block a send when the URL is
+# unreachable, redirects into an auth flow, or renders a login/password page.
+# Kept deliberately conservative: a preview link is always the deployment root
+# ("/"), so these leading-slash auth fragments won't match a real preview page.
+_PREVIEW_VALIDATION_TIMEOUT_SECONDS = 10
+
+# URL path fragments that indicate an auth/login flow rather than the preview.
+# Matched as a substring of the lowercased path, each with a leading slash so an
+# innocent word inside a longer path can't trigger a false positive.
+_AUTH_URL_PARTS = (
+    "/login",
+    "/log-in",
+    "/signin",
+    "/sign-in",
+    "/auth",
+    "/sso",
+    "/sso-api",
+    "/authenticate",
+)
+
+# Substrings that, if present in the fetched page body (lowercased), mean an
+# authentication wall is being served in place of the preview.
+_AUTH_PAGE_MARKERS = (
+    "authentication required",
+    "vercel authentication",
+    "log in to vercel",
+    "sign in to continue",
+    "enter password to continue",
+    "password protection",
+)
+
+
 def _validate_preview_link_for_send(preview_link: str) -> str:
-    """Return a public preview URL or raise before any cold email is sent."""
-    website = db.get_website_by_lead(lead["id"])
-    preview_link = website["preview_url"] if website and website.get("preview_url") else ""
-    try:
-        preview_link = _validate_preview_link_for_send(preview_link)
-    except RuntimeError as exc:
-        db.update_lead_status(
-            lead["id"],
-            "researched",
-            notes=f"Email blocked: preview URL is not publicly sendable ({exc})",
-        )
-        return False
+    """Return the validated preview URL, or raise RuntimeError before any cold
+    email is sent. Takes the candidate URL the caller already pulled from the DB
+    and confirms it is publicly reachable and not an auth wall; it does not read
+    or write lead/DB state itself -- the caller records the block reason."""
     parsed = urlparse(preview_link)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise RuntimeError(f"Preview URL is missing or invalid: {preview_link!r}")
