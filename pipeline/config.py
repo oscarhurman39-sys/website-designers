@@ -29,7 +29,7 @@ REQUIRED_VARS: list[str] = [
     "EMAIL_PORT",
     "EMAIL_USER",
     "EMAIL_PASSWORD",
-    "HF_API_TOKEN",
+    "ANTHROPIC_API_KEY",
     "STRIPE_SECRET_KEY",
     "STRIPE_WEBHOOK_SECRET",
     "ADMIN_EMAIL",
@@ -47,7 +47,13 @@ EMAIL_PORT: int = int(os.getenv("EMAIL_PORT", "587") or 587)
 EMAIL_USER: str = os.getenv("EMAIL_USER", "")
 EMAIL_PASSWORD: str = os.getenv("EMAIL_PASSWORD", "")
 
-HF_API_TOKEN: str = os.getenv("HF_API_TOKEN", "")
+# Anthropic (Claude) — used for cold-email drafting in sales_agent.py.
+# ANTHROPIC_MODEL is overridable so the model can be tuned without a code
+# change (e.g. a cheaper model for high-volume sending); it defaults to the
+# latest Opus. Drafting always falls back to a deterministic template if the
+# key is missing or the API call fails, so a bad Claude day never blocks sends.
+ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "").strip() or "claude-opus-4-8"
 
 STRIPE_SECRET_KEY: str = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET: str = os.getenv("STRIPE_WEBHOOK_SECRET", "")

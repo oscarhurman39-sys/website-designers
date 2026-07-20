@@ -60,12 +60,12 @@ cp .env.example .env
 ```
 
 Required `.env` variables: `GITHUB_TOKEN`, `VERCEL_TOKEN`, `EMAIL_HOST`,
-`EMAIL_PORT`, `EMAIL_USER`, `EMAIL_PASSWORD`, `HF_API_TOKEN`,
+`EMAIL_PORT`, `EMAIL_USER`, `EMAIL_PASSWORD`, `ANTHROPIC_API_KEY`,
 `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `ADMIN_EMAIL`,
 `SENDING_DOMAIN`, `PHYSICAL_ADDRESS`. `config.py` validates these at
 startup and fails loudly, listing everything missing, if any are unset.
 
-`VERCEL_TEAM_ID`, `SLACK_BOT_TOKEN`, `UNSPLASH_ACCESS_KEY`,
+`ANTHROPIC_MODEL`, `VERCEL_TEAM_ID`, `SLACK_BOT_TOKEN`, `UNSPLASH_ACCESS_KEY`,
 `VOLTAGENT_PUBLIC_KEY`, `VOLTAGENT_SECRET_KEY` are optional.
 
 ## Running it

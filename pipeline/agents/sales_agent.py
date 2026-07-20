@@ -16,8 +16,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
+import anthropic
 import requests
-from huggingface_hub import InferenceClient
 
 import config
 from utils import compliance, db, email_utils, screenshot, tracer, tracker
@@ -29,7 +29,10 @@ except ImportError:  # slack-sdk is a soft dependency; alerts still print to con
     WebClient = None  # type: ignore[assignment,misc]
     SlackApiError = Exception  # type: ignore[assignment,misc]
 
-HF_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
+# Max output tokens for a drafted email. The email itself is capped at 150
+# words (~200 tokens) plus a short subject line, so 400 leaves comfortable
+# headroom without risking a mid-sentence truncation.
+_DRAFT_MAX_TOKENS = 400
 
 # In-memory set of lead ids currently under manual human takeover. A lead
 # enters this set when the operator types "takeover" at the console
@@ -104,20 +107,27 @@ def end_takeover(lead_id: int) -> None:
     _TAKEOVER_LEAD_IDS.discard(lead_id)
 
 
-# --- Email drafting (Hugging Face) --------------------------------------------
+# --- Email drafting (Claude) --------------------------------------------------
 
-def _hf_client() -> InferenceClient:
-    if not config.HF_API_TOKEN:
-        raise RuntimeError("HF_API_TOKEN is not configured.")
-    return InferenceClient(model=HF_MODEL, token=config.HF_API_TOKEN)
+# Persona/behaviour stays constant across every lead, so it lives in the
+# system prompt; the per-lead facts and output-format contract go in the user
+# turn (see _build_user_prompt).
+_DRAFT_SYSTEM_PROMPT = (
+    "You write short, casual, human-sounding cold outreach emails for a "
+    "freelance web designer. No hype, no exclamation-point energy, no hyperbole. "
+    "Sound like a real person, not a marketer."
+)
 
 
-def _build_prompt(lead: dict) -> str:
+def _anthropic_client() -> anthropic.Anthropic:
+    if not config.ANTHROPIC_API_KEY:
+        raise RuntimeError("ANTHROPIC_API_KEY is not configured.")
+    return anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+
+
+def _build_user_prompt(lead: dict) -> str:
     pain_point = (lead.get("pain_point") or "a slow or outdated website").strip()
     return (
-        "<s>[INST] You write short, casual, human-sounding cold outreach emails for a "
-        "freelance web designer. No hype, no exclamation-point energy, no hyperbole. "
-        "Sound like a real person, not a marketer.\n\n"
         "Write a cold email to a local business with these facts:\n"
         f"- Business name: {lead['business_name']}\n"
         f"- Niche: {lead['niche']}\n"
@@ -130,7 +140,7 @@ def _build_prompt(lead: dict) -> str:
         "- NOT include a signature, footer, or unsubscribe text (appended separately)\n\n"
         "Respond in EXACTLY this format, nothing else:\n"
         "Subject: <short subject line>\n\n"
-        "<email body>\n[/INST]"
+        "<email body>"
     )
 
 
@@ -167,12 +177,16 @@ def _parse_subject_body(raw_text: str, lead: dict) -> tuple[str, str]:
 def draft_cold_email(lead: dict) -> tuple[str, str]:
     """Return (subject, body_text_without_footer_or_link)."""
     try:
-        raw = _hf_client().text_generation(
-            _build_prompt(lead), max_new_tokens=280, temperature=0.7, do_sample=True
+        response = _anthropic_client().messages.create(
+            model=config.ANTHROPIC_MODEL,
+            max_tokens=_DRAFT_MAX_TOKENS,
+            system=_DRAFT_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": _build_user_prompt(lead)}],
         )
-    except Exception as exc:  # noqa: BLE001 - any HF/network failure falls back gracefully
-        print(f"[sales_agent] HF drafting failed, using fallback template: {exc}")
+    except Exception as exc:  # noqa: BLE001 - any Claude/network failure falls back gracefully
+        print(f"[sales_agent] Claude drafting failed, using fallback template: {exc}")
         return _fallback_email(lead)
+    raw = "".join(block.text for block in response.content if block.type == "text")
     return _parse_subject_body(raw, lead)
 
 
@@ -241,19 +255,46 @@ def _closing_paragraphs(preview_link: str) -> list[str]:
     ]
 
 
+# --- Preview-link validation --------------------------------------------------
+# A cold email is worthless -- and looks like a scam -- if its preview link 404s
+# or drops the prospect on a login wall (e.g. Vercel deployment protection).
+# These heuristics let _send_cold_email_impl block a send when the URL is
+# unreachable, redirects into an auth flow, or renders a login/password page.
+# Kept deliberately conservative: a preview link is always the deployment root
+# ("/"), so these leading-slash auth fragments won't match a real preview page.
+_PREVIEW_VALIDATION_TIMEOUT_SECONDS = 10
+
+# URL path fragments that indicate an auth/login flow rather than the preview.
+# Matched as a substring of the lowercased path, each with a leading slash so an
+# innocent word inside a longer path can't trigger a false positive.
+_AUTH_URL_PARTS = (
+    "/login",
+    "/log-in",
+    "/signin",
+    "/sign-in",
+    "/auth",
+    "/sso",
+    "/sso-api",
+    "/authenticate",
+)
+
+# Substrings that, if present in the fetched page body (lowercased), mean an
+# authentication wall is being served in place of the preview.
+_AUTH_PAGE_MARKERS = (
+    "authentication required",
+    "vercel authentication",
+    "log in to vercel",
+    "sign in to continue",
+    "enter password to continue",
+    "password protection",
+)
+
+
 def _validate_preview_link_for_send(preview_link: str) -> str:
-    """Return a public preview URL or raise before any cold email is sent."""
-    website = db.get_website_by_lead(lead["id"])
-    preview_link = website["preview_url"] if website and website.get("preview_url") else ""
-    try:
-        preview_link = _validate_preview_link_for_send(preview_link)
-    except RuntimeError as exc:
-        db.update_lead_status(
-            lead["id"],
-            "researched",
-            notes=f"Email blocked: preview URL is not publicly sendable ({exc})",
-        )
-        return False
+    """Return the validated preview URL, or raise RuntimeError before any cold
+    email is sent. Takes the candidate URL the caller already pulled from the DB
+    and confirms it is publicly reachable and not an auth wall; it does not read
+    or write lead/DB state itself -- the caller records the block reason."""
     parsed = urlparse(preview_link)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise RuntimeError(f"Preview URL is missing or invalid: {preview_link!r}")
