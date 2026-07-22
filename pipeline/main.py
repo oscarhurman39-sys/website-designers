@@ -225,8 +225,13 @@ def _handle_command(line: str) -> None:
 
 
 def _command_listener() -> None:
-    for line in sys.stdin:
-        if _shutdown_event.is_set():
+    # readline() rather than `for line in sys.stdin`: _handle_transfer
+    # prompts with input() on this same stream mid-command, and the stdin
+    # iterator's internal buffering can steal lines typed ahead of those
+    # prompts. readline() consumes exactly one line at a time.
+    while not _shutdown_event.is_set():
+        line = sys.stdin.readline()
+        if not line:  # EOF -- stdin closed (e.g. detached/cron session)
             return
         try:
             _handle_command(line)

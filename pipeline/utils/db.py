@@ -305,7 +305,7 @@ def message_id_seen(message_id: str) -> bool:
 
 # --- Websites --------------------------------------------------------------
 
-def insert_website(
+def upsert_website(
     lead_id: int,
     template_niche: str,
     repo_url: str,
@@ -315,7 +315,24 @@ def insert_website(
     screenshot_url: str = "",
     screenshot_path: str = "",
 ) -> int:
+    """Insert a website row for `lead_id`, or update the existing one in
+    place. A re-designed lead (blocked email, bounce retry) must not
+    accumulate duplicate rows -- everything that reads websites takes the
+    latest row per lead, so stale duplicates are pure noise."""
     with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id FROM websites WHERE lead_id = ? ORDER BY id DESC LIMIT 1", (lead_id,)
+        ).fetchone()
+        if row is not None:
+            conn.execute(
+                """UPDATE websites
+                   SET template_niche = ?, repo_url = ?, repo_full_name = ?, preview_url = ?,
+                       vercel_project_id = ?, screenshot_url = ?, screenshot_path = ?
+                   WHERE id = ?""",
+                (template_niche, repo_url, repo_full_name, preview_url, vercel_project_id,
+                 screenshot_url, screenshot_path, row["id"]),
+            )
+            return int(row["id"])
         cur = conn.execute(
             """INSERT INTO websites
                (lead_id, template_niche, repo_url, repo_full_name, preview_url, vercel_project_id,
@@ -365,6 +382,18 @@ def get_last_email_timestamp(lead_id: int) -> Optional[str]:
 
 
 # --- State history -----------------------------------------------------------
+
+def count_state_notes_like(lead_id: int, pattern: str) -> int:
+    """Count state_history entries for a lead whose notes match a SQL LIKE
+    pattern (e.g. 'Design failed:%'). Used for retry caps, so a lead that
+    keeps failing the same step gives up instead of looping forever."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM state_history WHERE lead_id = ? AND notes LIKE ?",
+            (lead_id, pattern),
+        ).fetchone()
+        return int(row["n"])
+
 
 def log_state_history(lead_id: int, from_state: Optional[str], to_state: str, notes: str = "") -> None:
     with get_connection() as conn:

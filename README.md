@@ -33,6 +33,8 @@ website-designers/
 │   │   ├── stripe_utils.py    # checkout sessions, webhook verification
 │   │   ├── compliance.py      # unsubscribe tokens, CAN-SPAM footer
 │   │   ├── tracker.py         # click-tracking links
+│   │   ├── screenshot.py      # preview screenshots (Playwright)
+│   │   ├── url_safety.py      # shared public-URL checks (deploy + send time)
 │   │   └── tracer.py          # trace/agent/tool span logging (VoltAgent + local)
 │   ├── config.py               # env loading & validation
 │   ├── main.py                 # orchestrator loop + operator console

@@ -14,13 +14,14 @@ import random
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from urllib.parse import urlparse
 
+# Kept as a module attribute (not just an indirect dependency of
+# utils.url_safety) so tests can patch `sales_agent.requests.get`.
 import requests
 from huggingface_hub import InferenceClient
 
 import config
-from utils import compliance, db, email_utils, screenshot, tracer, tracker
+from utils import compliance, db, email_utils, screenshot, tracer, tracker, url_safety
 
 try:
     from slack_sdk import WebClient
@@ -53,9 +54,11 @@ _POSITIVE_PATTERNS = (
     r"\bcost\b", r"\bsounds good\b", r"\blet'?s talk\b", r"\bschedule a call\b",
     r"\bsign me up\b", r"\byes\b", r"\bwhen can we\b",
 )
+# Matched against lowercased text (see classify_reply), so patterns must be
+# lowercase too -- an uppercase pattern here can never match anything.
 _OOO_PATTERNS = (
     r"\bout of (the )?office\b", r"\bauto(-| )?reply\b", r"\bautomatic reply\b",
-    r"\bon vacation\b", r"\bcurrently away\b", r"\b\bOOO\b",
+    r"\bon vacation\b", r"\bcurrently away\b", r"\booo\b",
 )
 
 
@@ -236,46 +239,23 @@ def _closing_paragraphs(preview_link: str) -> list[str]:
         f"View the live preview: {preview_link}",
         "This preview is live for 7 days -- after that it'll be repurposed. No pressure, just didn't want you to miss it.",
         "If you'd like to own it, reply YES. I'll connect your domain, swap in your own photos, and make any changes you want.",
-        f"Standard package: £2,000. This completed draft: £{config.WEBSITE_OFFER_PRICE:,}.",
+        f"Standard package: {config.CURRENCY_SYMBOL}{config.WEBSITE_ANCHOR_PRICE:,}. "
+        f"This completed draft: {config.CURRENCY_SYMBOL}{config.WEBSITE_OFFER_PRICE:,}.",
         _SENDER_NAME,
     ]
 
 
+_PREVIEW_VALIDATION_TIMEOUT_SECONDS = 15
+
+
 def _validate_preview_link_for_send(preview_link: str) -> str:
-    """Return a public preview URL or raise before any cold email is sent."""
-    website = db.get_website_by_lead(lead["id"])
-    preview_link = website["preview_url"] if website and website.get("preview_url") else ""
-    try:
-        preview_link = _validate_preview_link_for_send(preview_link)
-    except RuntimeError as exc:
-        db.update_lead_status(
-            lead["id"],
-            "researched",
-            notes=f"Email blocked: preview URL is not publicly sendable ({exc})",
-        )
-        return False
-    parsed = urlparse(preview_link)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        raise RuntimeError(f"Preview URL is missing or invalid: {preview_link!r}")
-
-    if any(part in parsed.path.lower() for part in _AUTH_URL_PARTS):
-        raise RuntimeError(f"Preview URL points to an authentication path: {preview_link}")
-
-    try:
-        resp = requests.get(preview_link, allow_redirects=True, timeout=_PREVIEW_VALIDATION_TIMEOUT_SECONDS)
-    except requests.RequestException as exc:
-        raise RuntimeError(f"Preview URL is not publicly accessible: {preview_link}") from exc
-
-    final_url = resp.url or preview_link
-    final_path = urlparse(final_url).path.lower()
-    if resp.status_code >= 400:
-        raise RuntimeError(f"Preview URL returned HTTP {resp.status_code}: {preview_link}")
-    if any(part in final_path for part in _AUTH_URL_PARTS):
-        raise RuntimeError(f"Preview URL redirects to an authentication path: {final_url}")
-    if any(marker in resp.text.lower() for marker in _AUTH_PAGE_MARKERS):
-        raise RuntimeError(f"Preview URL shows an authentication page: {preview_link}")
-
-    return preview_link
+    """Return a public preview URL or raise RuntimeError before any cold
+    email is sent. Re-checked here even though DesignAgent already validated
+    at deploy time -- a preview can expire or flip behind Vercel auth in the
+    gap between deploying and sending."""
+    return url_safety.validate_public_page(
+        preview_link, _PREVIEW_VALIDATION_TIMEOUT_SECONDS, label="Preview URL"
+    )
 
 
 def _plain_text_body(business_name: str, preview_link: str, city: str) -> str:

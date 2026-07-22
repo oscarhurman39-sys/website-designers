@@ -7,13 +7,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
 
 import requests
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 import config
-from utils import db, github_api, screenshot, tracer, tracker, vercel_api
+from utils import db, github_api, screenshot, tracer, tracker, url_safety, vercel_api
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 TEMPLATE_FILES = ("index.html", "style.css")
@@ -21,13 +20,6 @@ DEFAULT_NICHE = "default"
 
 _PLACEHOLDER_IMAGE_BASE = "https://picsum.photos/seed"
 _DEPLOYMENT_VALIDATION_TIMEOUT_SECONDS = 15
-_AUTH_URL_PARTS = ("login", "signin", "sign-in", "auth", "authentication")
-_AUTH_PAGE_MARKERS = (
-    "vercel authentication",
-    "log in to vercel",
-    "login to vercel",
-    "sign in to vercel",
-)
 
 # Unsplash search terms per niche -- more specific than the raw niche
 # string so the fetched photo actually matches the trade (e.g. a mechanic
@@ -282,33 +274,16 @@ def _validate_deployment_url(deployment: dict) -> str:
     every lead in that state.
     """
     preview_url = (deployment.get("url") or "").strip()
-    parsed = urlparse(preview_url)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+    if not preview_url:
         raise RuntimeError(f"Deployment did not return a valid public URL: {preview_url!r}")
 
     final_state = deployment.get("ready_state")
     if final_state and final_state != "READY":
         raise RuntimeError(f"Deployment is not ready: ready_state={final_state!r}, url={preview_url!r}")
 
-    if any(part in parsed.path.lower() for part in _AUTH_URL_PARTS):
-        raise RuntimeError(f"Deployment URL points to an authentication path: {preview_url}")
-
-    try:
-        resp = requests.get(preview_url, allow_redirects=True, timeout=_DEPLOYMENT_VALIDATION_TIMEOUT_SECONDS)
-    except requests.RequestException as exc:
-        raise RuntimeError(f"Deployment URL is not publicly accessible: {preview_url}") from exc
-
-    final_url = resp.url or preview_url
-    final_path = urlparse(final_url).path.lower()
-    if resp.status_code >= 400:
-        raise RuntimeError(f"Deployment URL returned HTTP {resp.status_code}: {preview_url}")
-    if any(part in final_path for part in _AUTH_URL_PARTS):
-        raise RuntimeError(f"Deployment URL redirects to an authentication path: {final_url}")
-    page_text = resp.text.lower()
-    if any(marker in page_text for marker in _AUTH_PAGE_MARKERS):
-        raise RuntimeError(f"Deployment URL shows an authentication page: {preview_url}")
-
-    return preview_url
+    return url_safety.validate_public_page(
+        preview_url, _DEPLOYMENT_VALIDATION_TIMEOUT_SECONDS, label="Deployment URL"
+    )
 
 
 def process_lead(lead: dict) -> Optional[dict]:
@@ -347,9 +322,15 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
     )
     preview_url = _validate_deployment_url(deployment)
 
+    # A redesign gets a fresh deployment URL, so a screenshot cached from
+    # the previous deploy would show the old site -- drop it so the capture
+    # below isn't served a stale cache hit.
+    if db.get_website_by_lead(lead["id"]) is not None:
+        screenshot.screenshot_path(lead["id"]).unlink(missing_ok=True)
+
     screenshot_url, screenshot_path = _capture_and_publish_screenshot(lead["id"], preview_url)
 
-    website_id = db.insert_website(
+    website_id = db.upsert_website(
         lead_id=lead["id"],
         template_niche=niche,
         repo_url=repo_url,
@@ -363,10 +344,30 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
     return db.get_website_by_lead(lead["id"]) if website_id else None
 
 
+# Total retry budget per lead across both automated failure modes that
+# bounce a lead back to 'researched' (a failed design/deploy, and a sent
+# email being blocked because its preview stopped being public). Without a
+# cap, a permanently-broken lead would redeploy every 60s cycle forever.
+MAX_DESIGN_ATTEMPTS = 3
+
+
+def _design_failures(lead_id: int) -> int:
+    return db.count_state_notes_like(lead_id, "Design failed:%") + db.count_state_notes_like(
+        lead_id, "Email blocked:%"
+    )
+
+
 def run() -> None:
     """Main entrypoint called by main.py: design a site for every
     'researched' lead that has a matching template."""
     for lead in db.list_leads_by_status("researched"):
+        failures = _design_failures(lead["id"])
+        if failures >= MAX_DESIGN_ATTEMPTS:
+            db.update_lead_status(
+                lead["id"], "lost",
+                notes=f"Giving up after {failures} failed design/preview attempts",
+            )
+            continue
         try:
             process_lead(lead)
         except Exception as exc:  # noqa: BLE001 - one bad lead must not kill the batch

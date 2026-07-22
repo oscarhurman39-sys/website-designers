@@ -64,11 +64,31 @@ UNSPLASH_ACCESS_KEY: str = os.getenv("UNSPLASH_ACCESS_KEY", "")
 # `DB_PATH=` line in .env falls back too, not just a fully-absent key.
 DB_PATH: str = os.getenv("DB_PATH", "").strip() or str(Path(__file__).resolve().parent / "leads.db")
 PUBLIC_BASE_URL: str = (os.getenv("PUBLIC_BASE_URL", "").strip() or "http://localhost:5000").rstrip("/")
-WEBSITE_PRICE_USD: int = int(os.getenv("WEBSITE_PRICE_USD", "750") or 750)
+
+# --- Pricing ----------------------------------------------------------------
+# One currency drives BOTH the price lines quoted in cold emails and the
+# Stripe charge, so a lead is never quoted one currency and charged another.
+# Lowercase ISO code, Stripe-style. Defaults to gbp to match the £-denominated
+# email copy this pipeline has always sent.
+PAYMENT_CURRENCY: str = (os.getenv("PAYMENT_CURRENCY", "").strip() or "gbp").lower()
+_CURRENCY_SYMBOLS = {"gbp": "£", "usd": "$", "eur": "€"}
+# Unknown currencies fall back to "CODE " (e.g. "AUD 750") rather than a
+# wrong symbol.
+CURRENCY_SYMBOL: str = _CURRENCY_SYMBOLS.get(PAYMENT_CURRENCY, PAYMENT_CURRENCY.upper() + " ")
+
+# Amount actually charged via Stripe checkout once a lead says yes.
+# WEBSITE_PRICE is the current name; WEBSITE_PRICE_USD is honoured as a
+# fallback for existing .env files from before the currency was configurable.
+WEBSITE_PRICE: int = int(
+    os.getenv("WEBSITE_PRICE", "").strip() or os.getenv("WEBSITE_PRICE_USD", "").strip() or "750"
+)
 # Discounted price quoted in cold emails for the pre-built draft (see
-# sales_agent.py's offer copy). Separate from WEBSITE_PRICE_USD, which is
-# the amount actually charged via Stripe checkout once a lead says yes.
+# sales_agent.py's offer copy). Separate from WEBSITE_PRICE, which is the
+# amount actually charged.
 WEBSITE_OFFER_PRICE: int = int(os.getenv("WEBSITE_OFFER_PRICE", "750") or 750)
+# Non-discounted "standard package" price named in the same offer copy as
+# the anchor the draft price is discounted from.
+WEBSITE_ANCHOR_PRICE: int = int(os.getenv("WEBSITE_ANCHOR_PRICE", "2000") or 2000)
 
 # --- SendGrid configuration (optional) ----------------------------------------
 SENDGRID_API_KEY: str = os.getenv("SENDGRID_API_KEY", "")

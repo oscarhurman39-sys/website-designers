@@ -19,11 +19,13 @@ def create_checkout_session(
     lead_id: int,
     business_name: str,
     customer_email: str,
-    amount_usd: Optional[int] = None,
+    amount: Optional[int] = None,
 ) -> str:
     """Create a Stripe Checkout Session for the fixed website price and
-    return its hosted checkout URL. Amount defaults to config.WEBSITE_PRICE_USD."""
-    amount_cents = (amount_usd if amount_usd is not None else config.WEBSITE_PRICE_USD) * 100
+    return its hosted checkout URL. Amount defaults to config.WEBSITE_PRICE,
+    charged in config.PAYMENT_CURRENCY -- the same currency quoted in the
+    cold-email offer copy (see sales_agent.py)."""
+    amount_minor_units = (amount if amount is not None else config.WEBSITE_PRICE) * 100
     session = stripe.checkout.Session.create(
         mode="payment",
         payment_method_types=["card"],
@@ -31,8 +33,8 @@ def create_checkout_session(
         line_items=[
             {
                 "price_data": {
-                    "currency": "usd",
-                    "unit_amount": amount_cents,
+                    "currency": config.PAYMENT_CURRENCY,
+                    "unit_amount": amount_minor_units,
                     "product_data": {
                         "name": f"Custom website design -- {business_name}",
                         "description": "One-time payment for a completed, custom-built business website.",

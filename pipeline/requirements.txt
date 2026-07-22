@@ -11,6 +11,11 @@ pandas==2.2.3
 huggingface_hub==0.25.2
 slack-sdk==3.33.1
 
+# Optional alternative email transport (used automatically when
+# SENDGRID_API_KEY is set in .env; SMTP remains the default otherwise --
+# see utils/email_utils.py's soft import).
+sendgrid==6.12.5
+
 # Website preview screenshots (pipeline/utils/screenshot.py). After
 # installing, run `playwright install chromium` once (not needed if
 # Chromium is already provided by your environment, e.g. a pre-provisioned

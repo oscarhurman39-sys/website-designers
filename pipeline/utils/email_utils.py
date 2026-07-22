@@ -30,19 +30,27 @@ from pathlib import Path
 from typing import Optional
 import base64
 
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import (
-    Mail,
-    Attachment,
-    FileContent,
-    FileName,
-    FileType,
-    Disposition,
-    MailSettings,
-    TrackingSettings,
-    OpenTracking,
-    ClickTracking,
-)
+# sendgrid is a soft dependency (same pattern as slack-sdk in
+# sales_agent.py): SMTP is the default transport, and a missing SendGrid
+# package must never stop the pipeline from importing/sending. If
+# SENDGRID_API_KEY is set but the package isn't installed,
+# send_email_sendgrid raises a clear RuntimeError at send time.
+try:
+    from sendgrid import SendGridAPIClient
+    from sendgrid.helpers.mail import (
+        Mail,
+        Attachment,
+        FileContent,
+        FileName,
+        FileType,
+        Disposition,
+        MailSettings,
+        TrackingSettings,
+        OpenTracking,
+        ClickTracking,
+    )
+except ImportError:
+    SendGridAPIClient = None  # type: ignore[assignment,misc]
 
 import config
 from utils import compliance
@@ -179,10 +187,15 @@ def send_email_sendgrid(
     # Validate inputs
     if not to_addr or not subject or not body_text:
         raise ValueError("to_addr, subject, and body_text are required.")
-    
+
     if not _validate_email(to_addr):
         raise ValueError(f"Invalid email format: {to_addr}")
 
+    if SendGridAPIClient is None:
+        raise RuntimeError(
+            "SENDGRID_API_KEY is set but the sendgrid package is not installed. "
+            "Run `pip install -r pipeline/requirements.txt` (or unset SENDGRID_API_KEY to use SMTP)."
+        )
     if not config.SENDGRID_API_KEY:
         raise RuntimeError("SENDGRID_API_KEY is not configured.")
     if not config.SENDGRID_FROM_EMAIL:
@@ -259,7 +272,9 @@ def send_email_sendgrid(
     # Send via SendGrid
     try:
         logger.debug("Connecting to SendGrid API...")
-        sg = SendGridAPIClient(config.SENDGRID_API_KEY, request_headers={"timeout": 30})
+        # SendGridAPIClient's constructor takes only (api_key, host,
+        # impersonate_subuser) -- it has no request_headers/timeout kwarg.
+        sg = SendGridAPIClient(config.SENDGRID_API_KEY)
         response = sg.send(mail)
         
         if response.status_code != 202:
