@@ -16,6 +16,27 @@ transfer are only ever triggered by an explicit console command.
 4. `python run.py quick-test` to run one lead through the whole pipeline and watch it work
 5. `python run.py loop` (always-on) or `python run.py dashboard` (Streamlit UI) once you're ready
 
+### Quick Start on Windows (PowerShell)
+
+`run.ps1` wraps the same modes as `run.py` and adds one-command setup
+(venv, dependencies, Playwright Chromium, `.env` scaffold, config check):
+
+```powershell
+.\run.ps1 setup                      # first time: creates venv, installs everything, scaffolds .env
+# fill in .env, then:
+.\run.ps1 ingest test_lead.csv       # load the 3 sample leads
+.\run.ps1 quick-test                 # one lead end-to-end
+.\run.ps1 loop                       # always-on orchestrator + operator console
+.\run.ps1 dashboard                  # Streamlit UI
+.\run.ps1 webhook                    # click/unsubscribe/Stripe webhook server
+.\run.ps1 test-email you@example.com # send yourself a real preview email
+.\run.ps1 test                       # offline unit tests
+```
+
+If PowerShell blocks the script, run it once with
+`powershell -ExecutionPolicy Bypass -File .\run.ps1 setup`, or enable local
+scripts permanently with `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+
 ## Directory structure
 
 ```
