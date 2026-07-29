@@ -13,21 +13,18 @@ import requests
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 import config
-from utils import db, github_api, screenshot, tracer, tracker, vercel_api
+from utils import db, github_api, screenshot, tracer, tracker, url_check, vercel_api
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 TEMPLATE_FILES = ("index.html", "style.css")
 DEFAULT_NICHE = "default"
 
 _PLACEHOLDER_IMAGE_BASE = "https://picsum.photos/seed"
-_DEPLOYMENT_VALIDATION_TIMEOUT_SECONDS = 15
-_AUTH_URL_PARTS = ("login", "signin", "sign-in", "auth", "authentication")
-_AUTH_PAGE_MARKERS = (
-    "vercel authentication",
-    "log in to vercel",
-    "login to vercel",
-    "sign in to vercel",
-)
+# Auth-wall detection constants are shared with sales_agent -- see
+# utils/url_check.py. Do not re-declare them here.
+_DEPLOYMENT_VALIDATION_TIMEOUT_SECONDS = url_check.DEPLOYMENT_VALIDATION_TIMEOUT_SECONDS
+_AUTH_URL_PARTS = url_check.AUTH_URL_PARTS
+_AUTH_PAGE_MARKERS = url_check.AUTH_PAGE_MARKERS
 
 # Unsplash search terms per niche -- more specific than the raw niche
 # string so the fetched photo actually matches the trade (e.g. a mechanic

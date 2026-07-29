@@ -123,6 +123,38 @@ python webhook_server.py
 streamlit run dashboard.py
 ```
 
+## Campaigns (reusing the pipeline for another offer)
+
+The sending machine is offer-agnostic: `utils/compliance.py`,
+`utils/email_utils.py`, `utils/tracker.py`, `utils/db.py`, and the rate
+limiting / reply classification / human-takeover logic in
+`agents/sales_agent.py` don't care what you're selling. Only the *copy*
+does, and it all lives in **`pipeline/campaigns.py`**.
+
+Pick one with the `CAMPAIGN` env var:
+
+```bash
+CAMPAIGN=web_design    python pipeline/main.py   # default
+CAMPAIGN=garden_centre python pipeline/main.py
+```
+
+| Campaign | Offer | Runnable? |
+|---|---|---|
+| `web_design` | Free preview site → paid build | Yes |
+| `garden_centre` | Timber plant-deck licence for garden centres | **No — copy only** |
+
+`main.py` resolves the campaign at startup, so an unknown value fails
+immediately rather than partway through the first send.
+
+**Adding a campaign** means adding a `Campaign(...)` to `campaigns.py` —
+prompt persona, subject lines, intro, checklist, pricing lines, sign-off,
+decline reply. What it does *not* give you is the asset the copy points at.
+`web_design` has one (`design_agent.py` builds and deploys a preview site).
+`garden_centre` does not yet, and its `requires_preview_link=True` is
+deliberate: until a garden-centre equivalent of `design_agent` exists, every
+lead is blocked before send with "preview URL is not publicly sendable",
+which is the correct loud failure instead of emailing a dead link.
+
 ## Templates
 
 `templates/` holds one subfolder per business niche, each with an

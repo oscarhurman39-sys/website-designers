@@ -19,8 +19,9 @@ from urllib.parse import urlparse
 import requests
 from huggingface_hub import InferenceClient
 
+import campaigns
 import config
-from utils import compliance, db, email_utils, screenshot, tracer, tracker
+from utils import compliance, db, email_utils, screenshot, tracer, tracker, url_check
 
 try:
     from slack_sdk import WebClient
@@ -112,19 +113,20 @@ def _hf_client() -> InferenceClient:
     return InferenceClient(model=HF_MODEL, token=config.HF_API_TOKEN)
 
 
-def _build_prompt(lead: dict) -> str:
-    pain_point = (lead.get("pain_point") or "a slow or outdated website").strip()
+def _build_prompt(lead: dict, campaign: Optional[campaigns.Campaign] = None) -> str:
+    c = campaign or campaigns.active()
+    pain_point = (lead.get("pain_point") or c.default_pain_point).strip()
     return (
         "<s>[INST] You write short, casual, human-sounding cold outreach emails for a "
-        "freelance web designer. No hype, no exclamation-point energy, no hyperbole. "
+        f"{c.llm_persona}. No hype, no exclamation-point energy, no hyperbole. "
         "Sound like a real person, not a marketer.\n\n"
-        "Write a cold email to a local business with these facts:\n"
+        f"Write a cold email to {c.llm_recipient} with these facts:\n"
         f"- Business name: {lead['business_name']}\n"
         f"- Niche: {lead['niche']}\n"
         f"- Location: {lead.get('location', '')}\n"
-        f"- Something noticed about their current site/reputation: {pain_point}\n\n"
+        f"- {c.llm_observation_label}: {pain_point}\n\n"
         "The email must:\n"
-        "- Mention that you built a free, live website preview for their business, no strings attached\n"
+        f"- {c.llm_offer_bullet}\n"
         "- Be under 150 words\n"
         "- NOT include a link (one will be appended separately)\n"
         "- NOT include a signature, footer, or unsubscribe text (appended separately)\n\n"
@@ -134,19 +136,11 @@ def _build_prompt(lead: dict) -> str:
     )
 
 
-def _fallback_email(lead: dict) -> tuple[str, str]:
+def _fallback_email(lead: dict, campaign: Optional[campaigns.Campaign] = None) -> tuple[str, str]:
     """Deterministic template used if the HF call fails, so a bad API day
     never stops the pipeline from sending compliant, on-brand emails."""
-    subject = f"a free preview site for {lead['business_name']}"
-    body = (
-        f"Hi there,\n\n"
-        f"I put together a free, live website preview for {lead['business_name']} -- "
-        "no strings attached, just wanted to show you what's possible. "
-        "I noticed your current online presence could use a refresh, so I figured "
-        "I'd build one and let you take a look.\n\n"
-        "Take a look whenever you get a chance -- no pressure either way."
-    )
-    return subject, body
+    c = campaign or campaigns.active()
+    return c.fallback_subject(lead["business_name"]), c.fallback_body(lead["business_name"])
 
 
 def _parse_subject_body(raw_text: str, lead: dict) -> tuple[str, str]:
@@ -179,90 +173,68 @@ def draft_cold_email(lead: dict) -> tuple[str, str]:
 # --- Sending (rate-limited) ----------------------------------------------------
 
 _SCREENSHOT_CID = "preview"
-_SENDER_NAME = "Casey"
 
 
-def _intro_line(business_name: str) -> str:
+def _intro_line(business_name: str, campaign: Optional[campaigns.Campaign] = None) -> str:
     """Plain-text greeting that always sits above the screenshot image --
     frames this as solving a discoverability problem, not just a sales pitch."""
-    return (
-        f"I noticed people searching for {business_name} only find your Google "
-        "listing. So I built a site that could help you appear more professional "
-        "online."
-    )
+    return (campaign or campaigns.active()).intro_line(business_name)
 
 
-_CHECKLIST_HEADER = "What we improved"
-
-
-def _checklist_items(city: str) -> list[str]:
-    return [
-        "Mobile-friendly design",
-        "Faster page speed",
-        "Clear calls-to-action",
-        f"Local SEO for {city}",
-        "Professional, trust-building look",
-    ]
-
-
-def _checklist_paragraph(city: str) -> str:
+def _checklist_paragraph(city: str, campaign: Optional[campaigns.Campaign] = None) -> str:
     """Plain-text equivalent of the HTML checklist card, placed right
     after the intro (plain text has no screenshot to sit it under)."""
-    lines = "\n".join(f"✅ {item}" for item in _checklist_items(city))
-    return f"{_CHECKLIST_HEADER}:\n{lines}"
+    c = campaign or campaigns.active()
+    lines = "\n".join(f"✅ {item}" for item in c.checklist(city))
+    return f"{c.checklist_header}:\n{lines}"
 
 
-def _checklist_html(city: str) -> str:
+def _checklist_html(city: str, campaign: Optional[campaigns.Campaign] = None) -> str:
     """Light-grey rounded card listing what was improved, shown right
     after the screenshot."""
+    c = campaign or campaigns.active()
     items_html = "".join(
         f'<li style="padding:2px 0;">&#9989; {html_module.escape(item)}</li>'
-        for item in _checklist_items(city)
+        for item in c.checklist(city)
     )
     return (
         '<div style="background:#f5f5f5;border-radius:8px;padding:16px 20px;margin:16px 0;">'
-        f'<p style="font-weight:600;margin:0 0 8px;color:#333;">{_CHECKLIST_HEADER}</p>'
+        f'<p style="font-weight:600;margin:0 0 8px;color:#333;">{c.checklist_header}</p>'
         f'<ul style="list-style:none;padding:0;margin:0;color:#444;">{items_html}</ul>'
         "</div>"
     )
 
 
-def _closing_paragraphs(preview_link: str) -> list[str]:
+def _closing_paragraphs(
+    preview_link: str, campaign: Optional[campaigns.Campaign] = None
+) -> list[str]:
     """Everything after the checklist: the live link, a no-pressure urgency
     note, the reply-to-buy offer, plain (non-anchored) pricing, and the
     sign-off. Deliberately just these lines -- no bullet points or feature
     lists beyond the checklist above."""
+    c = campaign or campaigns.active()
     return [
-        f"View the live preview: {preview_link}",
-        "This preview is live for 7 days -- after that it'll be repurposed. No pressure, just didn't want you to miss it.",
-        "If you'd like to own it, reply YES. I'll connect your domain, swap in your own photos, and make any changes you want.",
-        f"Standard package: £2,000. This completed draft: £{config.WEBSITE_OFFER_PRICE:,}.",
-        _SENDER_NAME,
+        c.link_line(preview_link),
+        c.urgency_line,
+        c.reply_to_buy_line,
+        c.pricing_line(),
+        c.sender_name,
     ]
 
 
 def _validate_preview_link_for_send(preview_link: str) -> str:
     """Return a public preview URL or raise before any cold email is sent."""
-    website = db.get_website_by_lead(lead["id"])
-    preview_link = website["preview_url"] if website and website.get("preview_url") else ""
-    try:
-        preview_link = _validate_preview_link_for_send(preview_link)
-    except RuntimeError as exc:
-        db.update_lead_status(
-            lead["id"],
-            "researched",
-            notes=f"Email blocked: preview URL is not publicly sendable ({exc})",
-        )
-        return False
     parsed = urlparse(preview_link)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise RuntimeError(f"Preview URL is missing or invalid: {preview_link!r}")
 
-    if any(part in parsed.path.lower() for part in _AUTH_URL_PARTS):
+    if any(part in parsed.path.lower() for part in url_check.AUTH_URL_PARTS):
         raise RuntimeError(f"Preview URL points to an authentication path: {preview_link}")
 
     try:
-        resp = requests.get(preview_link, allow_redirects=True, timeout=_PREVIEW_VALIDATION_TIMEOUT_SECONDS)
+        resp = requests.get(
+            preview_link, allow_redirects=True, timeout=url_check.PREVIEW_VALIDATION_TIMEOUT_SECONDS
+        )
     except requests.RequestException as exc:
         raise RuntimeError(f"Preview URL is not publicly accessible: {preview_link}") from exc
 
@@ -270,41 +242,49 @@ def _validate_preview_link_for_send(preview_link: str) -> str:
     final_path = urlparse(final_url).path.lower()
     if resp.status_code >= 400:
         raise RuntimeError(f"Preview URL returned HTTP {resp.status_code}: {preview_link}")
-    if any(part in final_path for part in _AUTH_URL_PARTS):
+    if any(part in final_path for part in url_check.AUTH_URL_PARTS):
         raise RuntimeError(f"Preview URL redirects to an authentication path: {final_url}")
-    if any(marker in resp.text.lower() for marker in _AUTH_PAGE_MARKERS):
+    if any(marker in resp.text.lower() for marker in url_check.AUTH_PAGE_MARKERS):
         raise RuntimeError(f"Preview URL shows an authentication page: {preview_link}")
 
     return preview_link
 
 
-def _plain_text_body(business_name: str, preview_link: str, city: str) -> str:
+def _plain_text_body(
+    business_name: str, preview_link: str, city: str,
+    campaign: Optional[campaigns.Campaign] = None,
+) -> str:
+    c = campaign or campaigns.active()
     return "\n\n".join([
-        _intro_line(business_name),
-        _checklist_paragraph(city),
-        *_closing_paragraphs(preview_link),
+        _intro_line(business_name, c),
+        _checklist_paragraph(city, c),
+        *_closing_paragraphs(preview_link, c),
     ])
 
 
-def _build_html_body(business_name: str, preview_link: str, city: str) -> str:
+def _build_html_body(
+    business_name: str, preview_link: str, city: str,
+    campaign: Optional[campaigns.Campaign] = None,
+) -> str:
     """Intro greeting, then the cached screenshot, then the "what we
     improved" checklist, then the closing paragraphs -- only called when a
     screenshot is actually available; see _send_cold_email_impl."""
+    c = campaign or campaigns.active()
     escaped_link = html_module.escape(preview_link)
-    intro_html = f"<p>{html_module.escape(_intro_line(business_name))}</p>"
+    intro_html = f"<p>{html_module.escape(_intro_line(business_name, c))}</p>"
     image_html = (
         f'<p><a href="{escaped_link}">'
         f'<img src="cid:{_SCREENSHOT_CID}" alt="Your new website preview" '
         'style="max-width:100%;border:1px solid #ddd;border-radius:8px;">'
         "</a></p>"
     )
-    checklist_html = _checklist_html(city)
+    checklist_html = _checklist_html(city, c)
     preview_button_html = (
         f'<a href="{escaped_link}" style="display:inline-block;padding:14px 28px;'
         'background:#2563eb;color:white;border-radius:8px;text-decoration:none;'
-        'font-size:16px;font-weight:bold;margin:16px 0">View Your Free Website &rarr;</a>'
+        f'font-size:16px;font-weight:bold;margin:16px 0">{c.cta_button_label}</a>'
     )
-    closing_paragraphs = _closing_paragraphs(preview_link)
+    closing_paragraphs = _closing_paragraphs(preview_link, c)
     closing_html = preview_button_html + "".join(
         f"<p>{html_module.escape(para).replace(chr(10), '<br>')}</p>"
         for para in closing_paragraphs[1:]
@@ -381,20 +361,22 @@ def _send_cold_email_impl(lead: dict) -> bool:
                                notes="No usable email at send time")
         return False
 
-    subject = f"I built a website for {lead['business_name']}"
+    campaign = campaigns.active()
+    subject = campaign.subject(lead["business_name"])
     website = db.get_website_by_lead(lead["id"])
     preview_link = website["preview_url"] if website and website.get("preview_url") else ""
-    try:
-        preview_link = _validate_preview_link_for_send(preview_link)
-    except RuntimeError as exc:
-        db.update_lead_status(
-            lead["id"],
-            "researched",
-            notes=f"Email blocked: preview URL is not publicly sendable ({exc})",
-        )
-        return False
+    if campaign.requires_preview_link:
+        try:
+            preview_link = _validate_preview_link_for_send(preview_link)
+        except RuntimeError as exc:
+            db.update_lead_status(
+                lead["id"],
+                "researched",
+                notes=f"Email blocked: preview URL is not publicly sendable ({exc})",
+            )
+            return False
     city = lead.get("location") or "your area"
-    body_with_link = _plain_text_body(lead["business_name"], preview_link, city)
+    body_with_link = _plain_text_body(lead["business_name"], preview_link, city, campaign)
 
     # Embed the cached preview screenshot inline (cid:) if design_agent.py
     # already captured one for this lead; otherwise send exactly the same
@@ -402,7 +384,11 @@ def _send_cold_email_impl(lead: dict) -> bool:
     # failed, or an older lead from before this feature existed) must
     # never block or change the send itself.
     cached_screenshot = screenshot.get_cached_screenshot(lead["id"])
-    body_html = _build_html_body(lead["business_name"], preview_link, city) if cached_screenshot else None
+    body_html = (
+        _build_html_body(lead["business_name"], preview_link, city, campaign)
+        if cached_screenshot
+        else None
+    )
     inline_image_path = str(cached_screenshot) if cached_screenshot else None
 
     message_id = _send_via_configured_transport(
@@ -469,11 +455,9 @@ def _send_goodbye(lead: dict) -> None:
     email_addr = lead.get("contact_email") or ""
     if not email_addr or db.is_unsubscribed(email_addr):
         return
-    subject = "No problem"
-    body = (
-        f"Hi, totally understood -- I won't reach out again about this. "
-        f"Wishing {lead['business_name']} all the best."
-    )
+    campaign = campaigns.active()
+    subject = campaign.decline_subject
+    body = campaign.decline_body(lead["business_name"])
     try:
         message_id = _send_via_configured_transport(
             to_addr=email_addr,

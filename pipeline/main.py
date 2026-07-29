@@ -29,6 +29,7 @@ import threading
 import time
 from pathlib import Path
 
+import campaigns
 import config
 from agents import design_agent, lead_agent, sales_agent
 from utils import db, github_api, stripe_utils, vercel_api
@@ -236,8 +237,12 @@ def _command_listener() -> None:
 
 def main() -> None:
     config.validate()
+    # Resolve the campaign at startup so an unknown CAMPAIGN value fails here
+    # rather than raising partway through the first send.
+    campaign = campaigns.active()
     db.init_db()
     print(f"[main] Pipeline starting. DB: {config.DB_PATH}")
+    print(f"[main] Campaign: {campaign.key} (sending as {campaign.sender_name})")
     print("[main] Type 'help' for the operator command list.")
 
     listener = threading.Thread(target=_command_listener, daemon=True)

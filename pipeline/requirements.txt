@@ -10,6 +10,10 @@ streamlit==1.38.0
 pandas==2.2.3
 huggingface_hub==0.25.2
 slack-sdk==3.33.1
+# Imported unconditionally by utils/email_utils.py (the SendGrid transport is
+# selected at runtime by SENDGRID_API_KEY, but the import is top-level, so the
+# package is required even for SMTP-only setups).
+sendgrid==6.12.5
 
 # Website preview screenshots (pipeline/utils/screenshot.py). After
 # installing, run `playwright install chromium` once (not needed if
