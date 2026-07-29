@@ -29,7 +29,6 @@ REQUIRED_VARS: list[str] = [
     "EMAIL_PORT",
     "EMAIL_USER",
     "EMAIL_PASSWORD",
-    "HF_API_TOKEN",
     "STRIPE_SECRET_KEY",
     "STRIPE_WEBHOOK_SECRET",
     "ADMIN_EMAIL",
@@ -46,8 +45,6 @@ EMAIL_HOST: str = os.getenv("EMAIL_HOST", "")
 EMAIL_PORT: int = int(os.getenv("EMAIL_PORT", "587") or 587)
 EMAIL_USER: str = os.getenv("EMAIL_USER", "")
 EMAIL_PASSWORD: str = os.getenv("EMAIL_PASSWORD", "")
-
-HF_API_TOKEN: str = os.getenv("HF_API_TOKEN", "")
 
 STRIPE_SECRET_KEY: str = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET: str = os.getenv("STRIPE_WEBHOOK_SECRET", "")

@@ -15,13 +15,6 @@ import pytest
 import campaigns
 from agents import sales_agent
 
-LEAD = {
-    "id": 1,
-    "business_name": "Example Co",
-    "niche": "vehicle-repair",
-    "location": "Leeds",
-    "pain_point": "",
-}
 LINK = "https://example.vercel.app"
 
 
@@ -69,16 +62,16 @@ def test_web_design_html_body_keeps_the_cta_button():
     assert f"View the live preview: {LINK}" not in html
 
 
-def test_web_design_prompt_and_fallback_mention_the_web_offer():
-    prompt = sales_agent._build_prompt(LEAD, campaigns.WEB_DESIGN)
-    assert "freelance web designer" in prompt
-    assert "free, live website preview" in prompt
-    # Blank pain_point falls back to the campaign default.
-    assert "a slow or outdated website" in prompt
+def test_web_design_subject_is_unchanged():
+    assert campaigns.WEB_DESIGN.subject("Example Co") == "I built a website for Example Co"
 
-    subject, body = sales_agent._fallback_email(LEAD, campaigns.WEB_DESIGN)
-    assert subject == "a free preview site for Example Co"
-    assert "free, live website preview for Example Co" in body
+
+def test_no_llm_drafting_path_remains():
+    """The Hugging Face drafting route was removed as unreachable. Guard against
+    it being reintroduced by accident -- a model in the send path means
+    unreviewed copy reaching real businesses."""
+    for gone in ("draft_cold_email", "_build_prompt", "_fallback_email", "_hf_client", "HF_MODEL"):
+        assert not hasattr(sales_agent, gone), f"{gone} is back in sales_agent"
 
 
 # --- Campaign selection actually changes the output --------------------------
@@ -91,10 +84,7 @@ def test_selected_campaign_drives_the_copy(monkeypatch):
     assert "Trade price, retail price and margin" in body
     assert body.endswith("\n\nOscar")
     assert "What we improved" not in body
-
-    prompt = sales_agent._build_prompt({**LEAD, "business_name": "Knights"})
-    assert "garden centres" in prompt
-    assert "freelance web designer" not in prompt
+    assert "Casey" not in body
 
 
 def test_garden_centre_subject_differs_from_web_design():
@@ -109,8 +99,6 @@ def test_every_campaign_renders_without_placeholder_errors(key):
     c = campaigns.get(key)
 
     assert c.subject("Biz")
-    assert c.fallback_subject("Biz")
-    assert c.fallback_body("Biz")
     assert c.intro_line("Biz")
     assert c.link_line(LINK) and LINK in c.link_line(LINK)
     assert c.pricing_line() and "{" not in c.pricing_line()

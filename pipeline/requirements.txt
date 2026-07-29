@@ -8,7 +8,6 @@ stripe==10.12.0
 Flask==3.0.3
 streamlit==1.38.0
 pandas==2.2.3
-huggingface_hub==0.25.2
 slack-sdk==3.33.1
 # Imported unconditionally by utils/email_utils.py (the SendGrid transport is
 # selected at runtime by SENDGRID_API_KEY, but the import is top-level, so the

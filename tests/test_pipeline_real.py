@@ -6,7 +6,7 @@ Skipped by default (see tests/conftest.py). Run explicitly with:
 
 Requires a `.env.test` at the repo root -- copy `.env.test.example` and
 fill in real, test-safe credentials (GITHUB_TOKEN, VERCEL_TOKEN,
-EMAIL_HOST/PORT/USER/PASSWORD, HF_API_TOKEN, etc.). conftest.py loads
+EMAIL_HOST/PORT/USER/PASSWORD, etc.). conftest.py loads
 `.env.test` before any pipeline module is imported.
 
 What this test actually does, in order:
@@ -43,7 +43,6 @@ REQUIRED_ENV_VARS = (
     "EMAIL_PORT",
     "EMAIL_USER",
     "EMAIL_PASSWORD",
-    "HF_API_TOKEN",
 )
 
 

@@ -24,7 +24,7 @@ website-designers/
 │   ├── agents/
 │   │   ├── lead_agent.py      # CSV -> enriched, researched leads
 │   │   ├── design_agent.py    # template -> deployed preview site
-│   │   └── sales_agent.py     # drafting, sending, inbox monitoring
+│   │   └── sales_agent.py     # composing, sending, inbox monitoring
 │   ├── utils/
 │   │   ├── db.py              # SQLite schema + queries
 │   │   ├── github_api.py      # repo create/push/transfer
@@ -60,7 +60,7 @@ cp .env.example .env
 ```
 
 Required `.env` variables: `GITHUB_TOKEN`, `VERCEL_TOKEN`, `EMAIL_HOST`,
-`EMAIL_PORT`, `EMAIL_USER`, `EMAIL_PASSWORD`, `HF_API_TOKEN`,
+`EMAIL_PORT`, `EMAIL_USER`, `EMAIL_PASSWORD`,
 `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `ADMIN_EMAIL`,
 `SENDING_DOMAIN`, `PHYSICAL_ADDRESS`. `config.py` validates these at
 startup and fails loudly, listing everything missing, if any are unset.
@@ -147,8 +147,8 @@ CAMPAIGN=garden_centre python pipeline/main.py
 immediately rather than partway through the first send.
 
 **Adding a campaign** means adding a `Campaign(...)` to `campaigns.py` —
-prompt persona, subject lines, intro, checklist, pricing lines, sign-off,
-decline reply. What it does *not* give you is the asset the copy points at.
+subject line, intro, checklist, pricing lines, sign-off, decline reply. It is
+all deterministic template text; no model writes outreach copy here. What it does *not* give you is the asset the copy points at.
 `web_design` has one (`design_agent.py` builds and deploys a preview site).
 `garden_centre` does not yet, and its `requires_preview_link=True` is
 deliberate: until a garden-centre equivalent of `design_agent` exists, every

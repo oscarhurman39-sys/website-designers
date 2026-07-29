@@ -13,8 +13,9 @@ Select the active campaign with the CAMPAIGN env var (default: web_design).
     CAMPAIGN=web_design    python main.py
 
 IMPORTANT -- what a Campaign does and does not give you:
-  * It fully controls the *copy*: prompt persona, subject lines, intro,
-    checklist, pricing lines, sign-off, decline reply.
+  * It fully controls the *copy*: subject line, intro, checklist, pricing
+    lines, sign-off, decline reply. All of it is deterministic template
+    text -- no model generates outreach copy in this pipeline.
   * It does NOT supply the asset the copy points at. web_design has one
     (design_agent builds and deploys a preview site, and sets
     requires_preview_link=True so no email can go out without a validated
@@ -38,17 +39,8 @@ class Campaign:
     key: str
     sender_name: str
 
-    # --- LLM drafting (see sales_agent._build_prompt) ---
-    llm_persona: str
-    llm_recipient: str
-    llm_observation_label: str
-    llm_offer_bullet: str
-    default_pain_point: str
-
     # --- Subjects ---
     subject_template: str
-    fallback_subject_template: str
-    fallback_body_template: str
 
     # --- Main email body ---
     intro_template: str
@@ -73,12 +65,6 @@ class Campaign:
 
     def subject(self, business_name: str) -> str:
         return self.subject_template.format(business_name=business_name)
-
-    def fallback_subject(self, business_name: str) -> str:
-        return self.fallback_subject_template.format(business_name=business_name)
-
-    def fallback_body(self, business_name: str) -> str:
-        return self.fallback_body_template.format(business_name=business_name)
 
     def intro_line(self, business_name: str) -> str:
         return self.intro_template.format(business_name=business_name)
@@ -107,24 +93,7 @@ class Campaign:
 WEB_DESIGN = Campaign(
     key="web_design",
     sender_name="Casey",
-    llm_persona="freelance web designer",
-    llm_recipient="a local business",
-    llm_observation_label="Something noticed about their current site/reputation",
-    llm_offer_bullet=(
-        "Mention that you built a free, live website preview for their business, "
-        "no strings attached"
-    ),
-    default_pain_point="a slow or outdated website",
     subject_template="I built a website for {business_name}",
-    fallback_subject_template="a free preview site for {business_name}",
-    fallback_body_template=(
-        "Hi there,\n\n"
-        "I put together a free, live website preview for {business_name} -- "
-        "no strings attached, just wanted to show you what's possible. "
-        "I noticed your current online presence could use a refresh, so I figured "
-        "I'd build one and let you take a look.\n\n"
-        "Take a look whenever you get a chance -- no pressure either way."
-    ),
     intro_template=(
         "I noticed people searching for {business_name} only find your Google "
         "listing. So I built a site that could help you appear more professional "
@@ -171,24 +140,7 @@ WEB_DESIGN = Campaign(
 GARDEN_CENTRE = Campaign(
     key="garden_centre",
     sender_name="Oscar",
-    llm_persona="horticulturist who builds plant-knowledge tools for garden centres",
-    llm_recipient="an independent garden centre",
-    llm_observation_label="Something noticed about their range or their staff-training situation",
-    llm_offer_bullet=(
-        "Mention that you built them a free demo deck of their own stock -- "
-        "plant care, trade and retail prices, order weeks, margin -- that their "
-        "counter staff can learn from on a phone"
-    ),
-    default_pain_point="seasonal staff who don't yet know the range",
     subject_template="a plant-knowledge deck for {business_name}",
-    fallback_subject_template="a free plant deck for {business_name}",
-    fallback_body_template=(
-        "Hi there,\n\n"
-        "I built {business_name} a free demo of a plant-knowledge app -- swipe "
-        "cards covering care, hardiness, and the buyer numbers, so new counter "
-        "staff can get up to speed on the range from their phone.\n\n"
-        "Have a look whenever suits -- no pressure either way."
-    ),
     intro_template=(
         "New counter staff at {business_name} usually learn the range by asking "
         "whoever is nearest. So I built a deck they can learn it from instead."
