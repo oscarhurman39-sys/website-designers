@@ -1,8 +1,19 @@
 # website-designers -- Cold Email Web Design Sales Pipeline
 
-An autonomous pipeline that finds local businesses, builds them a free
-website preview, sends a personalized cold email, monitors replies, and
-hands off payment/transfer to a human once a lead is ready to buy.
+An autonomous pipeline that finds local businesses, audits their existing
+website, builds them a free website preview, sends a personalized cold
+email (plus a day-3 nudge and day-7 breakup if they don't reply), monitors
+replies, and hands off payment/transfer to a human once a lead is ready to
+buy.
+
+Previews deploy git-less to Vercel -- **no GitHub repo is created per
+preview**. The private hand-off repo is created only at `transfer` time
+for a sold site. (If an older version of this pipeline filled your account
+with `*-preview-N` repos, `scripts/cleanup_preview_repos.py` lists and,
+on explicit confirmation, deletes them.)
+
+See `PLAN.md` for the current improvement plan and the audit of sibling
+repos this project borrows ideas from.
 
 Every automated step has a human-in-the-loop safeguard: positive replies
 pause outreach for that lead and alert an operator; payment and repo/site
@@ -60,12 +71,14 @@ cp .env.example .env
 ```
 
 Required `.env` variables: `GITHUB_TOKEN`, `VERCEL_TOKEN`, `EMAIL_HOST`,
-`EMAIL_PORT`, `EMAIL_USER`, `EMAIL_PASSWORD`, `HF_API_TOKEN`,
-`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `ADMIN_EMAIL`,
-`SENDING_DOMAIN`, `PHYSICAL_ADDRESS`. `config.py` validates these at
-startup and fails loudly, listing everything missing, if any are unset.
+`EMAIL_PORT`, `EMAIL_USER`, `EMAIL_PASSWORD`, `STRIPE_SECRET_KEY`,
+`STRIPE_WEBHOOK_SECRET`, `ADMIN_EMAIL`, `SENDING_DOMAIN`,
+`PHYSICAL_ADDRESS`. `config.py` validates these at startup and fails
+loudly, listing everything missing, if any are unset.
 
-`VERCEL_TEAM_ID`, `SLACK_BOT_TOKEN`, `UNSPLASH_ACCESS_KEY`,
+`HF_API_TOKEN` (LLM-personalized email openings; a deterministic template
+is used without it), `VERCEL_TEAM_ID`, `SLACK_BOT_TOKEN`,
+`SENDGRID_API_KEY`/`SENDGRID_FROM_EMAIL`, `UNSPLASH_ACCESS_KEY`,
 `VOLTAGENT_PUBLIC_KEY`, `VOLTAGENT_SECRET_KEY` are optional.
 
 ## Running it
@@ -102,7 +115,7 @@ While `main.py` is running, type commands at its console:
 |---|---|
 | `takeover <lead_id>` | Pause automation for a lead, hand negotiation to a human |
 | `payment ready <lead_id>` | Create + email a Stripe Checkout link |
-| `transfer <lead_id>` | Invite the client to the GitHub repo and Vercel project (requires `VERCEL_TEAM_ID`), optionally remove your own GitHub access |
+| `transfer <lead_id>` | Create the private hand-off GitHub repo (first time one exists for this lead), invite the client to it and to the Vercel project (requires `VERCEL_TEAM_ID`), optionally remove your own GitHub access |
 | `status` | Print a lead-count-by-status summary |
 | `pause` / `resume` | Pause/resume the automated loop |
 | `help` | List commands |
@@ -156,7 +169,10 @@ template doesn't reference them.
 Every outbound email is routed through `utils/compliance.py` and always
 carries a physical mailing address, a one-click unsubscribe link, and a
 `List-Unsubscribe` header, per CAN-SPAM. Rate limits (120-300s between
-sends, 20/hour, 50/day) are enforced in `agents/sales_agent.py`. A real
+sends, 20/hour, 50/day) are enforced in `agents/sales_agent.py` and apply
+to follow-ups too. The sequence is capped at three touches total (initial,
+~day-3 nudge, ~day-7 breakup -- `FOLLOWUP_GAPS_DAYS` in `config.py`); any
+reply, positive or negative, stops it immediately. A real
 domain warm-up tool is still recommended before high-volume sending on a
 brand-new sending domain -- this pipeline staggers send timing but does
 not warm up domain reputation for you.

@@ -76,6 +76,12 @@ def _run_cycle() -> None:
     sent_lead_id = sales_agent.send_next_pending()
     if sent_lead_id:
         print(f"[main] Sent cold email to lead {sent_lead_id}")
+    else:
+        # Follow-ups only use send capacity left over after new cold emails,
+        # keeping the pipeline at one automated send per cycle.
+        followed_up_id = sales_agent.send_followups()
+        if followed_up_id:
+            print(f"[main] Sent follow-up to lead {followed_up_id}")
 
     replies = sales_agent.check_inbox()
     if replies:
@@ -138,16 +144,21 @@ def _handle_transfer(lead_id: int) -> None:
         print(f"[main] Lead {lead_id} is not marked 'won' yet (status: {lead['status']}). Aborting.")
         return
 
-    # --- GitHub: invite the client as a collaborator on their repo ---
+    # --- GitHub: create the hand-off repo now (previews don't get one) and
+    # invite the client as a collaborator ---
     github_username = input(f"GitHub username to invite for lead {lead_id} (blank to skip): ").strip()
     if github_username:
         try:
+            if not website.get("repo_full_name"):
+                repo_url, repo_full_name = design_agent.create_handoff_repo(lead_id)
+                website = db.get_website_by_lead(lead_id)
+                print(f"[main] Created hand-off repo {repo_full_name} ({repo_url})")
             github_api.invite_collaborator(website["repo_full_name"], github_username, permission="admin")
             print(f"[main] Invited {github_username} to {website['repo_full_name']}")
         except Exception as exc:  # noqa: BLE001
-            print(f"[main] Failed to invite GitHub collaborator: {exc}")
+            print(f"[main] Failed to create/invite on the GitHub repo: {exc}")
     else:
-        print("[main] Skipping GitHub invite.")
+        print("[main] Skipping GitHub invite (no repo is created until one is needed).")
 
     # --- Vercel: invite the client to the project (requires VERCEL_TEAM_ID) ---
     default_email = lead.get("contact_email") or ""
@@ -173,17 +184,20 @@ def _handle_transfer(lead_id: int) -> None:
         print("[main] Skipping Vercel invite.")
 
     # --- Removing your own access: GitHub only, and only on explicit confirmation ---
-    answer = input("Remove your own GitHub repo access now? (y/n): ").strip().lower()
-    if answer == "y":
-        try:
-            own_username = github_api.get_authenticated_username()
-            github_api.remove_collaborator(website["repo_full_name"], own_username)
-            db.mark_website_transferred(lead_id)
-            print(f"[main] GitHub access removed. Website for lead {lead_id} marked as transferred.")
-        except Exception as exc:  # noqa: BLE001
-            print(f"[main] Failed to remove own GitHub access: {exc}")
+    if website.get("repo_full_name"):
+        answer = input("Remove your own GitHub repo access now? (y/n): ").strip().lower()
+        if answer == "y":
+            try:
+                own_username = github_api.get_authenticated_username()
+                github_api.remove_collaborator(website["repo_full_name"], own_username)
+                db.mark_website_transferred(lead_id)
+                print(f"[main] GitHub access removed. Website for lead {lead_id} marked as transferred.")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[main] Failed to remove own GitHub access: {exc}")
+        else:
+            print("[main] Leaving GitHub access as-is (not marked transferred).")
     else:
-        print("[main] Leaving GitHub access as-is (not marked transferred).")
+        print("[main] No GitHub repo exists for this lead (none was created), skipping access removal.")
 
     print(
         "[main] NOTE: Vercel access is never removed automatically. Your Vercel team "

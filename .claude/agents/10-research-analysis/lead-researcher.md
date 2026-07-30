@@ -1,6 +1,6 @@
 ---
 name: lead-researcher
-description: "Use this agent when working on lead enrichment: pipeline/agents/lead_agent.py's website discovery, robots.txt-respecting scraping, and contact-email/pain-point/testimonial extraction heuristics."
+description: "Use this agent when working on lead enrichment: pipeline/agents/lead_agent.py's website discovery, robots.txt-respecting scraping, contact-email/phone/pain-point/testimonial extraction heuristics, and the existing-site audit in pipeline/utils/site_audit.py."
 tools: Read, Write, Edit, Bash, Grep, WebFetch
 model: sonnet
 ---

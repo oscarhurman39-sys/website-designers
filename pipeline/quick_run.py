@@ -75,7 +75,8 @@ def main() -> None:
     print(f"-> status: {lead['status']}")
     if website:
         print(f"-> preview: {website['preview_url']}")
-        print(f"-> GitHub repo: {website['repo_url']}")
+        print(f"-> rendered files kept at: {website.get('local_dir') or '(not saved)'}")
+        print("-> no GitHub repo created (hand-off repo is created at 'transfer' time only)")
         if website.get("screenshot_url"):
             print(f"-> screenshot: {website['screenshot_url']}")
     if lead["status"] != "designed":

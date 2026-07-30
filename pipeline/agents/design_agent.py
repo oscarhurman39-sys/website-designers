@@ -1,33 +1,36 @@
-"""DesignAgent: renders a niche template for a lead, pushes it to a new
-private GitHub repo, deploys it to Vercel, and records the resulting
-preview URL.
+"""DesignAgent: renders a niche template for a lead, deploys it straight to
+Vercel (git-less, inline files), and records the resulting preview URL.
+
+NO GitHub repo is created at preview time. Rendered files are kept on disk
+under pipeline/rendered_sites/ instead, and the private hand-off repo is
+created lazily by create_handoff_repo() -- only when a client actually buys
+and the operator runs `transfer <lead_id>`. (Previously every preview got
+its own repo, which flooded the account with dozens of dead repos.)
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
 
 import requests
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 import config
-from utils import db, github_api, screenshot, tracer, tracker, vercel_api
+from utils import db, github_api, screenshot, tracer, tracker, url_safety, vercel_api
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
+RENDERED_SITES_DIR = Path(__file__).resolve().parent.parent / "rendered_sites"
 TEMPLATE_FILES = ("index.html", "style.css")
 DEFAULT_NICHE = "default"
 
+# A lead whose design/deploy keeps failing is retried this many times
+# (once per orchestrator cycle) before being marked lost -- without a cap
+# the same broken deploy would re-run forever, every 60 seconds.
+MAX_DESIGN_ATTEMPTS = 3
+
 _PLACEHOLDER_IMAGE_BASE = "https://picsum.photos/seed"
-_DEPLOYMENT_VALIDATION_TIMEOUT_SECONDS = 15
-_AUTH_URL_PARTS = ("login", "signin", "sign-in", "auth", "authentication")
-_AUTH_PAGE_MARKERS = (
-    "vercel authentication",
-    "log in to vercel",
-    "login to vercel",
-    "sign in to vercel",
-)
 
 # Unsplash search terms per niche -- more specific than the raw niche
 # string so the fetched photo actually matches the trade (e.g. a mechanic
@@ -198,6 +201,46 @@ def _testimonial(lead: dict) -> str:
     )
 
 
+def meta_description(lead: dict) -> str:
+    """A <=155-char search-result description built from real lead data --
+    every template ships one because their old site almost never has one
+    (it's one of the most common site_audit findings)."""
+    niche = lead["niche"]
+    services = ", ".join(niche_services(lead)[:3])
+    city = lead.get("location") or "your area"
+    desc = f"{lead['business_name']} -- trusted local {niche_display_name(niche).lower()} in {city}. {services}."
+    phone = (lead.get("phone") or "").strip()
+    if phone and len(desc) + len(phone) + 8 <= 155:
+        desc += f" Call {phone}."
+    return desc[:155]
+
+
+def json_ld_script(lead: dict) -> str:
+    """A schema.org LocalBusiness JSON-LD <script> block. Serialized with
+    json.dumps (so scraped strings can't break out of the JSON) and with
+    '</' escaped (so they can't close the script tag early) -- templates
+    render it with `| safe`, which is only OK because of those two steps."""
+    data: dict = {
+        "@context": "https://schema.org",
+        "@type": "LocalBusiness",
+        "name": lead["business_name"],
+        "description": meta_description(lead),
+    }
+    if lead.get("phone"):
+        data["telephone"] = lead["phone"]
+    if lead.get("location"):
+        data["address"] = {"@type": "PostalAddress", "addressLocality": lead["location"]}
+    rating = google_rating_badge(lead)
+    if rating:
+        data["aggregateRating"] = {
+            "@type": "AggregateRating",
+            "ratingValue": rating,
+            "reviewCount": lead.get("google_reviews_count"),
+        }
+    payload = json.dumps(data, ensure_ascii=True).replace("</", "<\\/")
+    return f'<script type="application/ld+json">{payload}</script>'
+
+
 def build_context(lead: dict) -> dict:
     niche = lead["niche"]
     return {
@@ -230,6 +273,11 @@ def build_context(lead: dict) -> dict:
         # highlighting (see MIN_GOOGLE_REVIEWS_FOR_BADGE).
         "google_rating": google_rating_badge(lead),
         "specialty": lead_specialty(lead),
+        # SEO head block, rendered by every template: a real meta
+        # description and schema.org LocalBusiness markup. Their old site
+        # almost never has these -- it's a selling point we can point at.
+        "meta_description": meta_description(lead),
+        "json_ld_script": json_ld_script(lead),
     }
 
 
@@ -279,36 +327,14 @@ def _validate_deployment_url(deployment: dict) -> str:
     A deploy can technically succeed while the resulting URL is blank,
     malformed, still pending, or hidden behind an authentication page. Those
     states must not advance the lead to "designed", because SalesAgent sends
-    every lead in that state.
+    every lead in that state. The ready_state check runs first (it needs no
+    network); the shared public-URL checks live in utils/url_safety.py.
     """
     preview_url = (deployment.get("url") or "").strip()
-    parsed = urlparse(preview_url)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        raise RuntimeError(f"Deployment did not return a valid public URL: {preview_url!r}")
-
     final_state = deployment.get("ready_state")
     if final_state and final_state != "READY":
         raise RuntimeError(f"Deployment is not ready: ready_state={final_state!r}, url={preview_url!r}")
-
-    if any(part in parsed.path.lower() for part in _AUTH_URL_PARTS):
-        raise RuntimeError(f"Deployment URL points to an authentication path: {preview_url}")
-
-    try:
-        resp = requests.get(preview_url, allow_redirects=True, timeout=_DEPLOYMENT_VALIDATION_TIMEOUT_SECONDS)
-    except requests.RequestException as exc:
-        raise RuntimeError(f"Deployment URL is not publicly accessible: {preview_url}") from exc
-
-    final_url = resp.url or preview_url
-    final_path = urlparse(final_url).path.lower()
-    if resp.status_code >= 400:
-        raise RuntimeError(f"Deployment URL returned HTTP {resp.status_code}: {preview_url}")
-    if any(part in final_path for part in _AUTH_URL_PARTS):
-        raise RuntimeError(f"Deployment URL redirects to an authentication path: {final_url}")
-    page_text = resp.text.lower()
-    if any(marker in page_text for marker in _AUTH_PAGE_MARKERS):
-        raise RuntimeError(f"Deployment URL shows an authentication page: {preview_url}")
-
-    return preview_url
+    return url_safety.validate_public_url(preview_url)
 
 
 def process_lead(lead: dict) -> Optional[dict]:
@@ -339,9 +365,11 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
     context = build_context(lead)
     files = render_template_files(niche, context)
 
-    _repo, repo_url, repo_full_name = github_api.create_repo_with_files(
-        lead["business_name"], lead["id"], files
-    )
+    # Deliberately no GitHub repo here -- previews deploy git-less to
+    # Vercel, and the hand-off repo is created only at transfer time
+    # (create_handoff_repo). Files are saved locally so transfer can push
+    # exactly what the client saw, not a fresh re-render.
+    local_dir = _save_rendered_files(lead["id"], files)
     deployment = vercel_api.deploy_files(
         github_api.make_repo_name(lead["business_name"], lead["id"]), files
     )
@@ -352,22 +380,85 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
     website_id = db.insert_website(
         lead_id=lead["id"],
         template_niche=niche,
-        repo_url=repo_url,
-        repo_full_name=repo_full_name,
+        repo_url="",
+        repo_full_name="",
         preview_url=preview_url,
         vercel_project_id=deployment["deployment_id"],
         screenshot_url=screenshot_url,
         screenshot_path=screenshot_path,
+        local_dir=local_dir,
     )
     db.update_lead_status(lead["id"], "designed", notes=f"Preview deployed: {preview_url}")
     return db.get_website_by_lead(lead["id"]) if website_id else None
 
 
+def _save_rendered_files(lead_id: int, files: dict[str, str]) -> str:
+    """Persist rendered template files to pipeline/rendered_sites/lead-<id>/
+    so the hand-off repo can be built later without re-rendering. Returns
+    the directory path as a string (what gets stored in websites.local_dir)."""
+    site_dir = RENDERED_SITES_DIR / f"lead-{lead_id}"
+    site_dir.mkdir(parents=True, exist_ok=True)
+    for rel_path, content in files.items():
+        out_path = site_dir / rel_path
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(content, encoding="utf-8")
+    return str(site_dir)
+
+
+def _load_rendered_files(local_dir: str) -> Optional[dict[str, str]]:
+    """Read back the files saved by _save_rendered_files. None if the
+    directory is missing or empty (e.g. wiped disk, older lead)."""
+    site_dir = Path(local_dir) if local_dir else None
+    if site_dir is None or not site_dir.is_dir():
+        return None
+    files = {
+        str(p.relative_to(site_dir)): p.read_text(encoding="utf-8")
+        for p in site_dir.rglob("*")
+        if p.is_file()
+    }
+    return files or None
+
+
+def create_handoff_repo(lead_id: int) -> tuple[str, str]:
+    """Create the private GitHub repo for a SOLD site -- called by main.py's
+    `transfer` command, never at preview time. Uses the exact files that
+    were deployed (websites.local_dir), falling back to a fresh re-render
+    if they're gone. Records the repo on the website row and returns
+    (repo_url, repo_full_name)."""
+    lead = db.get_lead(lead_id)
+    website = db.get_website_by_lead(lead_id)
+    if lead is None or website is None:
+        raise RuntimeError(f"No lead/website found for lead {lead_id}")
+    if website.get("repo_full_name"):
+        return website["repo_url"], website["repo_full_name"]
+
+    files = _load_rendered_files(website.get("local_dir") or "")
+    if files is None:
+        files = render_template_files(website["template_niche"], build_context(lead))
+    _repo, repo_url, repo_full_name = github_api.create_repo_with_files(
+        lead["business_name"], lead_id, files
+    )
+    db.update_website_repo(lead_id, repo_url, repo_full_name)
+    return repo_url, repo_full_name
+
+
 def run() -> None:
     """Main entrypoint called by main.py: design a site for every
-    'researched' lead that has a matching template."""
+    'researched' lead that has a matching template. Each failure bumps the
+    lead's design_attempts counter; after MAX_DESIGN_ATTEMPTS the lead is
+    marked lost instead of retrying forever every cycle."""
     for lead in db.list_leads_by_status("researched"):
         try:
             process_lead(lead)
         except Exception as exc:  # noqa: BLE001 - one bad lead must not kill the batch
-            db.log_state_history(lead["id"], "researched", "researched", notes=f"Design failed: {exc}")
+            attempts = db.increment_design_attempts(lead["id"])
+            if attempts >= MAX_DESIGN_ATTEMPTS:
+                db.update_lead_status(
+                    lead["id"], "lost",
+                    notes=f"Design failed {attempts}x, giving up. Last error: {exc}",
+                )
+            else:
+                db.log_state_history(
+                    lead["id"], "researched", "researched",
+                    notes=f"Design failed (attempt {attempts}/{MAX_DESIGN_ATTEMPTS}): {exc}",
+                )

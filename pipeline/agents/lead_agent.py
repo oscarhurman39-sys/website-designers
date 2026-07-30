@@ -1,6 +1,7 @@
 """LeadAgent: turns a CSV of (business_name, niche, location) rows into
-enriched leads with a contact email, a pain-point snippet, and (if found) a
-testimonial, scraped from the business's own website.
+enriched leads with a contact email, phone number, a pain-point snippet,
+(if found) a testimonial, and a concrete audit of their existing site
+(utils/site_audit.py) -- all scraped from the business's own website.
 
 This is intentionally best-effort: small local businesses often have thin,
 inconsistent websites, so we fall back gracefully at every step rather than
@@ -10,6 +11,7 @@ than blocking the pipeline.
 from __future__ import annotations
 
 import csv
+import json
 import re
 import urllib.robotparser
 from dataclasses import dataclass
@@ -19,18 +21,33 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from utils import db, tracer
+from utils import db, site_audit, tracer
 
 USER_AGENT = "ColdEmailSalesPipelineBot/1.0 (+mailto:contact@example.com)"
 REQUEST_TIMEOUT = 10
 REQUEST_HEADERS = {"User-Agent": USER_AGENT}
 
 _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+# Obfuscated emails small businesses use to dodge scrapers, e.g.
+# "info [at] joescafe [dot] co [dot] uk" or "info(at)joescafe.com".
+_OBFUSCATED_EMAIL_RE = re.compile(
+    r"([a-zA-Z0-9._%+-]+)\s*[\[\(]\s*at\s*[\]\)]\s*"
+    r"((?:[a-zA-Z0-9-]+(?:\s*[\[\(]\s*dot\s*[\]\)]\s*|\.))+[a-zA-Z]{2,})",
+    re.IGNORECASE,
+)
 # Common filler addresses we never want to treat as a real contact.
 _EMAIL_BLOCKLIST_SUBSTR = ("example.com", "sentry.io", "wixpress.com", "godaddy.com", "yourdomain")
 
+# UK-leaning phone matcher: +44 or 0-prefixed geographic/mobile numbers with
+# optional spacing/parens. Best-effort -- a wrong-ish match only means the
+# preview shows a slightly off number, which the client corrects on handoff.
+_PHONE_RE = re.compile(r"(?:\+44\s?\d{2,4}|\(?0\d{2,4}\)?)[\s.-]?\d{3,4}[\s.-]?\d{3,4}")
+
 _TESTIMONIAL_HINTS = ("testimonial", "review", "quote", "client-says")
 _PAIN_POINT_HINTS = ("blog", "news", "about", "why-", "services")
+# Subpages worth crawling for contact details when the homepage is thin.
+_SUBPAGE_HINTS = ("contact", "about", "blog", "review")
+_MAX_SUBPAGES = 3
 
 
 @dataclass
@@ -128,7 +145,27 @@ def _extract_email(soup: BeautifulSoup) -> Optional[str]:
     for match in _EMAIL_RE.findall(text):
         if not any(bad in match.lower() for bad in _EMAIL_BLOCKLIST_SUBSTR):
             return match
+    # Last resort: de-obfuscate "info [at] domain [dot] com" style addresses.
+    for local, domain in _OBFUSCATED_EMAIL_RE.findall(text):
+        domain_clean = re.sub(r"\s*[\[\(]\s*dot\s*[\]\)]\s*", ".", domain, flags=re.IGNORECASE)
+        domain_clean = re.sub(r"\s+", "", domain_clean)
+        candidate = f"{local}@{domain_clean}"
+        if _EMAIL_RE.fullmatch(candidate) and not any(
+            bad in candidate.lower() for bad in _EMAIL_BLOCKLIST_SUBSTR
+        ):
+            return candidate
     return None
+
+
+def _extract_phone(soup: BeautifulSoup) -> Optional[str]:
+    """Pull the business's own phone number -- tel: links are authoritative,
+    body text is the fallback."""
+    for a in soup.select("a[href^=tel]"):
+        number = a["href"].split("tel:")[-1].strip()
+        if number:
+            return number
+    match = _PHONE_RE.search(soup.get_text(" "))
+    return match.group(0).strip() if match else None
 
 
 def _extract_testimonial(soup: BeautifulSoup) -> Optional[str]:
@@ -154,12 +191,24 @@ def _extract_pain_point(soup: BeautifulSoup, base_url: str) -> Optional[str]:
     return None
 
 
-def _find_subpage(soup: BeautifulSoup, base_url: str, hints: tuple[str, ...]) -> Optional[str]:
-    for a in soup.find_all("a", href=True):
-        href = a["href"].lower()
-        if any(h in href for h in hints):
-            return urljoin(base_url, a["href"])
-    return None
+def _find_subpages(soup: BeautifulSoup, base_url: str, hints: tuple[str, ...],
+                   limit: int = _MAX_SUBPAGES) -> list[str]:
+    """Up to `limit` distinct same-site subpage URLs whose href matches a
+    hint -- ordered by hint priority (contact page first), deduplicated."""
+    base_netloc = urlparse(base_url).netloc
+    found: list[str] = []
+    for hint in hints:
+        for a in soup.find_all("a", href=True):
+            if hint not in a["href"].lower():
+                continue
+            url = urljoin(base_url, a["href"])
+            if urlparse(url).netloc != base_netloc:
+                continue  # never wander off the business's own site
+            if url not in found:
+                found.append(url)
+            if len(found) >= limit:
+                return found
+    return found
 
 
 def research_lead(lead: dict) -> None:
@@ -190,31 +239,57 @@ def _research_lead_impl(lead: dict) -> None:
         return
 
     email_addr = _extract_email(homepage)
+    phone = _extract_phone(homepage)
     testimonial = _extract_testimonial(homepage)
     pain_point = _extract_pain_point(homepage, website_url)
 
-    # If nothing useful on the homepage, try a likely subpage (about/contact/blog).
-    if not email_addr or not testimonial or not pain_point:
-        subpage_url = _find_subpage(homepage, website_url, ("contact", "about", "blog", "review"))
-        if subpage_url:
+    # Crawl a few likely subpages (contact first) for whatever is still
+    # missing -- small-business sites often keep the email off the homepage.
+    if not email_addr or not phone or not testimonial or not pain_point:
+        for subpage_url in _find_subpages(homepage, website_url, _SUBPAGE_HINTS):
+            if email_addr and phone and testimonial and pain_point:
+                break
             subpage = _fetch(subpage_url)
-            if subpage is not None:
-                email_addr = email_addr or _extract_email(subpage)
-                testimonial = testimonial or _extract_testimonial(subpage)
-                pain_point = pain_point or _extract_pain_point(subpage, subpage_url)
+            if subpage is None:
+                continue
+            email_addr = email_addr or _extract_email(subpage)
+            phone = phone or _extract_phone(subpage)
+            testimonial = testimonial or _extract_testimonial(subpage)
+            pain_point = pain_point or _extract_pain_point(subpage, subpage_url)
+
+    # Audit their existing site: concrete findings ("no mobile viewport",
+    # "6s response") to personalize the email and the preview's "what we
+    # improved" list. robots.txt was already checked for this URL by _fetch.
+    audit = site_audit.audit_url(website_url, user_agent=USER_AGENT)
+    audit_json = json.dumps(audit) if audit else ""
 
     if not email_addr:
-        db.update_lead_fields(lead_id, website_url=website_url, scraped_info=homepage.get_text(" ", strip=True)[:2000])
+        db.update_lead_fields(
+            lead_id,
+            website_url=website_url,
+            scraped_info=homepage.get_text(" ", strip=True)[:2000],
+            site_audit=audit_json,
+        )
         db.update_lead_status(lead_id, "lost", notes="Website found but no contact email discovered")
         return
+
+    # Prefer the audit's most concrete finding as the pain point -- it's
+    # phrased as an actual problem ("the site has no mobile viewport...")
+    # so it reads correctly in "we noticed <X>" sentences. The scraped
+    # paragraph is usually the business's own marketing copy, which is
+    # useful drafting context but nonsense when quoted as a problem.
+    if audit and audit.get("pain_points"):
+        pain_point = audit["pain_points"][0]
 
     db.update_lead_fields(
         lead_id,
         website_url=website_url,
         contact_email=email_addr,
+        phone=phone or "",
         pain_point=pain_point or "",
         testimonial=testimonial or "",
         scraped_info=homepage.get_text(" ", strip=True)[:2000],
+        site_audit=audit_json,
     )
     db.update_lead_status(lead_id, "researched", notes="Research complete")
 

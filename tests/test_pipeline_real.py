@@ -156,7 +156,14 @@ def test_design_and_deploy(real_env, test_lead, cleanup_created_resources):
 
     assert website is not None, "process_lead returned None -- design/deploy failed"
     assert website["preview_url"].startswith("https://")
-    assert website["repo_full_name"]
+    # Previews must be git-less: no repo at design time (the account was
+    # once flooded by one repo per preview). The hand-off repo only exists
+    # after create_handoff_repo(), exercised below.
+    assert not website["repo_full_name"]
+    assert website["local_dir"], "rendered files were not saved for the eventual hand-off"
+
+    repo_url, repo_full_name = design_agent.create_handoff_repo(lead["id"])
+    assert repo_full_name, "create_handoff_repo did not create/record a repo"
 
     # Record what was created so the module-scoped cleanup fixture deletes
     # it, whether or not later tests in this module fail. Vercel's project
@@ -164,7 +171,7 @@ def test_design_and_deploy(real_env, test_lead, cleanup_created_resources):
     # pre-sanitized repo name) rather than trusting the `vercel_project_id`
     # DB column, which -- pre-existing behavior this test doesn't change --
     # actually stores a deployment id, not a project name.
-    cleanup_created_resources["repo_full_name"] = website["repo_full_name"]
+    cleanup_created_resources["repo_full_name"] = repo_full_name
     cleanup_created_resources["vercel_project_raw_name"] = github_api.make_repo_name(
         lead["business_name"], lead["id"]
     )

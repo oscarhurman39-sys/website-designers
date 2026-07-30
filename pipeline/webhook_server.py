@@ -71,6 +71,12 @@ def create_app() -> Flask:
         except (ValueError, stripe.error.SignatureVerificationError):
             abort(400)
 
+        # Stripe retries any event that doesn't get a timely 2xx, so the
+        # same event can arrive more than once. Record-once before acting:
+        # a replay is acknowledged with 200 but changes nothing.
+        if not db.record_event_once(event.get("id") or "", source="stripe"):
+            return "", 200
+
         if event["type"] == "checkout.session.completed":
             lead_id = stripe_utils.extract_lead_id(event)
             if lead_id is not None:

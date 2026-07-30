@@ -100,6 +100,16 @@ CREATE TABLE IF NOT EXISTS clicks (
     timestamp   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Webhook replay protection: Stripe (and any other webhook source) retries
+-- events on non-2xx responses and timeouts, so every event must be applied
+-- at most once. Insert the event id here before acting on it; a conflict
+-- means it was already handled.
+CREATE TABLE IF NOT EXISTS processed_events (
+    event_id    TEXT PRIMARY KEY,
+    source      TEXT NOT NULL DEFAULT 'stripe',
+    timestamp   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status);
 CREATE INDEX IF NOT EXISTS idx_leads_email ON leads(contact_email);
 CREATE INDEX IF NOT EXISTS idx_email_threads_lead ON email_threads(lead_id);
@@ -113,6 +123,16 @@ def init_db(db_path: Optional[str] = None) -> None:
         conn.executescript(_SCHEMA)
         _migrate_add_column(conn, "websites", "screenshot_url", "TEXT")
         _migrate_add_column(conn, "websites", "screenshot_path", "TEXT")
+        # Rendered template files are kept on disk so the GitHub hand-off
+        # repo can be created lazily at transfer time (previews no longer
+        # get a repo each -- see design_agent.py).
+        _migrate_add_column(conn, "websites", "local_dir", "TEXT")
+        # Design retry cap: a lead whose deploy keeps failing must not be
+        # retried forever on every 60s cycle.
+        _migrate_add_column(conn, "leads", "design_attempts", "INTEGER NOT NULL DEFAULT 0")
+        # JSON audit of the lead's existing site (see utils/site_audit.py),
+        # used for personalization and the per-lead "what we improved" list.
+        _migrate_add_column(conn, "leads", "site_audit", "TEXT")
         conn.commit()
 
 
@@ -314,17 +334,27 @@ def insert_website(
     vercel_project_id: str = "",
     screenshot_url: str = "",
     screenshot_path: str = "",
+    local_dir: str = "",
 ) -> int:
     with get_connection() as conn:
         cur = conn.execute(
             """INSERT INTO websites
                (lead_id, template_niche, repo_url, repo_full_name, preview_url, vercel_project_id,
-                screenshot_url, screenshot_path)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                screenshot_url, screenshot_path, local_dir)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (lead_id, template_niche, repo_url, repo_full_name, preview_url, vercel_project_id,
-             screenshot_url, screenshot_path),
+             screenshot_url, screenshot_path, local_dir),
         )
         return cur.lastrowid
+
+
+def update_website_repo(lead_id: int, repo_url: str, repo_full_name: str) -> None:
+    """Record the GitHub hand-off repo once it's created (at transfer time)."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE websites SET repo_url = ?, repo_full_name = ? WHERE lead_id = ?",
+            (repo_url, repo_full_name, lead_id),
+        )
 
 
 def update_website_screenshot_url(lead_id: int, screenshot_url: str) -> None:
@@ -345,6 +375,33 @@ def get_website_by_lead(lead_id: int) -> Optional[dict[str, Any]]:
 def mark_website_transferred(lead_id: int) -> None:
     with get_connection() as conn:
         conn.execute("UPDATE websites SET transferred = 1 WHERE lead_id = ?", (lead_id,))
+
+
+# --- Webhook idempotency -------------------------------------------------------
+
+def record_event_once(event_id: str, source: str = "stripe") -> bool:
+    """Return True exactly once per event_id: the first caller records it and
+    may act on the event; every replay/retry afterwards gets False."""
+    if not event_id:
+        return False
+    with get_connection() as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO processed_events (event_id, source) VALUES (?, ?)",
+            (event_id, source),
+        )
+        return cur.rowcount == 1
+
+
+# --- Design retry cap ----------------------------------------------------------
+
+def increment_design_attempts(lead_id: int) -> int:
+    """Bump and return the lead's design_attempts counter."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE leads SET design_attempts = design_attempts + 1 WHERE id = ?", (lead_id,)
+        )
+        row = conn.execute("SELECT design_attempts FROM leads WHERE id = ?", (lead_id,)).fetchone()
+        return int(row["design_attempts"]) if row else 0
 
 
 # --- Clicks ------------------------------------------------------------------

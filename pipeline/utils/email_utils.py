@@ -30,19 +30,22 @@ from pathlib import Path
 from typing import Optional
 import base64
 
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import (
-    Mail,
-    Attachment,
-    FileContent,
-    FileName,
-    FileType,
-    Disposition,
-    MailSettings,
-    TrackingSettings,
-    OpenTracking,
-    ClickTracking,
-)
+try:
+    from sendgrid import SendGridAPIClient
+    from sendgrid.helpers.mail import (
+        Mail,
+        Attachment,
+        FileContent,
+        FileName,
+        FileType,
+        Disposition,
+        MailSettings,
+        TrackingSettings,
+        OpenTracking,
+        ClickTracking,
+    )
+except ImportError:  # sendgrid is a soft dependency; the SMTP path works without it.
+    SendGridAPIClient = None  # type: ignore[assignment,misc]
 
 import config
 from utils import compliance
@@ -51,6 +54,14 @@ logger = logging.getLogger(__name__)
 
 # Simple email validation regex
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+
+
+def _sanitize_header(value: str) -> str:
+    """Strip CR/LF/NUL from header-bound strings. Subjects are built from
+    scraped business names, and a newline smuggled into one would let a
+    hostile page inject extra headers into our own outbound email."""
+    cleaned = re.sub(r"[\r\n\x00]", " ", value or "")
+    return re.sub(r" {2,}", " ", cleaned).strip()
 
 
 @dataclass
@@ -120,7 +131,7 @@ def send_email(
     else:
         msg = content
 
-    msg["Subject"] = subject
+    msg["Subject"] = _sanitize_header(subject)
     msg["From"] = f"{config.SENDING_DOMAIN} <{config.EMAIL_USER}>"
     msg["To"] = to_addr
     msg["Date"] = formatdate(localtime=True)
@@ -183,6 +194,11 @@ def send_email_sendgrid(
     if not _validate_email(to_addr):
         raise ValueError(f"Invalid email format: {to_addr}")
 
+    if SendGridAPIClient is None:
+        raise RuntimeError(
+            "SENDGRID_API_KEY is set but the sendgrid package is not installed. "
+            "Run: pip install sendgrid"
+        )
     if not config.SENDGRID_API_KEY:
         raise RuntimeError("SENDGRID_API_KEY is not configured.")
     if not config.SENDGRID_FROM_EMAIL:
@@ -211,7 +227,7 @@ def send_email_sendgrid(
     mail = Mail(
         from_email=config.SENDGRID_FROM_EMAIL,
         to_emails=to_addr,
-        subject=subject,
+        subject=_sanitize_header(subject),
         plain_text_content=text_with_footer,
         html_content=html_content,
     )
