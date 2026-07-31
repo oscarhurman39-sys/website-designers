@@ -1,11 +1,13 @@
 """Flask app serving these public-facing routes:
 
-  GET  /click?lead_id=<id>&token=<token>   -- click-tracking redirect to the preview site
-  GET  /unsubscribe/<token>                -- one-click CAN-SPAM unsubscribe
-  GET  /screenshots/<lead_id>.png          -- serves a cached preview screenshot
-  GET  /edit/<lead_id>?token=<token>       -- client site editor (see agents/editor_agent.py)
-  POST /edit/<lead_id>                     -- save + publish edits from that form
-  POST /webhook/stripe                     -- Stripe `checkout.session.completed` events
+  GET  /click?lead_id=<id>&token=<token>       -- click-tracking redirect to the preview site
+  GET  /unsubscribe/<token>                    -- one-click CAN-SPAM unsubscribe
+  GET  /screenshots/<lead_id>.png              -- serves a cached preview screenshot
+  GET  /edit/<lead_id>?token=<token>           -- client site editor (see agents/editor_agent.py)
+  POST /edit/<lead_id>                         -- save + publish edits from that form
+  GET  /edit/<lead_id>/request-link            -- form to request a fresh editor link
+  POST /edit/<lead_id>/request-link            -- emails a fresh link if the address matches
+  POST /webhook/stripe                         -- Stripe `checkout.session.completed` events
 
 Run standalone with `python webhook_server.py` (dev server) or behind a real
 WSGI server (gunicorn/uwsgi) in production. Must be reachable at
@@ -60,6 +62,31 @@ looking professional -- contact your designer for changes to those.</p>
 {% endfor %}
 <button type="submit">Save &amp; publish</button>
 </form>
+<p style="margin-top:24px;font-size:0.85rem;"><a href="/edit/{{ lead.id }}/request-link">Lost this link? Request a new one</a></p>
+</body></html>
+"""
+
+_LINK_EXPIRED_TEMPLATE = """
+<!doctype html><html><head><title>Link no longer valid</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="font-family: -apple-system, system-ui, sans-serif; max-width: 480px; margin: 60px auto; padding: 0 16px; text-align: center; color: #1e293b;">
+<h1>This editing link is no longer valid</h1>
+<p>It may have expired, been revoked, or been mistyped.</p>
+<p><a href="/edit/{{ lead_id }}/request-link">Request a new editing link</a></p>
+</body></html>
+"""
+
+_REQUEST_LINK_TEMPLATE = """
+<!doctype html><html><head><title>Request an editing link</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="font-family: -apple-system, system-ui, sans-serif; max-width: 480px; margin: 60px auto; padding: 0 16px; color: #1e293b;">
+<h1>Request a new editing link</h1>
+<p>Enter the email address on file for this website and we'll send you a fresh link.</p>
+{% if message %}<p style="padding:12px;background:#eef2ff;border-radius:6px;">{{ message }}</p>{% endif %}
+<form method="post">
+  <input type="email" name="email" placeholder="you@example.com" required style="width:100%;padding:8px;box-sizing:border-box;">
+  <button type="submit" style="margin-top:12px;padding:10px 24px;border:none;border-radius:6px;background:#1e293b;color:white;cursor:pointer;">Send me a link</button>
+</form>
 </body></html>
 """
 
@@ -102,26 +129,31 @@ def create_app() -> Flask:
     @app.route("/edit/<int:lead_id>", methods=["GET", "POST"])
     def edit_site(lead_id: int) -> Response:
         token = request.values.get("token", "")
-        if editor_auth.verify_editor_token(token) != lead_id:
-            abort(403)
+        if not editor_auth.verify_editor_session(lead_id, token):
+            return render_template_string(_LINK_EXPIRED_TEMPLATE, lead_id=lead_id), 403
         lead = db.get_lead(lead_id)
         if lead is None:
             abort(404)
 
         message = ""
         if request.method == "POST":
+            submitted = {}
             for field, field_type in editor_agent.EDITABLE_FIELDS.items():
                 raw = request.form.get(field, "")
-                value = (
+                submitted[field] = (
                     [line.strip() for line in raw.splitlines() if line.strip()]
                     if field_type == "list" else raw.strip()
                 )
-                editor_agent.apply_edit(lead_id, field, value)
             try:
-                result = editor_agent.publish(lead_id)
-                message = f"Published! Live at {result['preview_url']}"
-            except Exception as exc:  # noqa: BLE001 - show the client what happened instead of a 500
-                message = f"Your changes were saved, but publishing failed: {exc}"
+                editor_agent.apply_edits(lead_id, submitted)
+            except ValueError as exc:  # noqa: BLE001 - e.g. ssrf_guard.BlockedURLError on a bad photo/logo URL
+                message = f"Could not save your changes: {exc}"
+            else:
+                try:
+                    result = editor_agent.publish(lead_id)
+                    message = f"Published! Live at {result['preview_url']}"
+                except Exception as exc:  # noqa: BLE001 - show the client what happened instead of a 500
+                    message = f"Your changes were saved, but publishing failed: {exc}"
 
         current = editor_agent.effective_lead(lead_id) or lead
         content = content_importer.load_content(current)
@@ -138,6 +170,17 @@ def create_app() -> Flask:
             _EDIT_FORM_TEMPLATE, lead=lead, token=token, message=message,
             fields=editor_agent.EDITABLE_FIELDS, labels=editor_agent.FIELD_LABELS, values=field_values,
         )
+
+    @app.route("/edit/<int:lead_id>/request-link", methods=["GET", "POST"])
+    def request_editor_link(lead_id: int) -> Response:
+        message = ""
+        if request.method == "POST":
+            editor_agent.request_new_editor_link(lead_id, request.form.get("email", ""))
+            # Identical message regardless of whether it matched -- see
+            # request_new_editor_link's docstring: this must not become an
+            # oracle for enumerating valid emails per lead_id.
+            message = "If that email is on file for this site, a new editing link is on its way."
+        return render_template_string(_REQUEST_LINK_TEMPLATE, message=message)
 
     @app.route("/payment-success", methods=["GET"])
     def payment_success() -> tuple[str, int]:

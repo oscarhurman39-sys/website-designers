@@ -175,6 +175,25 @@ def init_db(db_path: Optional[str] = None) -> None:
                 UNIQUE(lead_id, field)
             )"""
         )
+        # Client editor magic-link sessions (see utils/editor_auth.py) --
+        # DB-backed (not a stateless HMAC token like compliance.py/
+        # tracker.py) specifically so a link can expire and be revoked
+        # individually: publishing authority over a paying client's LIVE
+        # site is a much higher-stakes grant than an unsubscribe click.
+        # Only the token's hash is ever stored -- the raw token exists
+        # only in the URL sent to the client.
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS editor_sessions (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                lead_id       INTEGER NOT NULL REFERENCES leads(id),
+                token_hash    TEXT NOT NULL UNIQUE,
+                created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+                expires_at    TEXT NOT NULL,
+                revoked_at    TEXT,
+                last_used_at  TEXT
+            )"""
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_editor_sessions_lead ON editor_sessions(lead_id)")
         conn.commit()
 
 
@@ -561,3 +580,37 @@ def get_site_edits(lead_id: int) -> dict[str, Any]:
         except (ValueError, TypeError):
             continue
     return result
+
+
+# --- Client editor sessions (see utils/editor_auth.py) -------------------------
+
+def insert_editor_session(lead_id: int, token_hash: str, expires_at: datetime) -> int:
+    with get_connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO editor_sessions (lead_id, token_hash, expires_at) VALUES (?, ?, ?)",
+            (lead_id, token_hash, expires_at.strftime("%Y-%m-%d %H:%M:%S")),
+        )
+        return cur.lastrowid
+
+
+def get_editor_session(token_hash: str) -> Optional[dict[str, Any]]:
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM editor_sessions WHERE token_hash = ?", (token_hash,)).fetchone()
+        return _row_to_dict(row)
+
+
+def touch_editor_session(session_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute("UPDATE editor_sessions SET last_used_at = datetime('now') WHERE id = ?", (session_id,))
+
+
+def revoke_editor_sessions(lead_id: int) -> None:
+    """Revoke every currently-active session for a lead -- e.g. a
+    designer suspects a link leaked, or the client requests a fresh one
+    and the old one should stop working. Already-revoked/expired rows are
+    left alone (their revoked_at, if any, keeps its original timestamp)."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE editor_sessions SET revoked_at = datetime('now') WHERE lead_id = ? AND revoked_at IS NULL",
+            (lead_id,),
+        )

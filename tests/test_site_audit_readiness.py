@@ -8,9 +8,20 @@ import requests as requests_module
 from unittest.mock import Mock
 
 from agents import design_agent
-from utils import db, site_audit
+from utils import db, site_audit, ssrf_guard
 
 BASE_URL = "https://example.com"
+
+
+def _mock_public_dns(monkeypatch, ip: str = "93.184.216.34") -> None:
+    """check_broken_links now resolves every URL's host via
+    utils.ssrf_guard before connecting (SSRF hardening) -- point that
+    resolution at a fixed, non-blocked IP so these tests don't depend on
+    real DNS. Patching ssrf_guard.socket directly (not through site_audit,
+    which only imports it locally inside the function) works because
+    Python caches modules -- there's exactly one ssrf_guard module object
+    regardless of who imports it."""
+    monkeypatch.setattr(ssrf_guard.socket, "getaddrinfo", lambda host, port: [(2, 1, 6, "", (ip, 0))])
 
 
 # --- contrast_ratio / check_contrast_pairs --------------------------------------
@@ -63,43 +74,59 @@ def test_check_broken_links_flags_4xx_and_skips_non_http_schemes(monkeypatch):
     <a href="/missing-page">broken link</a>
     <img src="/photo.jpg">
     """
+    _mock_public_dns(monkeypatch)
 
-    def fake_head(url, timeout, allow_redirects):
+    def fake_request(method, url, **kwargs):
         status = 404 if url.endswith("missing-page") else 200
-        return Mock(status_code=status)
+        return Mock(status_code=status, is_redirect=False, is_permanent_redirect=False)
 
-    monkeypatch.setattr(requests_module, "head", fake_head)
+    monkeypatch.setattr(requests_module, "request", fake_request)
     broken = site_audit.check_broken_links(html, BASE_URL)
     assert broken == [f"{BASE_URL}/missing-page"]
 
 
 def test_check_broken_links_retries_with_get_when_head_rejected(monkeypatch):
     html = '<a href="/some-page">link</a>'
+    _mock_public_dns(monkeypatch)
 
-    monkeypatch.setattr(requests_module, "head", lambda *a, **k: Mock(status_code=405))
-    monkeypatch.setattr(requests_module, "get", lambda *a, **k: Mock(status_code=200))
+    def fake_request(method, url, **kwargs):
+        status = 405 if method == "head" else 200
+        return Mock(status_code=status, is_redirect=False, is_permanent_redirect=False)
+
+    monkeypatch.setattr(requests_module, "request", fake_request)
     assert site_audit.check_broken_links(html, BASE_URL) == []
 
 
 def test_check_broken_links_treats_request_exception_as_broken(monkeypatch):
     html = '<a href="/unreachable">link</a>'
+    _mock_public_dns(monkeypatch)
     monkeypatch.setattr(
-        requests_module, "head",
+        requests_module, "request",
         Mock(side_effect=requests_module.exceptions.ConnectionError("boom")),
     )
     assert site_audit.check_broken_links(html, BASE_URL) == [f"{BASE_URL}/unreachable"]
+
+
+def test_check_broken_links_blocks_a_url_that_resolves_to_a_private_address(monkeypatch):
+    """The SSRF-hardening path: a submitted/scraped URL whose host
+    resolves to an internal address must be reported as broken (a client
+    couldn't smuggle an internal-network probe past this check)."""
+    html = '<a href="/internal">link</a>'
+    monkeypatch.setattr(ssrf_guard.socket, "getaddrinfo", lambda host, port: [(2, 1, 6, "", ("169.254.169.254", 0))])
+    assert site_audit.check_broken_links(html, BASE_URL) == [f"{BASE_URL}/internal"]
 
 
 def test_check_broken_links_dedupes_and_caps(monkeypatch):
     html = "".join(f'<a href="/page{i}">l</a>' for i in range(site_audit.MAX_LINK_CHECKS + 10))
     html += '<a href="/page0">duplicate of the first</a>'
     calls = []
+    _mock_public_dns(monkeypatch)
 
-    def fake_head(url, timeout, allow_redirects):
+    def fake_request(method, url, **kwargs):
         calls.append(url)
-        return Mock(status_code=200)
+        return Mock(status_code=200, is_redirect=False, is_permanent_redirect=False)
 
-    monkeypatch.setattr(requests_module, "head", fake_head)
+    monkeypatch.setattr(requests_module, "request", fake_request)
     site_audit.check_broken_links(html, BASE_URL)
     assert len(calls) == site_audit.MAX_LINK_CHECKS
     assert len(set(calls)) == len(calls)
@@ -124,8 +151,13 @@ def test_audit_readiness_computes_percentage_and_issues_without_link_check():
     result = site_audit.audit_readiness(_READY_HTML, BASE_URL, check_links=False)
     assert result["checks"]["https"] is True
     assert result["checks"]["sufficient_contrast"] is False
-    assert result["checks"]["no_broken_links"] is True  # skipped, not failed
-    assert result["readiness_pct"] == 89  # 8/9 checks passed
+    # A skipped check is neither pass nor fail -- it must not inflate the
+    # score by silently counting as a pass (the bug this regression-guards).
+    assert result["checks"]["no_broken_links"] is None
+    assert result["checks_skipped"] == ["no_broken_links"]
+    assert result["checks_performed"] == 8
+    assert result["checks_total"] == 9
+    assert result["readiness_pct"] == 88  # 7/8 PERFORMED checks passed
     assert len(result["issues"]) == 1
     assert "contrast" in result["issues"][0].lower()
     assert result["broken_links"] == []
@@ -139,15 +171,37 @@ def test_audit_readiness_is_100_when_everything_passes():
     result = site_audit.audit_readiness(html, BASE_URL, check_links=False)
     assert result["readiness_pct"] == 100
     assert result["issues"] == []
+    assert result["checks_performed"] == 8  # link check still skipped, still excluded
+
+
+def test_audit_readiness_skipping_link_check_never_scores_higher_than_a_full_check(monkeypatch):
+    """The exact regression this fix targets: a site with a real broken
+    link must not score HIGHER when maintenance.py skips the link crawl
+    than when design_agent.py ran the full check at deploy time."""
+    html = _READY_HTML.replace("</body>", '<img src="/broken.jpg"></body>')
+    _mock_public_dns(monkeypatch)
+    monkeypatch.setattr(
+        requests_module, "request",
+        lambda method, url, **kwargs: Mock(status_code=404, is_redirect=False, is_permanent_redirect=False),
+    )
+    full_check = site_audit.audit_readiness(html, BASE_URL, check_links=True)
+    skipped_check = site_audit.audit_readiness(html, BASE_URL, check_links=False)
+    assert full_check["readiness_pct"] < skipped_check["readiness_pct"]
 
 
 def test_audit_readiness_flags_broken_links_when_check_links_true(monkeypatch):
     html = _READY_HTML.replace("</body>", '<img src="/broken.jpg"></body>')
-    monkeypatch.setattr(requests_module, "head", lambda *a, **k: Mock(status_code=404))
+    _mock_public_dns(monkeypatch)
+    monkeypatch.setattr(
+        requests_module, "request",
+        lambda method, url, **kwargs: Mock(status_code=404, is_redirect=False, is_permanent_redirect=False),
+    )
     result = site_audit.audit_readiness(html, BASE_URL, check_links=True)
     assert result["checks"]["no_broken_links"] is False
     assert f"{BASE_URL}/broken.jpg" in result["broken_links"]
     assert any("broken link" in issue for issue in result["issues"])
+    assert result["checks_performed"] == 9  # every check ran this time
+    assert result["checks_skipped"] == []
 
 
 # --- design_agent integration: the audit actually gets persisted ---------------

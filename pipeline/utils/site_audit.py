@@ -15,12 +15,18 @@ Two distinct entry points, for two distinct audiences:
   - audit_readiness() audits OUR OWN generated preview / live client site
     as a pre-publish QA gate -- design_agent.py runs it right after a
     deploy succeeds. `readiness_pct` here is the opposite framing:
-    percentage of checks PASSED (100 = fully ready to publish).
+    percentage of checks ACTUALLY PERFORMED that passed.
 
 This is deliberately a small requests+BeautifulSoup(+HEAD-request) pass,
 not a real Lighthouse run -- it checks only things that are cheap, robust,
 and explainable in one line to a non-technical business owner. Every check
 either observes something concrete or stays silent; no speculation.
+
+IMPORTANT for anyone surfacing `readiness_pct` to a user: it is a "basic
+publishing checks" score, not a WCAG accessibility certification or a
+complete link audit -- say "Basic publishing checks: 89% (8/9 performed)",
+never "WCAG compliant" or "all links verified". See audit_readiness()'s
+own docstring for exactly what is and isn't covered.
 """
 from __future__ import annotations
 
@@ -255,9 +261,14 @@ def check_broken_links(html: str, base_url: str, *, timeout: int = 8,
                        max_checks: int = MAX_LINK_CHECKS) -> list[str]:
     """HEAD- (falling back to GET- for servers that reject HEAD) request
     every distinct http(s) link/image on the page, resolved against
-    base_url. Returns the URLs that errored or 4xx/5xx'd. Skips
-    mailto:/tel:/#anchor/javascript:/data: -- there's nothing to check."""
+    base_url. Returns the URLs that errored, 4xx/5xx'd, or were blocked as
+    unsafe (see utils/ssrf_guard.py -- these URLs can come from a client's
+    own photo/logo submission, not just the original site, so they're
+    untrusted input, not just link targets). Skips mailto:/tel:/#anchor/
+    javascript:/data: -- there's nothing to check."""
     import requests  # local import keeps this module importable without network use
+
+    from utils import ssrf_guard
 
     soup = BeautifulSoup(html, "html.parser")
     urls: list[str] = []
@@ -280,14 +291,14 @@ def check_broken_links(html: str, base_url: str, *, timeout: int = 8,
     broken: list[str] = []
     for url in urls:
         try:
-            resp = requests.head(url, timeout=timeout, allow_redirects=True)
+            resp = ssrf_guard.safe_request("head", url, timeout=timeout)
             if resp.status_code in (404, 405) or resp.status_code >= 500:
                 # Some servers reject/misreport HEAD -- retry with GET
                 # before calling a link broken.
-                resp = requests.get(url, timeout=timeout, allow_redirects=True, stream=True)
+                resp = ssrf_guard.safe_request("get", url, timeout=timeout, stream=True)
             if resp.status_code >= 400:
                 broken.append(url)
-        except requests.RequestException:
+        except (requests.RequestException, ssrf_guard.BlockedURLError):
             broken.append(url)
     return broken
 
@@ -300,10 +311,22 @@ def audit_readiness(html: str, base_url: str, *, check_links: bool = True,
         {"checks": {...}, "issues": [str, ...], "readiness_pct": int,
          "broken_links": [str, ...], "contrast_failures": [...]}
 
-    `readiness_pct` is the percentage of READINESS_CHECKS that passed (100
-    = every check passed). `check_links=False` skips the network-bound
-    broken-link crawl (useful for a fast, offline pre-deploy check on the
-    rendered HTML alone, before there's a live URL to crawl)."""
+    `readiness_pct` is the percentage of checks ACTUALLY PERFORMED that
+    passed -- a skipped check (see `check_links` below) is neither a pass
+    nor a fail, and is excluded from both the numerator and denominator,
+    not silently counted as a pass. `checks_performed`/`checks_total`/
+    `checks_skipped` make that distinction explicit for callers (e.g. the
+    dashboard should say "Basic publishing checks: 89% (8/9 performed)",
+    never an unqualified "89% ready" or "all checks passed" -- a skipped
+    check must never read as a passed one, and this scanner covers real
+    but partial ground: only inline-style color pairs for contrast (not
+    CSS classes/stylesheets/variables/text-over-photos), and only the
+    first `max_link_checks` links/images on this one page).
+
+    `check_links=False` skips the network-bound broken-link crawl (useful
+    for a fast, offline pre-deploy check on the rendered HTML alone,
+    before there's a live URL to crawl) -- this is exactly the check that
+    ends up marked not-performed."""
     base = audit_html(html, final_url=base_url)
     checks: dict[str, Any] = {}
     issues: list[str] = []
@@ -333,8 +356,17 @@ def audit_readiness(html: str, base_url: str, *, check_links: bool = True,
     if not checks["images_alt_text"]:
         issues.append(f"{missing_alt} of {images} images missing alt text")
 
-    broken = check_broken_links(html, base_url, timeout=link_timeout, max_checks=max_link_checks) if check_links else []
-    checks["no_broken_links"] = not broken
+    if check_links:
+        broken = check_broken_links(html, base_url, timeout=link_timeout, max_checks=max_link_checks)
+        checks["no_broken_links"] = not broken
+    else:
+        # None, not True: a skipped check must never silently score as a
+        # pass (that's exactly what made deploy-time and maintenance-time
+        # readiness scores incomparable before this fix -- a maintenance
+        # run always passes check_links=False, so it looked "more ready"
+        # than a full deploy-time check for no real reason).
+        broken = []
+        checks["no_broken_links"] = None
     if broken:
         shown = ", ".join(broken[:3]) + ("..." if len(broken) > 3 else "")
         issues.append(f"{len(broken)} broken link(s)/image(s): {shown}")
@@ -351,13 +383,18 @@ def audit_readiness(html: str, base_url: str, *, check_links: bool = True,
     if not checks["fresh_copyright"]:
         issues.append(f"Footer copyright year ({copyright_year}) looks stale")
 
-    passed = sum(1 for name in READINESS_CHECKS if checks.get(name))
-    readiness_pct = round(100 * passed / len(READINESS_CHECKS))
+    performed = [name for name in READINESS_CHECKS if checks.get(name) is not None]
+    skipped = [name for name in READINESS_CHECKS if checks.get(name) is None]
+    passed = sum(1 for name in performed if checks[name])
+    readiness_pct = round(100 * passed / len(performed)) if performed else 0
 
     return {
         "checks": checks,
         "issues": issues,
         "readiness_pct": readiness_pct,
+        "checks_performed": len(performed),
+        "checks_total": len(READINESS_CHECKS),
+        "checks_skipped": skipped,
         "broken_links": broken,
         "contrast_failures": contrast_failures,
     }

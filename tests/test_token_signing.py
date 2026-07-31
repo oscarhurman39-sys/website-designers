@@ -1,20 +1,23 @@
 """Regression tests for the shared HMAC-token pattern used by
-utils/compliance.py (unsubscribe links), utils/tracker.py (click
-tracking), and utils/editor_auth.py (client editor magic links).
+utils/compliance.py (unsubscribe links) and utils/tracker.py (click
+tracking). utils/editor_auth.py used to share this exact pattern too, but
+was since redesigned as DB-backed sessions (see test_editor_agent.py) --
+publishing authority over a paying client's live site needed expiry and
+revocation, which a stateless token can't provide.
 
-All three used to concatenate payload + a literal b"." separator + the
-raw mac bytes, then split the decoded blob with rsplit(b".", 1). Since mac
-is effectively random bytes, it can itself contain 0x2e, corrupting the
-split -- empirically this made ~12% of otherwise-valid tokens fail to
-verify (a real CAN-SPAM risk for the unsubscribe link specifically). The
-fix slices by mac's fixed 32-byte (sha256) length instead of splitting on
-a separator. These tests run enough iterations to reliably reproduce the
-old failure rate if it ever regresses -- a single round-trip wouldn't
-reliably catch a ~1-in-8 bug.
+Both remaining modules used to concatenate payload + a literal b"."
+separator + the raw mac bytes, then split the decoded blob with
+rsplit(b".", 1). Since mac is effectively random bytes, it can itself
+contain 0x2e, corrupting the split -- empirically this made ~12% of
+otherwise-valid tokens fail to verify (a real CAN-SPAM risk for the
+unsubscribe link specifically). The fix slices by mac's fixed 32-byte
+(sha256) length instead of splitting on a separator. These tests run
+enough iterations to reliably reproduce the old failure rate if it ever
+regresses -- a single round-trip wouldn't reliably catch a ~1-in-8 bug.
 """
 from __future__ import annotations
 
-from utils import compliance, editor_auth, tracker
+from utils import compliance, tracker
 
 ITERATIONS = 500
 
@@ -29,12 +32,6 @@ def test_click_token_always_round_trips():
     for lead_id in range(1, ITERATIONS + 1):
         token = tracker._sign(lead_id)
         assert tracker.verify_click_token(token) == lead_id
-
-
-def test_editor_token_always_round_trips():
-    for lead_id in range(1, ITERATIONS + 1):
-        token = editor_auth.generate_editor_token(lead_id)
-        assert editor_auth.verify_editor_token(token) == lead_id
 
 
 def _flip_first_char(token: str) -> str:
@@ -55,10 +52,9 @@ def test_click_token_rejects_tampering():
 
 
 def test_tokens_are_not_interchangeable_across_purposes():
-    """A valid unsubscribe token must not verify as a click token or
-    editor token, even for the same lead_id -- _TOKEN_PURPOSE is mixed
-    into the mac specifically to prevent this."""
+    """A valid unsubscribe token must not verify as a click token, even
+    for the same lead_id -- _TOKEN_PURPOSE is mixed into the mac
+    specifically to prevent this."""
     lead_id = 7
     unsub_token = compliance.generate_unsubscribe_token(lead_id)
     assert tracker.verify_click_token(unsub_token) is None
-    assert editor_auth.verify_editor_token(unsub_token) is None

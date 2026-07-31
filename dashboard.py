@@ -175,7 +175,16 @@ st.dataframe(
     column_config={
         "preview_url": st.column_config.LinkColumn("Preview"),
         "readiness_pct": st.column_config.ProgressColumn(
-            "Readiness", help="QA/readiness score of the generated preview (see utils/site_audit.py)",
+            "Basic checks",
+            help=(
+                "Percentage of BASIC publishing checks actually performed that passed "
+                "(HTTPS, mobile viewport, title/meta description, h1, image alt text, "
+                "inline-style colour contrast, and -- only when performed -- a broken-"
+                "link crawl). NOT a WCAG compliance certification or a complete link "
+                "audit: contrast only sees inline style= colour pairs, and the link "
+                "crawl only checks the first 15 links/images on the homepage. See "
+                "utils/site_audit.py's audit_readiness()."
+            ),
             min_value=0, max_value=100, format="%d%%",
         ),
     },
@@ -227,14 +236,21 @@ if lead_id:
 
     readiness = _latest_readiness(int(lead_id))
     if readiness:
-        st.write(f"**Readiness: {readiness['readiness_pct']}% ready to publish**")
-        issues = json.loads(readiness["result"]).get("issues", [])
+        result = json.loads(readiness["result"])
+        performed, total = result.get("checks_performed"), result.get("checks_total")
+        scope_note = f" ({performed}/{total} checks performed)" if performed is not None else ""
+        st.write(f"**Basic publishing checks: {readiness['readiness_pct']}%{scope_note}**")
+        st.caption(
+            "Not a WCAG compliance certification or a complete link audit -- see the "
+            "\"Basic checks\" column help text above for exactly what this covers."
+        )
+        issues = result.get("issues", [])
         if issues:
             st.write(f"{len(issues)} issue(s) remaining:")
             for issue in issues:
                 st.write(f"- {issue}")
         else:
-            st.write("No issues found.")
+            st.write("No issues found in the checks performed.")
 
     if lead["status"] == "won" and website:
         with st.expander("Monthly maintenance report"):

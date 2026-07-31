@@ -164,10 +164,19 @@ def monthly_report(lead_id: int, *, window_days: int = REPORT_WINDOW_DAYS) -> st
         latest = window_audits[-1]
         up_checks = sum(1 for a in window_audits if (a["readiness_pct"] or 0) > 0)
         uptime_pct = round(100 * up_checks / len(window_audits))
+        latest_result = json.loads(latest["result"])
+        performed, total = latest_result.get("checks_performed"), latest_result.get("checks_total")
+        scope_note = f" ({performed}/{total} checks performed" + (
+            f", {len(latest_result['checks_skipped'])} skipped)" if latest_result.get("checks_skipped") else ")"
+        ) if performed is not None else ""
         lines.append(f"Automated checks run: {len(window_audits)}")
         lines.append(f"Uptime: {uptime_pct}% of checks found your site live and responding.")
-        lines.append(f"Current readiness score: {latest['readiness_pct']}%.")
-        issues = json.loads(latest["result"]).get("issues", [])
+        lines.append(f"Current basic publishing checks: {latest['readiness_pct']}%{scope_note}.")
+        lines.append(
+            "(Not a WCAG compliance certification or a complete link audit -- see "
+            "utils/site_audit.py's audit_readiness() for exactly what's covered.)"
+        )
+        issues = latest_result.get("issues", [])
         if issues:
             lines.append(f"{len(issues)} issue(s) currently flagged:")
             lines.extend(f"  - {issue}" for issue in issues)

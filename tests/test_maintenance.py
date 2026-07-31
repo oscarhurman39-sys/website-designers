@@ -128,7 +128,11 @@ def test_run_check_only_processes_won_leads(tmp_path, monkeypatch):
 
 def test_monthly_report_uses_only_real_tracked_data(tmp_path, monkeypatch):
     lead_id = _setup_won_lead(tmp_path, monkeypatch)
-    db.insert_site_audit(lead_id, "live_client_site", {"readiness_pct": 90, "issues": ["1 broken link"]}, url="https://joes-cafe.example")
+    db.insert_site_audit(
+        lead_id, "live_client_site",
+        {"readiness_pct": 90, "issues": ["1 broken link"], "checks_performed": 9, "checks_total": 9, "checks_skipped": []},
+        url="https://joes-cafe.example",
+    )
     db.log_click(lead_id)
     db.log_click(lead_id)
 
@@ -136,7 +140,8 @@ def test_monthly_report_uses_only_real_tracked_data(tmp_path, monkeypatch):
 
     assert "Joes Cafe" in report
     assert "Uptime: 100%" in report
-    assert "Current readiness score: 90%" in report
+    assert "Current basic publishing checks: 90% (9/9 checks performed)" in report
+    assert "Not a WCAG compliance certification" in report
     assert "1 broken link" in report
     assert "opened 2 time(s)" in report
     assert "does not integrate real visitor" in report
@@ -145,6 +150,18 @@ def test_monthly_report_uses_only_real_tracked_data(tmp_path, monkeypatch):
     # fabricated number claimed alongside them, e.g. "14 enquiries".
     assert not re.search(r"\d+\s+enquir", report, re.IGNORECASE)
     assert not re.search(r"\d+\s+visitor", report, re.IGNORECASE)
+
+
+def test_monthly_report_notes_skipped_checks(tmp_path, monkeypatch):
+    lead_id = _setup_won_lead(tmp_path, monkeypatch)
+    db.insert_site_audit(
+        lead_id, "live_client_site",
+        {"readiness_pct": 100, "issues": [], "checks_performed": 8, "checks_total": 9,
+         "checks_skipped": ["no_broken_links"]},
+        url="https://joes-cafe.example",
+    )
+    report = maintenance.monthly_report(lead_id)
+    assert "Current basic publishing checks: 100% (8/9 checks performed, 1 skipped)" in report
 
 
 def test_monthly_report_handles_no_audits_yet(tmp_path, monkeypatch):

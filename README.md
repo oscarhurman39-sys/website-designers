@@ -45,13 +45,15 @@ website-designers/
 │   │   ├── stripe_utils.py       # checkout sessions, webhook verification
 │   │   ├── compliance.py         # unsubscribe tokens, CAN-SPAM footer
 │   │   ├── tracker.py            # click-tracking links
-│   │   ├── editor_auth.py        # client editor magic-link tokens
+│   │   ├── editor_auth.py        # DB-backed client editor session tokens (expiry + revocation)
+│   │   ├── ssrf_guard.py         # validates a URL's resolved IP before connecting (SSRF hardening)
 │   │   ├── content_importer.py   # logo/photos/hours/services/reviews/colors from a lead's own site
 │   │   ├── site_audit.py         # prospect-site audit + our-own-site readiness scanner
 │   │   └── tracer.py             # trace/agent/tool span logging (VoltAgent + local)
 │   ├── config.py               # env loading & validation
 │   ├── main.py                 # orchestrator loop + operator console
-│   ├── webhook_server.py       # Flask: /click, /unsubscribe, /edit, /webhook/stripe
+│   ├── maintenance.py           # scheduled re-audit + monthly report for sold client sites
+│   ├── webhook_server.py       # Flask: /click, /unsubscribe, /edit, /edit/.../request-link, /webhook/stripe
 │   └── requirements.txt
 ├── templates/                   # one subfolder per niche (index.html + style.css)
 │   └── _shared/                 # sections.html: reusable Jinja section macros (see "Section library")
@@ -242,18 +244,58 @@ project name and GitHub repo name (`github_api.make_repo_name`), so editing
 it would silently redeploy to a brand-new project instead of updating the
 existing one.
 
+**Session security.** Unlike the stateless HMAC links `utils/compliance.py`
+(unsubscribe) and `utils/tracker.py` (click tracking) use, editor links are
+DB-backed sessions (`utils/editor_auth.py`, `db.editor_sessions`): each has
+an `expires_at` (30 days by default), can be individually `revoked_at`
+without touching any other lead's link or rotating the whole app
+`SECRET_KEY`, and only the session's SHA-256 hash is ever stored. A lost or
+expired link is recovered via `GET /edit/<lead_id>/request-link`, which
+emails a fresh one to the lead's **on-file** `contact_email` -- it never
+returns the link in the HTTP response itself and always shows the same
+"if that email is on file..." message regardless of whether it matched, so
+the endpoint can't be used to enumerate valid emails or fetch a working
+link without controlling that inbox.
+
+**URL fields are SSRF-guarded.** `logo_url` and `photos` are submitted
+directly by the client, so `utils/ssrf_guard.py` resolves and validates
+each URL (rejecting loopback/link-local/private/reserved/multicast
+addresses, including the `169.254.169.254` cloud-metadata address) both
+when the edit is submitted (`editor_agent.apply_edit`) and again wherever
+the readiness scanner's broken-link crawl visits URLs found in the
+rendered HTML (`site_audit.check_broken_links`) -- redirects are
+re-validated at every hop too. See that module's docstring for the one
+documented residual gap (DNS-rebinding) it does not close.
+
 Edits are stored as `site_edits` rows (one per field, latest value wins --
 see `utils/db.py`), layered on top of the lead's original content by
 `agents/editor_agent.py`'s `effective_lead()` at render time -- so
 `design_agent.build_context()` and `content_importer.load_content()` need
-no changes at all to support edited content. Submitting the form calls
-`publish()`, which redeploys to the same Vercel project and, if the site
-has already been handed off, best-effort pushes the same files to the
-client's GitHub repo too (this can fail harmlessly if the operator already
-removed their own GitHub access as part of `transfer` -- the Vercel
-republish still succeeds either way). Every publish also re-runs the
-readiness scanner (see "QA/readiness scanner" below) against the newly
-rendered HTML.
+no changes at all to support edited content. A submission validates every
+field before persisting any of them (`editor_agent.apply_edits`) -- a
+single bad field (e.g. a blocked photo URL) never leaves a partial,
+confusing save behind.
+
+**Publishing and handoff ownership.** Submitting the form calls
+`publish()`, which redeploys to the same Vercel project and, if a GitHub
+hand-off repo exists but hasn't been fully transferred yet, also updates
+the files there. Once `website.transferred` is set -- the operator
+explicitly removed their own GitHub access as part of `transfer` --
+`publish()` refuses outright rather than silently redeploying Vercel only:
+that would leave Vercel ahead of the GitHub repo the client now believes
+IS their website, with no way to tell which copy is "real." This is a
+**"true handoff"** model: self-service editing through this tool stops at
+full transfer. Two alternative architectures, not built here: a
+**fully-managed** model (never remove GitHub access, keep editing working
+forever) or a **client-connected editor** (commit edits to the client's
+own repo first, let Vercel deploy from that commit via Git integration
+instead of the current git-less deploy-without-Git flow) -- the latter is
+the strongest long-term direction if continuous self-service editing after
+a complete handoff is wanted, but it's a real rework of `vercel_api.py`'s
+deploy mechanism, not a small change.
+
+Every publish also re-runs the readiness scanner (see "QA/readiness
+scanner" below) against the newly rendered HTML.
 
 **Known MVP limits, deliberately not built yet:** no per-service pricing
 field (the data model has no such column), no staff/team-member content
@@ -272,12 +314,24 @@ audits **our own generated preview or live site** as a pre-publish gate --
 deploy (and `editor_agent.publish()` runs it again after every edit),
 persisting the result to the `site_audits` table (`audited_target`:
 `prospect_site` / `generated_preview` / `live_client_site`). It adds two
-checks the prospect-site audit deliberately doesn't do: a broken-link/
-broken-image crawl (HEAD-request every distinct link, capped at 15) and a
-WCAG AA (4.5:1) color-contrast check on inline style pairs. The result is a
-0-100 `readiness_pct` (percentage of checks passed) plus a plain-English
-`issues` list, surfaced in the dashboard's leads table and Lead detail
-panel -- e.g. "89% ready to publish, 1 issue remaining."
+checks the prospect-site audit deliberately doesn't do: an SSRF-guarded
+broken-link/broken-image crawl (capped at 15) and a WCAG AA (4.5:1)
+color-contrast check on inline style pairs.
+
+**Say "Basic publishing checks: 89% (8/9 performed)", never "WCAG
+compliant" or "all links verified."** `readiness_pct` is the percentage of
+checks *actually performed* that passed -- a skipped check (e.g. the
+broken-link crawl, which `maintenance.py`'s daily pass runs with
+`check_links=False` to keep it to one request per site) is neither a pass
+nor a fail and is excluded from both the numerator and denominator
+(`checks_performed`/`checks_total`/`checks_skipped` make this explicit),
+never silently counted as a pass -- that bug used to make deploy-time and
+maintenance-time scores incomparable. The scanner also covers real but
+partial ground: contrast only sees colors declared in an inline `style=`
+attribute (not CSS classes, stylesheets, variables, gradients, or text
+over a photo), and the link crawl only checks the first 15 links/images on
+the one page it was given. The dashboard's leads table and Lead detail
+panel, and `maintenance.py`'s monthly report, all use this exact wording.
 
 ## Compliance
 

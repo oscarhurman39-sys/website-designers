@@ -1,60 +1,85 @@
-"""Magic-link auth for the client site editor (see agents/editor_agent.py
-and webhook_server.py's /edit routes).
+"""Client editor session auth -- DB-backed magic links (db.editor_sessions),
+NOT the stateless HMAC-signed-token pattern compliance.py/tracker.py use
+for unsubscribe/click links.
 
-Same stateless HMAC-signed-token pattern as utils/compliance.py's
-unsubscribe links and utils/tracker.py's click-tracking links: no DB
-lookup needed to verify a token, and (like those two) the link never
-expires and can't be individually revoked short of rotating SECRET_KEY
-(which invalidates every token pipeline-wide, not just this one) -- an
-accepted tradeoff already made twice elsewhere in this codebase, not a new
-gap introduced here.
+Why different: publishing authority over a paying client's LIVE site is a
+much higher-stakes grant than an unsubscribe click or a click-tracking
+redirect. Those two are fine as permanent, unrevocable links -- worst
+case, a lead unsubscribes early or a click gets logged that shouldn't
+have been. A leaked or ancient forwarded editor link, by contrast, would
+let a stranger publish content to a live client site indefinitely with no
+way to shut it off short of rotating the whole application SECRET_KEY
+(which would invalidate every unsubscribe/click/editor token pipeline-
+wide, not just this one). So this needs an expiry, per-session
+revocation, and a way to reissue a fresh link (see
+agents/editor_agent.py's request_new_editor_link, which emails a new one
+to the lead's ON-FILE contact address -- never returns the link directly
+in an HTTP response, or "request a new link" would itself be an auth
+bypass for anyone who can guess a lead_id).
+
+Only the SHA-256 hash of each token is ever stored -- the raw token exists
+only in the URL sent to the client and in the request that redeems it.
 """
 from __future__ import annotations
 
 import hashlib
-import hmac
-from base64 import urlsafe_b64decode, urlsafe_b64encode
-from typing import Optional
-from urllib.parse import quote
+import secrets
+from datetime import datetime, timedelta, timezone
 
 import config
+from utils import db
 
-_TOKEN_PURPOSE = b"editor"
-
-
-def _sign(lead_id: int) -> str:
-    payload = str(lead_id).encode("utf-8")
-    mac = hmac.new(config.SECRET_KEY.encode("utf-8"), _TOKEN_PURPOSE + b":" + payload, hashlib.sha256).digest()
-    # No separator byte between payload and mac -- a sha256 digest is
-    # always exactly 32 bytes, so verify_editor_token can split on that
-    # fixed length unambiguously. A literal separator (e.g. b".") would be
-    # wrong here: mac is effectively random bytes, so it can itself contain
-    # that byte, corrupting the split about 1 in 8 times.
-    token_bytes = payload + mac
-    return urlsafe_b64encode(token_bytes).decode("utf-8").rstrip("=")
+SESSION_LIFETIME_DAYS = 30
+_TOKEN_BYTES = 32
 
 
-def generate_editor_token(lead_id: int) -> str:
-    return _sign(lead_id)
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def verify_editor_token(token: str) -> Optional[int]:
-    """Return the lead_id encoded in `token` if the signature is valid, else None."""
-    try:
-        padded = token + "=" * (-len(token) % 4)
-        raw = urlsafe_b64decode(padded.encode("utf-8"))
-        payload, mac = raw[:-32], raw[-32:]  # sha256 digest is always exactly 32 bytes
-        expected = hmac.new(
-            config.SECRET_KEY.encode("utf-8"), _TOKEN_PURPOSE + b":" + payload, hashlib.sha256
-        ).digest()
-        if not hmac.compare_digest(mac, expected):
-            return None
-        return int(payload.decode("utf-8"))
-    except (ValueError, TypeError):
-        return None
+def _now_utc_naive() -> datetime:
+    """Timezone-naive UTC "now", matching how db.py stores every
+    timestamp (SQLite's datetime('now') is UTC and naive)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def issue_editor_session(lead_id: int, *, lifetime_days: int = SESSION_LIFETIME_DAYS) -> str:
+    """Create a brand-new session and return the raw (unhashed) token --
+    the only moment it ever exists outside the URL it gets embedded in.
+    Does not touch any of the lead's other outstanding sessions (multiple
+    valid links, e.g. one per device, can coexist -- see
+    revoke_all_sessions to invalidate all of them at once)."""
+    token = secrets.token_urlsafe(_TOKEN_BYTES)
+    expires_at = _now_utc_naive() + timedelta(days=lifetime_days)
+    db.insert_editor_session(lead_id, _hash_token(token), expires_at)
+    return token
 
 
 def create_editor_link(lead_id: int) -> str:
-    """Build the fully-qualified edit-your-site URL for a given lead."""
-    token = generate_editor_token(lead_id)
-    return f"{config.PUBLIC_BASE_URL}/edit/{lead_id}?token={quote(token)}"
+    """Build a fully-qualified edit-your-site URL for a given lead,
+    issuing a fresh session for it."""
+    token = issue_editor_session(lead_id)
+    return f"{config.PUBLIC_BASE_URL}/edit/{lead_id}?token={token}"
+
+
+def verify_editor_session(lead_id: int, token: str) -> bool:
+    """True iff `token` is an unexpired, unrevoked session for `lead_id`.
+    Marks the session as just-used on success (last_used_at) -- purely
+    informational, doesn't affect validity."""
+    if not token:
+        return False
+    session = db.get_editor_session(_hash_token(token))
+    if session is None or session["lead_id"] != lead_id:
+        return False
+    if session["revoked_at"]:
+        return False
+    if datetime.strptime(session["expires_at"], "%Y-%m-%d %H:%M:%S") <= _now_utc_naive():
+        return False
+    db.touch_editor_session(session["id"])
+    return True
+
+
+def revoke_all_sessions(lead_id: int) -> None:
+    """Revoke every outstanding editor session for a lead -- e.g. a
+    designer suspects a link leaked, or a fresh one is being issued."""
+    db.revoke_editor_sessions(lead_id)
