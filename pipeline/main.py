@@ -16,6 +16,7 @@ actions (takeover / payment / transfer) don't have to wait for the loop:
   takeover <lead_id>        - pause automation, hand negotiation to a human
   payment ready <lead_id>   - create + email a Stripe Checkout link
   transfer <lead_id>        - hand the GitHub repo / Vercel project to the client
+  report <lead_id>          - print a monthly maintenance report (see maintenance.py)
   status                    - print a lead-count-by-status summary
   pause / resume            - pause/resume the automated loop
   help                      - list commands
@@ -30,8 +31,9 @@ import time
 from pathlib import Path
 
 import config
+import maintenance
 from agents import design_agent, lead_agent, sales_agent
-from utils import db, github_api, stripe_utils, vercel_api
+from utils import db, editor_auth, github_api, stripe_utils, vercel_api
 
 PIPELINE_DIR = Path(__file__).resolve().parent
 LEADS_INBOX = PIPELINE_DIR / "leads_inbox"
@@ -144,6 +146,8 @@ def _handle_transfer(lead_id: int) -> None:
         print(f"[main] Lead {lead_id} is not marked 'won' yet (status: {lead['status']}). Aborting.")
         return
 
+    print(f"[main] Client editor link (share with the client): {editor_auth.create_editor_link(lead_id)}")
+
     # --- GitHub: create the hand-off repo now (previews don't get one) and
     # invite the client as a collaborator ---
     github_username = input(f"GitHub username to invite for lead {lead_id} (blank to skip): ").strip()
@@ -221,6 +225,11 @@ def _handle_command(line: str) -> None:
         _handle_payment_ready(int(parts[2]))
     elif cmd == "transfer" and len(parts) == 2 and parts[1].isdigit():
         _handle_transfer(int(parts[1]))
+    elif cmd == "report" and len(parts) == 2 and parts[1].isdigit():
+        try:
+            print(maintenance.monthly_report(int(parts[1])))
+        except ValueError as exc:
+            print(f"[main] {exc}")
     elif cmd == "status":
         _print_status()
     elif cmd == "pause":

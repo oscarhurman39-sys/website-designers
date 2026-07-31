@@ -16,28 +16,43 @@
 </head>
 <body class="bg-white text-slate-800 antialiased">
 
+  {% import "sections.html" as sections %}
   {% set nav_anchors = ["#hero", "#services", "#why-us", "#service-area", "#call-now"] %}
 
   <!-- Nav -->
   <header class="sticky top-0 z-10 bg-white/90 backdrop-blur border-b border-slate-200">
     <div class="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
-      <span class="text-lg font-bold text-slate-800">{{ business_name }}</span>
+      <div class="flex items-center gap-2">
+        {% if logo_url %}
+        <img src="{{ logo_url }}" alt="{{ business_name }} logo" class="h-8 w-auto">
+        {% endif %}
+        <span class="text-lg font-bold text-slate-800">{{ business_name }}</span>
+      </div>
       <nav class="hidden sm:flex gap-6 text-sm font-medium text-slate-600">
         {% for label in nav_labels %}
         <a href="{{ nav_anchors[loop.index0] }}" class="hover:text-slate-900">{{ label }}</a>
         {% endfor %}
       </nav>
       <a href="tel:{{ phone }}"
-         class="rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-900 transition">
+         class="rounded-lg px-4 py-2 text-sm font-semibold transition{% if not brand_colors %} bg-slate-800 hover:bg-slate-900 text-white{% endif %}"
+         {% if brand_colors %}style="background-color: {{ brand_colors[0] }}; color: {{ brand_text_color }};"{% endif %}>
         Call {{ phone }}
       </a>
     </div>
   </header>
 
-  <!-- Hero: no stock photo -- a mechanic/cafe shot that isn't actually
-       theirs reads as fake, so this is a CSS-only dark pattern instead. -->
-  <section id="hero" class="hero-pattern relative text-white">
+  <!-- Hero: uses a real photo of THEIR OWN business when content_importer
+       found one (see design_agent.get_hero_image_url) -- a stock photo of
+       someone else's shop reads as fake, but their own doesn't. Falls
+       back to a CSS-only dark pattern when no real photo exists. -->
+  <section id="hero"
+    class="hero-pattern relative text-white{% if photos %} bg-cover bg-center{% endif %}"
+    {% if photos %}style="background-image: linear-gradient(rgba(15,23,42,.55), rgba(15,23,42,.55)), url('{{ photos[0] }}');"{% endif %}>
+    {% if logo_url %}
+    <img src="{{ logo_url }}" alt="{{ business_name }} logo" class="absolute top-4 left-4 h-10 w-auto">
+    {% else %}
     <span class="absolute top-4 left-4 text-xs uppercase tracking-widest text-white/30">Your logo here</span>
+    {% endif %}
     <div class="max-w-5xl mx-auto px-6 py-24 text-center">
       <h1 class="text-4xl sm:text-5xl font-extrabold tracking-tight">{{ hero_tagline }}</h1>
       <p class="mt-4 text-lg text-slate-200">{{ business_name }} &mdash; {{ niche_display }} in {{ location }}</p>
@@ -54,17 +69,10 @@
     </div>
   </section>
 
-  <!-- Services -->
-  <section id="services" class="bg-slate-50 border-y border-slate-200">
-    <div class="max-w-3xl mx-auto px-6 py-16 text-center">
-      <h2 class="text-2xl font-bold text-slate-800 mb-6">Our Services</h2>
-      <ul class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left max-w-xl mx-auto">
-        {% for service in services %}
-        <li class="rounded-lg bg-white border border-slate-200 px-4 py-3 text-slate-700 font-medium">{{ service }}</li>
-        {% endfor %}
-      </ul>
-    </div>
-  </section>
+  <!-- Services: real service names (see design_agent.niche_services) via
+       the shared services_grid section, templates/_shared/sections.html --
+       section_id keeps the nav_anchors mapping above working. -->
+  {{ sections.services_grid(services, title="Our Services", section_id="services") }}
 
   <!-- Why Us -->
   <section id="why-us" class="max-w-3xl mx-auto px-6 py-16 text-center">
@@ -80,6 +88,12 @@
       <p class="text-slate-200">Proudly serving {{ location }} and the surrounding area.</p>
     </div>
   </section>
+
+  <!-- Opening Hours: only rendered when content_importer actually found
+       real hours on the business's existing site (see
+       utils/content_importer.py's extract_hours) -- no invented times;
+       the shared hours_list macro self-guards on empty hours. -->
+  {{ sections.hours_list(hours) }}
 
   <!-- Call Now -->
   <section id="call-now" class="max-w-3xl mx-auto px-6 py-16 text-center">

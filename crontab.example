@@ -22,3 +22,10 @@
 #   3. Check `pipeline/scheduler.log` for main.py's output.
 
 */5 * * * * cd /home/youruser/website-designers/pipeline && /home/youruser/website-designers/venv/bin/python scheduler.py --check >> /home/youruser/website-designers/pipeline/scheduler.log 2>&1
+
+# Maintenance: re-audits every SOLD (status='won') client's live site once
+# a day, alerting (console + optional Slack) on downtime or a readiness-
+# score regression -- see maintenance.py. Unlike scheduler.py above, this
+# IS a scheduled re-execution (maintenance.py check is one-shot by
+# design), not a crash-recovery check.
+0 6 * * * cd /home/youruser/website-designers/pipeline && /home/youruser/website-designers/venv/bin/python maintenance.py check >> /home/youruser/website-designers/pipeline/maintenance.log 2>&1

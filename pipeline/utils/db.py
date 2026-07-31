@@ -6,10 +6,10 @@ schema constraints enforced in one place.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any, Iterator, Optional
 
 import config
@@ -133,6 +133,48 @@ def init_db(db_path: Optional[str] = None) -> None:
         # JSON audit of the lead's existing site (see utils/site_audit.py),
         # used for personalization and the per-lead "what we improved" list.
         _migrate_add_column(conn, "leads", "site_audit", "TEXT")
+        # Structured content imported from the lead's existing site (see
+        # utils/content_importer.py) -- real logo/photos/hours/services/
+        # reviews/brand colors, consumed by design_agent.build_context() in
+        # place of generic niche fallbacks/stock photos when present.
+        _migrate_add_column(conn, "leads", "logo_url", "TEXT")
+        _migrate_add_column(conn, "leads", "photos", "TEXT")
+        _migrate_add_column(conn, "leads", "hours", "TEXT")
+        _migrate_add_column(conn, "leads", "scraped_services", "TEXT")
+        _migrate_add_column(conn, "leads", "reviews", "TEXT")
+        _migrate_add_column(conn, "leads", "brand_colors", "TEXT")
+        # Audits of OUR OWN generated preview/live sites (see
+        # utils/site_audit.py's audited_target values below) -- distinct
+        # from leads.site_audit, which is always the prospect's OLD site,
+        # audited once at research time.
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS site_audits (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                lead_id         INTEGER NOT NULL REFERENCES leads(id),
+                audited_target  TEXT NOT NULL
+                                CHECK (audited_target IN ('prospect_site', 'generated_preview', 'live_client_site')),
+                url             TEXT,
+                score           INTEGER,
+                readiness_pct   INTEGER,
+                result          TEXT NOT NULL,
+                created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            )"""
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_site_audits_lead ON site_audits(lead_id)")
+        # Client-editor overrides (see agents/editor_agent.py) -- one row
+        # per (lead_id, field), latest value wins. Which fields are
+        # actually editable is a policy decision that belongs to
+        # editor_agent.py, not this storage layer.
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS site_edits (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                lead_id     INTEGER NOT NULL REFERENCES leads(id),
+                field       TEXT NOT NULL,
+                value       TEXT NOT NULL,
+                edited_at   TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(lead_id, field)
+            )"""
+        )
         conn.commit()
 
 
@@ -377,6 +419,14 @@ def mark_website_transferred(lead_id: int) -> None:
         conn.execute("UPDATE websites SET transferred = 1 WHERE lead_id = ?", (lead_id,))
 
 
+def update_website_preview_url(lead_id: int, preview_url: str) -> None:
+    """Record a new live preview_url after a republish (see
+    agents/editor_agent.py's publish()) -- the same column DesignAgent
+    itself sets on the initial deploy."""
+    with get_connection() as conn:
+        conn.execute("UPDATE websites SET preview_url = ? WHERE lead_id = ?", (preview_url, lead_id))
+
+
 # --- Webhook idempotency -------------------------------------------------------
 
 def record_event_once(event_id: str, source: str = "stripe") -> bool:
@@ -411,6 +461,18 @@ def log_click(lead_id: int) -> None:
         conn.execute("INSERT INTO clicks (lead_id) VALUES (?)", (lead_id,))
 
 
+def count_clicks_since(lead_id: int, since: datetime) -> int:
+    """Used by maintenance.py's monthly report -- the only real, already-
+    tracked traffic signal this pipeline has (the click-tracked preview/
+    share link, not general site analytics)."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM clicks WHERE lead_id = ? AND timestamp >= ?",
+            (lead_id, since.strftime("%Y-%m-%d %H:%M:%S")),
+        ).fetchone()
+        return int(row["n"])
+
+
 def get_last_email_timestamp(lead_id: int) -> Optional[str]:
     with get_connection() as conn:
         row = conn.execute(
@@ -429,3 +491,73 @@ def log_state_history(lead_id: int, from_state: Optional[str], to_state: str, no
             "INSERT INTO state_history (lead_id, from_state, to_state, notes) VALUES (?, ?, ?, ?)",
             (lead_id, from_state, to_state, notes),
         )
+
+
+# --- Site audits (QA/readiness scanner) ---------------------------------------
+
+def insert_site_audit(lead_id: int, audited_target: str, result: dict[str, Any], url: str = "") -> int:
+    """Persist one audit run (see utils/site_audit.py). `result` is the full
+    {"checks", "pain_points", "improvements", "score", "readiness_pct", ...}
+    dict, stored as JSON; `score`/`readiness_pct` are also pulled into their
+    own columns so trend queries don't need to parse JSON every time."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            """INSERT INTO site_audits (lead_id, audited_target, url, score, readiness_pct, result)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (lead_id, audited_target, url, result.get("score"), result.get("readiness_pct"), json.dumps(result)),
+        )
+        return cur.lastrowid
+
+
+def get_latest_site_audit(lead_id: int, audited_target: str) -> Optional[dict[str, Any]]:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM site_audits WHERE lead_id = ? AND audited_target = ? ORDER BY id DESC LIMIT 1",
+            (lead_id, audited_target),
+        ).fetchone()
+        return _row_to_dict(row)
+
+
+def list_site_audits(lead_id: int, audited_target: Optional[str] = None) -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        if audited_target:
+            rows = conn.execute(
+                "SELECT * FROM site_audits WHERE lead_id = ? AND audited_target = ? ORDER BY created_at ASC",
+                (lead_id, audited_target),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM site_audits WHERE lead_id = ? ORDER BY created_at ASC", (lead_id,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
+# --- Client editor overrides (see agents/editor_agent.py) ----------------------
+
+def upsert_site_edit(lead_id: int, field: str, value: Any) -> None:
+    """Persist the CURRENT value of one editable field for a lead -- a
+    second edit to the same field overwrites the first (edited_at moves
+    forward), it does not keep both. `value` is JSON-encoded so it can be
+    a string or a list transparently."""
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO site_edits (lead_id, field, value, edited_at)
+               VALUES (?, ?, ?, datetime('now'))
+               ON CONFLICT(lead_id, field) DO UPDATE SET value = excluded.value, edited_at = excluded.edited_at""",
+            (lead_id, field, json.dumps(value)),
+        )
+
+
+def get_site_edits(lead_id: int) -> dict[str, Any]:
+    """Every field this lead's client has edited, decoded back to its
+    original type. A field whose stored JSON is corrupt is skipped rather
+    than raising -- same defensive stance as content_importer.load_content."""
+    with get_connection() as conn:
+        rows = conn.execute("SELECT field, value FROM site_edits WHERE lead_id = ?", (lead_id,)).fetchall()
+    result: dict[str, Any] = {}
+    for row in rows:
+        try:
+            result[row["field"]] = json.loads(row["value"])
+        except (ValueError, TypeError):
+            continue
+    return result

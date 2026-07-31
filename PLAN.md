@@ -108,3 +108,49 @@ next, in order.
 5. **Free-email-domain scoring + duplicate-lead guard** in `lead_agent`.
 6. **Lead sourcing** beyond CSVs (the pipeline's actual bottleneck):
    a scraper or purchased lists feeding `leads_inbox/`.
+
+## 2026-07-31: strategic pivot -- machinery for the designer, not just a builder
+
+The above list optimized the cold-outreach funnel. The bigger opportunity
+is different: this product's real edge is being the sales/fulfillment
+machinery *behind* a local-business web designer, not just another site
+builder. Prioritized by what most directly improves sales conversion,
+build time, or recurring revenue (see README's per-feature sections for
+how each actually works):
+
+1. **Content importer** (`utils/content_importer.py`) -- real logo,
+   photos, opening hours, services, reviews, and brand colors scraped from
+   a lead's own site, replacing stock photos/a curated generic list/a
+   fabricated testimonial wherever real content exists.
+2. **QA/readiness scanner** (`utils/site_audit.py`'s `audit_readiness()`)
+   -- broken-link + WCAG contrast checks + a 0-100 readiness score,
+   run automatically after every deploy and every published edit.
+3. **Industry-specific section library** (`templates/_shared/sections.html`
+   + `design_agent.NICHE_SECTIONS`) -- a real photo gallery for landscaper,
+   menu framing for cafe, an emergency-service banner for plumber, instead
+   of one copy-substituted section skeleton for every niche.
+4. **Locked client editor** (`agents/editor_agent.py`, `webhook_server.py`'s
+   `/edit` routes) -- a magic-link form letting a client edit content
+   while layout/colours/typography/nav stay designer-controlled.
+5. **Maintenance automation + monthly report** (`maintenance.py`) --
+   scheduled re-audits of every sold client's live site, regression
+   alerts, and a report built ONLY from real tracked data (no fabricated
+   visitor/enquiry analytics this pipeline doesn't actually have).
+
+Also found and fixed along the way: the HMAC token-signing pattern shared
+by `compliance.py` (unsubscribe links), `tracker.py` (click tracking), and
+the new `editor_auth.py` had a real ~12% verification-failure bug (a
+literal `.` separator byte could collide with random mac bytes) -- a CAN-
+SPAM risk, not just an editor bug. Fixed by slicing on sha256's fixed
+32-byte length instead of a separator.
+
+**Deliberately not built this pass** (lower-leverage per the same
+prioritization -- see README's "Client editor" section for the specific
+gaps): per-service pricing, staff/team-member content, a full change-
+request/approval workflow with history, instant redesign variations,
+automated onboarding intake, and audit-as-a-standalone-lead-magnet. Each
+is a reasonable next brick on top of what exists now (e.g. redesign
+variations is a `variant` parameter through the existing
+`render_template_files`/`NICHE_SECTIONS` machinery; audit-as-lead-magnet
+reuses `site_audit.audit_html()`'s existing pain-point/improvement output
+as a standalone report instead of a silent email-drafting input).

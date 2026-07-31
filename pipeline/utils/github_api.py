@@ -65,6 +65,24 @@ def push_files(repo: Repository, files: dict[str, str], commit_message: str = "I
         repo.create_file(path=path, message=f"{commit_message}: {path}", content=content)
 
 
+def update_or_create_files(repo: Repository, files: dict[str, str], commit_message: str = "Update site content") -> None:
+    """Update each file in `files` if it already exists in the repo (using
+    its current sha), or create it if it doesn't. Unlike push_files
+    (create-only -- used for the initial hand-off commit, where every file
+    is guaranteed new), this is safe to call again after the repo already
+    has content -- e.g. agents/editor_agent.py's publish() pushing a
+    client's edits to their already-handed-off repo."""
+    for path, content in files.items():
+        try:
+            existing = repo.get_contents(path)
+            repo.update_file(path=path, message=f"{commit_message}: {path}", content=content, sha=existing.sha)
+        except GithubException as exc:
+            if exc.status == 404:
+                repo.create_file(path=path, message=f"{commit_message}: {path}", content=content)
+            else:
+                raise
+
+
 def create_repo_with_files(
     business_name: str,
     lead_id: int,

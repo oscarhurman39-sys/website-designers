@@ -16,13 +16,18 @@
 </head>
 <body class="bg-white text-slate-800 antialiased">
 
+  {% import "sections.html" as sections %}
+
   <!-- Nav -->
   <header class="sticky top-0 z-10 bg-white/90 backdrop-blur border-b border-slate-200">
     <div class="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
       <span class="text-lg font-bold text-amber-700">☕ {{ business_name }}</span>
       <nav class="hidden sm:flex gap-6 text-sm font-medium text-slate-600">
-        <a href="#services" class="hover:text-amber-700">Services</a>
+        <a href="#menu" class="hover:text-amber-700">Menu</a>
         <a href="#about" class="hover:text-amber-700">About</a>
+        {% if "hours_list" in enabled_sections and hours %}
+        <a href="#hours" class="hover:text-amber-700">Hours</a>
+        {% endif %}
         <a href="#testimonial" class="hover:text-amber-700">Reviews</a>
         <a href="#contact" class="hover:text-amber-700">Contact</a>
       </nav>
@@ -51,13 +56,13 @@
     <p class="text-slate-600 leading-relaxed">{{ pain_point_solution }}</p>
   </section>
 
-  <!-- Services -->
-  <section id="services" class="bg-slate-50 border-y border-slate-200">
-    <div class="max-w-3xl mx-auto px-6 py-16 text-center">
-      <h2 class="text-2xl font-bold text-amber-800 mb-4">What We Offer</h2>
-      <p class="text-slate-600">{{ services_list | default("Fresh Roasted Coffee, House-made Pastries, Cozy Seating, Free Wi-Fi") }}</p>
-    </div>
-  </section>
+  <!-- Menu: real menu/service items (see design_agent.niche_services) via
+       the shared services_grid section, templates/_shared/sections.html -->
+  {{ sections.services_grid(services, title="Menu", heading_class="text-amber-800") }}
+
+  {% if "hours_list" in enabled_sections %}
+  {{ sections.hours_list(hours) }}
+  {% endif %}
 
   <!-- Testimonial -->
   <section id="testimonial" class="bg-amber-700 text-white">

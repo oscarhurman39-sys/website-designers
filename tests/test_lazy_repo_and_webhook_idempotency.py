@@ -19,6 +19,13 @@ def _lead() -> dict:
 
 
 def test_process_lead_creates_no_github_repo(monkeypatch, tmp_path):
+    # Isolate the readiness audit's DB write (_run_readiness_audit ->
+    # db.insert_site_audit) to a throwaway DB -- without this it would
+    # silently touch the real pipeline/leads.db as a side effect of this
+    # test (caught by _run_readiness_audit's own try/except either way,
+    # but a stray real-DB write is still a test-isolation bug).
+    monkeypatch.setattr(design_agent.db.config, "DB_PATH", str(tmp_path / "test.db"))
+    design_agent.db.init_db()
     monkeypatch.setattr(design_agent, "RENDERED_SITES_DIR", tmp_path)
     monkeypatch.setattr(
         design_agent.github_api,

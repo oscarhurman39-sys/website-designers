@@ -1,6 +1,16 @@
 """DesignAgent: renders a niche template for a lead, deploys it straight to
 Vercel (git-less, inline files), and records the resulting preview URL.
 
+build_context() prefers real content imported from the lead's own site
+(utils/content_importer.py) -- logo, photos, hours, services, reviews,
+brand colors -- over generic niche fallbacks/stock photos/a fabricated
+testimonial, wherever content_importer actually found something.
+
+Niche templates can also opt into shared, reusable sections (photo
+gallery, service area banner, etc. -- see templates/_shared/sections.html
+and the NICHE_SECTIONS manifest below) instead of every niche hand-rolling
+its own copy of the same section.
+
 NO GitHub repo is created at preview time. Rendered files are kept on disk
 under pipeline/rendered_sites/ instead, and the private hand-off repo is
 created lazily by create_handoff_repo() -- only when a client actually buys
@@ -15,15 +25,33 @@ from pathlib import Path
 from typing import Optional
 
 import requests
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import ChoiceLoader, Environment, FileSystemLoader, select_autoescape
 
 import config
-from utils import db, github_api, screenshot, tracer, tracker, url_safety, vercel_api
+from utils import content_importer, db, github_api, screenshot, site_audit, tracer, tracker, url_safety, vercel_api
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
+# Shared Jinja macros (templates/_shared/sections.html) every niche template
+# can {% import %} -- not itself a niche, so it's excluded from
+# available_niches() by the leading underscore.
+SHARED_PARTIALS_DIR = TEMPLATES_DIR / "_shared"
 RENDERED_SITES_DIR = Path(__file__).resolve().parent.parent / "rendered_sites"
 TEMPLATE_FILES = ("index.html", "style.css")
 DEFAULT_NICHE = "default"
+
+# Per-niche manifest of which shared sections (templates/_shared/
+# sections.html) that niche's template opts into -- exposed to templates
+# as the `enabled_sections` context list. A niche not listed here has
+# opted into none; add an entry when a template starts using one.
+NICHE_SECTIONS: dict[str, tuple[str, ...]] = {
+    "landscaper": ("photo_gallery", "hours_list"),
+    "cafe": ("hours_list",),
+    "plumber": ("service_area_emergency", "hours_list"),
+}
+
+
+def enabled_sections(niche: str) -> tuple[str, ...]:
+    return NICHE_SECTIONS.get(niche, ())
 
 # A lead whose design/deploy keeps failing is retried this many times
 # (once per orchestrator cycle) before being marked lost -- without a cap
@@ -97,9 +125,11 @@ DEFAULT_NAV_LABELS = ["Home", "About", "Services", "Reviews", "Contact"]
 
 
 def available_niches() -> set[str]:
+    """Every templates/<niche>/ subfolder, excluding _-prefixed ones like
+    _shared/ (shared macros, not a selectable niche)."""
     if not TEMPLATES_DIR.exists():
         return set()
-    return {p.name for p in TEMPLATES_DIR.iterdir() if p.is_dir()}
+    return {p.name for p in TEMPLATES_DIR.iterdir() if p.is_dir() and not p.name.startswith("_")}
 
 
 def niche_display_name(niche: str) -> str:
@@ -109,9 +139,14 @@ def niche_display_name(niche: str) -> str:
 
 
 def niche_services(lead: dict) -> list[str]:
-    """Real service names for the niche. Falls back to the lead's Google
-    Maps 'types' field if there's no curated list, then to the niche name
-    itself so the Services section is never empty."""
+    """The business's OWN service/menu names when content_importer found
+    some on their existing site -- real names sell harder than a generic
+    curated list. Falls back to the curated per-niche list, then the
+    lead's Google Maps 'types' field, then the niche name itself so the
+    Services section is never empty."""
+    scraped = content_importer.load_content(lead).get("services")
+    if scraped:
+        return scraped
     niche = lead["niche"]
     if niche in NICHE_SERVICES:
         return NICHE_SERVICES[niche]
@@ -154,13 +189,20 @@ def google_rating_badge(lead: dict) -> Optional[float]:
     return None
 
 
-def get_hero_image_url(niche: str) -> str:
-    """Fetch a relevant free stock photo URL for the niche.
-
-    Uses Unsplash's search API if UNSPLASH_ACCESS_KEY is configured;
-    otherwise falls back to a deterministic (seeded) placeholder image
-    service that needs no API key, so DesignAgent works out of the box.
+def get_hero_image_url(lead: dict) -> str:
+    """A real photo of THEIR OWN business (see utils/content_importer.py)
+    beats any stock photo -- a stock shot of someone else's van/shop reads
+    as fake to the actual owner, but their own storefront reads as
+    authentic. Falls back to Unsplash's search API if UNSPLASH_ACCESS_KEY
+    is configured and no real photo was found, then to a deterministic
+    (seeded) placeholder image service that needs no API key, so
+    DesignAgent works out of the box.
     """
+    photos = content_importer.load_content(lead).get("photos")
+    if photos:
+        return photos[0]
+
+    niche = lead["niche"]
     query = _NICHE_IMAGE_QUERIES.get(niche, niche_display_name(niche))
     if config.UNSPLASH_ACCESS_KEY:
         try:
@@ -178,6 +220,23 @@ def get_hero_image_url(niche: str) -> str:
         except (requests.RequestException, ValueError, KeyError):
             pass  # fall through to placeholder
     return f"{_PLACEHOLDER_IMAGE_BASE}/{niche}/1600/900"
+
+
+_BRAND_TEXT_WHITE = "#ffffff"
+_BRAND_TEXT_DARK = "#111827"
+
+
+def _readable_text_color(background_hex: str) -> str:
+    """White or near-black text -- whichever gives better WCAG contrast
+    against `background_hex` -- for use alongside an inline brand-color
+    background (build_context's `brand_text_color`). A brand color isn't
+    guaranteed to be dark enough for white text to read clearly (e.g. a
+    pale yellow), so this can't just hardcode white."""
+    if site_audit.contrast_ratio(background_hex, _BRAND_TEXT_WHITE) >= site_audit.contrast_ratio(
+        background_hex, _BRAND_TEXT_DARK
+    ):
+        return _BRAND_TEXT_WHITE
+    return _BRAND_TEXT_DARK
 
 
 def _pain_point_solution(lead: dict) -> str:
@@ -243,14 +302,31 @@ def json_ld_script(lead: dict) -> str:
 
 def build_context(lead: dict) -> dict:
     niche = lead["niche"]
+    imported = content_importer.load_content(lead)
     return {
         "business_name": lead["business_name"],
         "phone": lead.get("phone") or "Call us",
         "location": lead.get("location") or "",
         "pain_point_solution": _pain_point_solution(lead),
         "testimonial": _testimonial(lead),
-        "hero_image_url": get_hero_image_url(niche),
+        "hero_image_url": get_hero_image_url(lead),
         "year": datetime.now(timezone.utc).year,
+        # Real content imported from the business's own site (see
+        # utils/content_importer.py) -- "" / [] when nothing was found, so
+        # every template can safely `{% if logo_url %}` / `{% for %}` these
+        # without a KeyError either way.
+        "logo_url": imported["logo_url"],
+        "photos": imported["photos"],
+        "brand_colors": imported["brand_colors"],
+        # Whichever of white/near-black actually reads clearly on top of
+        # brand_colors[0] -- never assume white just because it usually
+        # works (see _readable_text_color).
+        "brand_text_color": _readable_text_color(imported["brand_colors"][0]) if imported["brand_colors"] else "",
+        "hours": imported["hours"],
+        # First real review if any were scraped, else the single
+        # (possibly fabricated) `testimonial` above -- so a template can
+        # render a multi-review list without special-casing the count.
+        "reviews": imported["reviews"] or [_testimonial(lead)],
         # Added for the newer Tailwind-based templates (landscaper/cafe/
         # plumber/salon/electrician); older templates simply ignore unused
         # context keys, so this is additive and doesn't affect them.
@@ -278,6 +354,9 @@ def build_context(lead: dict) -> dict:
         # almost never has these -- it's a selling point we can point at.
         "meta_description": meta_description(lead),
         "json_ld_script": json_ld_script(lead),
+        # Which shared sections (templates/_shared/sections.html) this
+        # niche's template has opted into -- see NICHE_SECTIONS.
+        "enabled_sections": enabled_sections(niche),
     }
 
 
@@ -285,7 +364,14 @@ def render_template_files(niche: str, context: dict) -> dict[str, str]:
     """Render index.html and style.css for `niche` with Jinja2. Returns
     {relative_path: rendered_content} ready to push to GitHub / Vercel.
     Falls back to the DEFAULT_NICHE template for any niche without its own
-    dedicated template folder (e.g. 'vehicle-repair')."""
+    dedicated template folder (e.g. 'vehicle-repair').
+
+    Templates are resolved against the niche's own folder first, then
+    SHARED_PARTIALS_DIR -- so `{% import "sections.html" as sections %}`
+    resolves regardless of which niche is rendering, while `index.html`/
+    `style.css` still always come from the niche-specific folder (a niche
+    folder can't accidentally shadow another niche's files since each
+    niche only ever renders its own two filenames)."""
     niche_dir = TEMPLATES_DIR / niche
     if not niche_dir.exists():
         niche_dir = TEMPLATES_DIR / DEFAULT_NICHE
@@ -293,7 +379,7 @@ def render_template_files(niche: str, context: dict) -> dict[str, str]:
         raise ValueError(f"No template found for niche '{niche}'")
 
     env = Environment(
-        loader=FileSystemLoader(str(niche_dir)),
+        loader=ChoiceLoader([FileSystemLoader(str(niche_dir)), FileSystemLoader(str(SHARED_PARTIALS_DIR))]),
         autoescape=select_autoescape(enabled_extensions=("html",)),
     )
     rendered = {}
@@ -319,6 +405,20 @@ def _capture_and_publish_screenshot(lead_id: int, preview_url: str) -> tuple[str
         print(f"[design_agent] Screenshot capture failed for lead {lead_id}, continuing without one: {exc}")
         return "", ""
     return f"{config.PUBLIC_BASE_URL}/screenshots/{lead_id}.png", str(local_path)
+
+
+def _run_readiness_audit(lead_id: int, html: str, preview_url: str) -> None:
+    """Pre-publish QA gate (see utils/site_audit.py's audit_readiness) run
+    against the just-deployed preview, persisted for the dashboard/
+    operator to see. Exactly like screenshot capture, a readiness audit is
+    an enrichment, never a blocker: any failure here (a slow/unreachable
+    linked asset, a network hiccup on the link-check crawl) is caught and
+    logged, and the caller keeps the deploy that already succeeded."""
+    try:
+        result = site_audit.audit_readiness(html, preview_url)
+        db.insert_site_audit(lead_id, "generated_preview", result, url=preview_url)
+    except Exception as exc:  # noqa: BLE001 - readiness audit must never fail a successful deploy
+        print(f"[design_agent] Readiness audit failed for lead {lead_id}, continuing without one: {exc}")
 
 
 def _validate_deployment_url(deployment: dict) -> str:
@@ -375,6 +475,7 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
     )
     preview_url = _validate_deployment_url(deployment)
 
+    _run_readiness_audit(lead["id"], files["index.html"], preview_url)
     screenshot_url, screenshot_path = _capture_and_publish_screenshot(lead["id"], preview_url)
 
     website_id = db.insert_website(

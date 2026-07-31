@@ -35,21 +35,26 @@ website-designers/
 │   ├── agents/
 │   │   ├── lead_agent.py      # CSV -> enriched, researched leads
 │   │   ├── design_agent.py    # template -> deployed preview site
+│   │   ├── editor_agent.py    # client editor: edit + republish a lead's site
 │   │   └── sales_agent.py     # drafting, sending, inbox monitoring
 │   ├── utils/
-│   │   ├── db.py              # SQLite schema + queries
-│   │   ├── github_api.py      # repo create/push/transfer
-│   │   ├── vercel_api.py      # deployment
-│   │   ├── email_utils.py     # SMTP send / IMAP poll
-│   │   ├── stripe_utils.py    # checkout sessions, webhook verification
-│   │   ├── compliance.py      # unsubscribe tokens, CAN-SPAM footer
-│   │   ├── tracker.py         # click-tracking links
-│   │   └── tracer.py          # trace/agent/tool span logging (VoltAgent + local)
+│   │   ├── db.py                 # SQLite schema + queries
+│   │   ├── github_api.py         # repo create/push/transfer
+│   │   ├── vercel_api.py         # deployment
+│   │   ├── email_utils.py        # SMTP send / IMAP poll
+│   │   ├── stripe_utils.py       # checkout sessions, webhook verification
+│   │   ├── compliance.py         # unsubscribe tokens, CAN-SPAM footer
+│   │   ├── tracker.py            # click-tracking links
+│   │   ├── editor_auth.py        # client editor magic-link tokens
+│   │   ├── content_importer.py   # logo/photos/hours/services/reviews/colors from a lead's own site
+│   │   ├── site_audit.py         # prospect-site audit + our-own-site readiness scanner
+│   │   └── tracer.py             # trace/agent/tool span logging (VoltAgent + local)
 │   ├── config.py               # env loading & validation
 │   ├── main.py                 # orchestrator loop + operator console
-│   ├── webhook_server.py       # Flask: /click, /unsubscribe, /webhook/stripe
+│   ├── webhook_server.py       # Flask: /click, /unsubscribe, /edit, /webhook/stripe
 │   └── requirements.txt
 ├── templates/                   # one subfolder per niche (index.html + style.css)
+│   └── _shared/                 # sections.html: reusable Jinja section macros (see "Section library")
 ├── dashboard.py                 # Streamlit monitoring UI
 ├── run.py                       # entrypoint: quick-test / loop / dashboard
 ├── test_lead.csv                # 3 sample leads for a first test run
@@ -148,12 +153,12 @@ Two template styles currently coexist:
 - **`landscaper`, `cafe`, `plumber`, `salon`, `electrician`** -- newer,
   Tailwind CSS (via CDN, no build step) single-page designs. Placeholders:
   `{{ business_name }}`, `{{ phone }}`, `{{ hero_headline }}`,
-  `{{ services_list }}` (falls back to a niche-appropriate default via
-  Jinja's `default()` filter if not supplied), `{{ pain_point_solution }}`,
-  `{{ testimonial }}`, `{{ location }}`, `{{ year }}`, and
-  `{{ preview_url }}` (a real, working link back to the site's own
-  click-tracked preview URL, shown at the bottom as a "share this preview"
-  link).
+  `{{ services }}` (real service/menu names -- see `niche_services()` --
+  rendered via the shared `services_grid` section, see "Section library"
+  below), `{{ pain_point_solution }}`, `{{ testimonial }}`,
+  `{{ location }}`, `{{ year }}`, and `{{ preview_url }}` (a real, working
+  link back to the site's own click-tracked preview URL, shown at the
+  bottom as a "share this preview" link).
 - **`restaurant`, `gym`, `dentist`** -- original hand-rolled CSS designs
   from the pipeline's first iteration. Placeholders: `{{ business_name }}`,
   `{{ phone }}`, `{{ pain_point_solution }}`, `{{ testimonial }}`,
@@ -163,6 +168,116 @@ Two template styles currently coexist:
 placeholder sets to every render, so either style works regardless of
 which niche a lead matches -- unused keys are simply ignored by whichever
 template doesn't reference them.
+
+`build_context()` also supplies content imported from the lead's own
+existing site (`utils/content_importer.py`, populated by `lead_agent.py`
+at research time): `{{ logo_url }}`, `{{ photos }}` (a list, `photos[0]` is
+also used as `hero_image_url` when present), `{{ hours }}` (a list of
+human-readable lines), `{{ brand_colors }}` (a list of hex strings), and
+`{{ reviews }}` (a list -- falls back to a single `[testimonial]` entry
+when nothing real was scraped). Every one of these is empty/falsy when
+nothing was found, so templates guard them with `{% if %}` rather than
+assuming they're populated (`templates/default` is the reference
+implementation for all five).
+
+## Content importer
+
+`utils/content_importer.py` extracts logo, photos, opening hours,
+services, reviews, and brand colors from a lead's existing website during
+research (`lead_agent.py`), so `design_agent.py` can put a business's real
+identity into its own preview instead of a generic stock photo, curated
+service list, and fabricated testimonial. Everything is best-effort and
+independently optional -- a thin small-business site still researches
+successfully with whatever subset was actually found. See the module
+docstring for exactly what each extractor looks for and where it falls
+back.
+
+## Section library
+
+`templates/_shared/sections.html` is a Jinja2 macro library (`services_grid`,
+`photo_gallery`, `service_area_banner`, `hours_list`) any niche template can
+`{% import "sections.html" as sections %}` instead of hand-rolling its own
+copy of the same section -- `design_agent.render_template_files()` resolves
+templates against the niche's own folder first, then `_shared/`, so the
+import works regardless of which niche is rendering. `_shared` itself is
+excluded from `available_niches()` (leading underscore), so it can never be
+matched as a lead's niche.
+
+Every macro no-ops (renders nothing) when its data is empty, so a template
+can call one unconditionally. Which niches opt into which *extra* sections
+beyond the universal ones (services, hours) is declared centrally in
+`design_agent.py`'s `NICHE_SECTIONS` manifest, exposed to templates as the
+`enabled_sections` context list:
+
+```python
+NICHE_SECTIONS = {
+    "landscaper": ("photo_gallery", "hours_list"),
+    "cafe": ("hours_list",),
+    "plumber": ("service_area_emergency", "hours_list"),
+}
+```
+
+`landscaper` shows a "Recent Work" gallery of real scraped photos (never
+fabricated before/after labels -- generic scraping can't truthfully tell
+which photo is which), `cafe` frames its services section as "Menu", and
+`plumber` adds a "Service Area" section with a 24/7 emergency badge. Extend
+an existing niche's template (or add a new one) to another shared section
+by adding the macro call and a `NICHE_SECTIONS` entry -- `templates/default`
+is the reference implementation for `services_grid`/`hours_list` used
+unconditionally (no manifest entry needed; they're inherent to that
+template, not opt-in extras).
+
+## Client editor
+
+Once a lead has a site (preview or transferred), `utils/editor_auth.create_editor_link(lead_id)`
+builds a magic-link URL (surfaced in the dashboard's Lead detail panel, and
+printed by `main.py`'s `transfer` command) to `GET /edit/<lead_id>?token=...`
+-- a form where the client can edit **text, photos, opening hours,
+services/menu items, reviews, and their logo**. Spacing, typography, colour
+hierarchy, mobile layout, navigation structure, and component styling have
+no field in the form at all, so they can't be touched this way; `publish()`
+only ever re-renders the SAME niche template the lead already has. The
+business's name is also locked -- it's baked into the lead's stable Vercel
+project name and GitHub repo name (`github_api.make_repo_name`), so editing
+it would silently redeploy to a brand-new project instead of updating the
+existing one.
+
+Edits are stored as `site_edits` rows (one per field, latest value wins --
+see `utils/db.py`), layered on top of the lead's original content by
+`agents/editor_agent.py`'s `effective_lead()` at render time -- so
+`design_agent.build_context()` and `content_importer.load_content()` need
+no changes at all to support edited content. Submitting the form calls
+`publish()`, which redeploys to the same Vercel project and, if the site
+has already been handed off, best-effort pushes the same files to the
+client's GitHub repo too (this can fail harmlessly if the operator already
+removed their own GitHub access as part of `transfer` -- the Vercel
+republish still succeeds either way). Every publish also re-runs the
+readiness scanner (see "QA/readiness scanner" below) against the newly
+rendered HTML.
+
+**Known MVP limits, deliberately not built yet:** no per-service pricing
+field (the data model has no such column), no staff/team-member content
+type, and edit history is overwrite-only (each field's previous value isn't
+kept once replaced) -- a full change-request/approval workflow with
+history and screenshots is a natural next step, not required for the core
+"client can safely self-edit content" loop this ships today.
+
+## QA/readiness scanner
+
+`utils/site_audit.py` has two distinct entry points for two distinct
+audiences: `audit_html()`/`audit_url()` audit a **lead's old site**
+(pre-sale personalization, unchanged from before); `audit_readiness()`
+audits **our own generated preview or live site** as a pre-publish gate --
+`design_agent.process_lead()` runs it automatically right after every
+deploy (and `editor_agent.publish()` runs it again after every edit),
+persisting the result to the `site_audits` table (`audited_target`:
+`prospect_site` / `generated_preview` / `live_client_site`). It adds two
+checks the prospect-site audit deliberately doesn't do: a broken-link/
+broken-image crawl (HEAD-request every distinct link, capped at 15) and a
+WCAG AA (4.5:1) color-contrast check on inline style pairs. The result is a
+0-100 `readiness_pct` (percentage of checks passed) plus a plain-English
+`issues` list, surfaced in the dashboard's leads table and Lead detail
+panel -- e.g. "89% ready to publish, 1 issue remaining."
 
 ## Compliance
 

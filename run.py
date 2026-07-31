@@ -4,6 +4,7 @@
     python run.py loop                 # main.py's always-on orchestrator + console
     python run.py dashboard            # streamlit run dashboard.py
     python run.py test-email <email>   # one-shot: pipeline/test_email.py
+    python run.py maintenance <args>   # one-shot: pipeline/maintenance.py (check | report <lead_id>)
 
 Each mode runs as its own subprocess, not imported in-process -- this is a
 thin dispatcher, not a reimplementation. That matters because `loop` reads
@@ -45,11 +46,21 @@ def run_test_email(extra_args: list[str]) -> int:
     )
 
 
+def run_maintenance(extra_args: list[str]) -> int:
+    if not extra_args:
+        print("Usage: python run.py maintenance check | python run.py maintenance report <lead_id>")
+        return 1
+    return subprocess.call(
+        [sys.executable, str(PIPELINE_DIR / "maintenance.py"), *extra_args], cwd=str(PIPELINE_DIR)
+    )
+
+
 _MODES = {
     "quick-test": run_quick_test,
     "loop": run_loop,
     "dashboard": run_dashboard,
     "test-email": run_test_email,
+    "maintenance": run_maintenance,
 }
 
 

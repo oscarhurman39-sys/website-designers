@@ -16,6 +16,8 @@
 </head>
 <body class="bg-white text-slate-800 antialiased">
 
+  {% import "sections.html" as sections %}
+
   <!-- Nav -->
   <header class="sticky top-0 z-10 bg-white/90 backdrop-blur border-b border-slate-200">
     <div class="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
@@ -23,6 +25,9 @@
       <nav class="hidden sm:flex gap-6 text-sm font-medium text-slate-600">
         <a href="#services" class="hover:text-blue-700">Services</a>
         <a href="#about" class="hover:text-blue-700">About</a>
+        {% if "service_area_emergency" in enabled_sections %}
+        <a href="#service-area" class="hover:text-blue-700">Areas Covered</a>
+        {% endif %}
         <a href="#testimonial" class="hover:text-blue-700">Reviews</a>
         <a href="#contact" class="hover:text-blue-700">Contact</a>
       </nav>
@@ -51,13 +56,13 @@
     <p class="text-slate-600 leading-relaxed">{{ pain_point_solution }}</p>
   </section>
 
-  <!-- Services -->
-  <section id="services" class="bg-slate-50 border-y border-slate-200">
-    <div class="max-w-3xl mx-auto px-6 py-16 text-center">
-      <h2 class="text-2xl font-bold text-blue-800 mb-4">What We Offer</h2>
-      <p class="text-slate-600">{{ services_list | default("Emergency Repairs, Leak Detection, Water Heater Install, Drain Cleaning") }}</p>
-    </div>
-  </section>
+  <!-- Services: real service names (see design_agent.niche_services) via
+       the shared services_grid section, templates/_shared/sections.html -->
+  {{ sections.services_grid(services, title="Services", heading_class="text-blue-800") }}
+
+  {% if "service_area_emergency" in enabled_sections %}
+  {{ sections.service_area_banner(location, emergency=true, accent_class="bg-blue-800") }}
+  {% endif %}
 
   <!-- Testimonial -->
   <section id="testimonial" class="bg-blue-700 text-white">
@@ -65,6 +70,10 @@
       <blockquote class="text-xl italic">&ldquo;{{ testimonial }}&rdquo;</blockquote>
     </div>
   </section>
+
+  {% if "hours_list" in enabled_sections %}
+  {{ sections.hours_list(hours) }}
+  {% endif %}
 
   <!-- Contact -->
   <section id="contact" class="max-w-3xl mx-auto px-6 py-16 text-center">

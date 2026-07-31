@@ -1,7 +1,9 @@
 """LeadAgent: turns a CSV of (business_name, niche, location) rows into
 enriched leads with a contact email, phone number, a pain-point snippet,
-(if found) a testimonial, and a concrete audit of their existing site
-(utils/site_audit.py) -- all scraped from the business's own website.
+(if found) a testimonial, a concrete audit of their existing site
+(utils/site_audit.py), and imported structured content -- logo, photos,
+opening hours, services, reviews, brand colors (utils/content_importer.py)
+-- all scraped from the business's own website.
 
 This is intentionally best-effort: small local businesses often have thin,
 inconsistent websites, so we fall back gracefully at every step rather than
@@ -21,7 +23,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from utils import db, site_audit, tracer
+from utils import content_importer, db, site_audit, tracer
 
 USER_AGENT = "ColdEmailSalesPipelineBot/1.0 (+mailto:contact@example.com)"
 REQUEST_TIMEOUT = 10
@@ -43,7 +45,6 @@ _EMAIL_BLOCKLIST_SUBSTR = ("example.com", "sentry.io", "wixpress.com", "godaddy.
 # preview shows a slightly off number, which the client corrects on handoff.
 _PHONE_RE = re.compile(r"(?:\+44\s?\d{2,4}|\(?0\d{2,4}\)?)[\s.-]?\d{3,4}[\s.-]?\d{3,4}")
 
-_TESTIMONIAL_HINTS = ("testimonial", "review", "quote", "client-says")
 _PAIN_POINT_HINTS = ("blog", "news", "about", "why-", "services")
 # Subpages worth crawling for contact details when the homepage is thin.
 _SUBPAGE_HINTS = ("contact", "about", "blog", "review")
@@ -169,12 +170,8 @@ def _extract_phone(soup: BeautifulSoup) -> Optional[str]:
 
 
 def _extract_testimonial(soup: BeautifulSoup) -> Optional[str]:
-    for hint in _TESTIMONIAL_HINTS:
-        for el in soup.find_all(attrs={"class": re.compile(hint, re.I)}):
-            text = el.get_text(" ", strip=True)
-            if 20 <= len(text) <= 400:
-                return text
-    return None
+    reviews = content_importer.extract_reviews(soup)
+    return reviews[0] if reviews else None
 
 
 def _extract_pain_point(soup: BeautifulSoup, base_url: str) -> Optional[str]:
@@ -242,6 +239,9 @@ def _research_lead_impl(lead: dict) -> None:
     phone = _extract_phone(homepage)
     testimonial = _extract_testimonial(homepage)
     pain_point = _extract_pain_point(homepage, website_url)
+    # Structured content (logo/photos/hours/services/reviews/brand colors)
+    # from the same already-fetched pages -- see utils/content_importer.py.
+    content = content_importer.extract_content(homepage, website_url)
 
     # Crawl a few likely subpages (contact first) for whatever is still
     # missing -- small-business sites often keep the email off the homepage.
@@ -256,6 +256,11 @@ def _research_lead_impl(lead: dict) -> None:
             phone = phone or _extract_phone(subpage)
             testimonial = testimonial or _extract_testimonial(subpage)
             pain_point = pain_point or _extract_pain_point(subpage, subpage_url)
+            # Content enrichment piggybacks on this same crawl -- it never
+            # drives which/how many subpages get fetched.
+            content = content_importer.merge_content(
+                content, content_importer.extract_content(subpage, subpage_url)
+            )
 
     # Audit their existing site: concrete findings ("no mobile viewport",
     # "6s response") to personalize the email and the preview's "what we
@@ -269,6 +274,7 @@ def _research_lead_impl(lead: dict) -> None:
             website_url=website_url,
             scraped_info=homepage.get_text(" ", strip=True)[:2000],
             site_audit=audit_json,
+            **content_importer.serialize_for_db(content),
         )
         db.update_lead_status(lead_id, "lost", notes="Website found but no contact email discovered")
         return
@@ -290,6 +296,7 @@ def _research_lead_impl(lead: dict) -> None:
         testimonial=testimonial or "",
         scraped_info=homepage.get_text(" ", strip=True)[:2000],
         site_audit=audit_json,
+        **content_importer.serialize_for_db(content),
     )
     db.update_lead_status(lead_id, "researched", notes="Research complete")
 
