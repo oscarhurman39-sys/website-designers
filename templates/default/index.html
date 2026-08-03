@@ -113,6 +113,14 @@
     <div class="max-w-3xl mx-auto px-6 py-8 text-center text-sm text-slate-500 space-y-2">
       <p>&copy; {{ year }} {{ business_name }}. All rights reserved.</p>
       <p>This is a free, live preview built by your local web design team.</p>
+      {% if buy_url %}
+      <p>
+        <a href="{{ buy_url }}"
+           class="inline-block rounded-lg bg-green-600 px-6 py-3 font-semibold text-white hover:bg-green-700 transition">
+          Get This Website &rarr;
+        </a>
+      </p>
+      {% endif %}
       <p>
         <a href="{{ preview_url | default('#') }}" class="text-slate-700 hover:underline">
           View / share this preview

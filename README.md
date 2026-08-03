@@ -36,6 +36,7 @@ website-designers/
 │   │   ├── lead_agent.py      # CSV -> enriched, researched leads
 │   │   ├── design_agent.py    # template -> deployed preview site
 │   │   ├── editor_agent.py    # client editor: edit + republish a lead's site
+│   │   ├── onboarding_agent.py # automated post-payment handoff (repo/collaborator invites)
 │   │   └── sales_agent.py     # drafting, sending, inbox monitoring
 │   ├── utils/
 │   │   ├── db.py                 # SQLite schema + queries
@@ -53,7 +54,7 @@ website-designers/
 │   ├── config.py               # env loading & validation
 │   ├── main.py                 # orchestrator loop + operator console
 │   ├── maintenance.py           # scheduled re-audit + monthly report for sold client sites
-│   ├── webhook_server.py       # Flask: /click, /unsubscribe, /edit, /edit/.../request-link, /webhook/stripe
+│   ├── webhook_server.py       # Flask: /click, /unsubscribe, /edit(+request-link), /buy, /onboard, /webhook/stripe
 │   └── requirements.txt
 ├── templates/                   # one subfolder per niche (index.html + style.css)
 │   └── _shared/                 # sections.html: reusable Jinja section macros (see "Section library")
@@ -303,6 +304,62 @@ type, and edit history is overwrite-only (each field's previous value isn't
 kept once replaced) -- a full change-request/approval workflow with
 history and screenshots is a natural next step, not required for the core
 "client can safely self-edit content" loop this ships today.
+
+## Self-serve checkout
+
+`GET /buy/<lead_id>` (`webhook_server.py`) creates a **fresh** Stripe
+Checkout Session on every click and redirects to it -- never a pre-
+generated URL embedded in an email, since Checkout Sessions expire (24
+hours by default) and a cold email or follow-up might be opened days
+later. This link is in the cold email, both follow-ups, and as a "Get
+This Website" button on the preview site itself (`design_agent.py`'s
+`buy_url` context key), so a buyer can pay with **zero human action on
+our side** -- `agents/sales_agent.py`'s "reply YES" path and `main.py`'s
+operator-triggered `payment ready <lead_id>` command both still work
+unchanged for a lead who'd rather negotiate first. Either path ends at
+the same place: the existing `checkout.session.completed` webhook handler,
+unmodified, sets the lead to `won`. We never charge anyone without their
+own action on Stripe's hosted page -- self-serve only removes the step of
+a human *generating* the checkout link, not any part of collecting
+payment itself.
+
+## Automated onboarding
+
+The moment a Stripe payment completes, `webhook_server.py`'s
+`/webhook/stripe` handler now also calls
+`agents/onboarding_agent.send_onboarding_email()`, which emails the client
+a link to `GET /onboard/<lead_id>` -- the same DB-backed session mechanism
+as the content editor (`utils/editor_auth.create_onboarding_link`, since a
+valid session proves the same thing regardless of which form it lands on).
+That form collects an optional GitHub username and a confirm-or-override
+email for Vercel access; submitting it runs
+`onboarding_agent.complete_onboarding()`, which:
+
+1. Creates the hand-off repo if one doesn't exist yet (idempotent, reuses
+   `design_agent.create_handoff_repo`).
+2. Invites the GitHub username (if given) as a repo collaborator.
+3. Invites the Vercel email (if given and `VERCEL_TEAM_ID` is configured)
+   to the Vercel project.
+4. Emails the client their editor link (`editor_agent.send_editor_link`).
+
+Every step is independently best-effort -- a typo'd GitHub username still
+gets a Vercel invite and an editor link, not a hard failure. Steps 1-3 are
+safe to run unconditionally because GitHub/Vercel collaborator invites are
+both **invite-acceptance flows the invitee must approve**, not unilateral
+access grants.
+
+**The one step that stays opt-in:** removing OUR OWN GitHub access --
+completing a fully hands-off transfer with zero operator involvement --
+only happens when `AUTO_REMOVE_GITHUB_ACCESS=true` is set in `.env`
+(`config.py`). That default is `false` on purpose: granting a client
+access is low-risk and reversible (they just don't accept the invite);
+permanently giving up our own access is not, so it stays behind an
+explicit decision rather than silently replacing today's safer behavior
+(the operator confirming via `main.py`'s `transfer` console command, which
+remains fully available throughout and converges on the exact same
+idempotent primitives -- nothing breaks if a client never touches the
+onboarding form and the operator just runs `transfer` instead, or does
+both).
 
 ## QA/readiness scanner
 

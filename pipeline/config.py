@@ -72,6 +72,17 @@ WEBSITE_PRICE_USD: int = int(os.getenv("WEBSITE_PRICE_USD", "750") or 750)
 # the amount actually charged via Stripe checkout once a lead says yes.
 WEBSITE_OFFER_PRICE: int = int(os.getenv("WEBSITE_OFFER_PRICE", "750") or 750)
 
+# When True, agents/onboarding_agent.py removes our own GitHub access
+# automatically once a client submits the onboarding form -- completing a
+# fully hands-off transfer with no operator action. Defaults to False:
+# repo/Vercel collaborator INVITES still happen automatically either way
+# (both are invite-acceptance flows the invitee must approve, not
+# unilateral grants), but giving up our own access is a one-way,
+# consequential step, so it stays behind an explicit opt-in rather than
+# defaulting to today's safer manual-confirmation behavior (main.py's
+# `transfer` console command) being silently replaced.
+AUTO_REMOVE_GITHUB_ACCESS: bool = os.getenv("AUTO_REMOVE_GITHUB_ACCESS", "").strip().lower() in ("1", "true", "yes")
+
 # --- SendGrid configuration (optional) ----------------------------------------
 SENDGRID_API_KEY: str = os.getenv("SENDGRID_API_KEY", "")
 SENDGRID_FROM_EMAIL: str = os.getenv("SENDGRID_FROM_EMAIL", "")

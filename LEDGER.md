@@ -1,5 +1,5 @@
 # Ledger
 
 ## website-designers  [active]
-brick: Auto-send the client editor link (utils/editor_auth.create_editor_link) in an onboarding email right after `transfer` succeeds -- today it's only printed to console / shown in the dashboard, not actually delivered to the client
+brick: Warm up a real sending domain and run one real batch of leads through the whole pipeline (WARMUP.md, then `run.py loop`) -- every remaining brick is code-complete but has never touched a real inbox or a real business owner; that's the actual bottleneck now, not more automation
 since: 2026-07-31  sessions-unchanged: 0

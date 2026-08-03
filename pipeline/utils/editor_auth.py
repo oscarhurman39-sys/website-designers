@@ -62,6 +62,16 @@ def create_editor_link(lead_id: int) -> str:
     return f"{config.PUBLIC_BASE_URL}/edit/{lead_id}?token={token}"
 
 
+def create_onboarding_link(lead_id: int) -> str:
+    """Build a fully-qualified claim-your-website URL (see
+    agents/onboarding_agent.py, webhook_server.py's /onboard route) --
+    same session mechanism as create_editor_link, since a valid session
+    proves the same thing (control of this lead's identity) regardless of
+    which form it lands on; only the URL differs."""
+    token = issue_editor_session(lead_id)
+    return f"{config.PUBLIC_BASE_URL}/onboard/{lead_id}?token={token}"
+
+
 def verify_editor_session(lead_id: int, token: str) -> bool:
     """True iff `token` is an unexpired, unrevoked session for `lead_id`.
     Marks the session as just-used on success (last_used_at) -- purely

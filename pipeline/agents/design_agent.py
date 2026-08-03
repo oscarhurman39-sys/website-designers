@@ -337,6 +337,11 @@ def build_context(lead: dict) -> dict:
         # the webhook server resolves it to the real preview_url from the
         # `websites` table whenever it's actually clicked).
         "preview_url": tracker.create_click_link(lead["id"]),
+        # Self-serve checkout -- webhook_server.py's GET /buy/<lead_id>
+        # creates a fresh Stripe Checkout Session on click (see
+        # utils/stripe_utils.py) so a visitor can buy this site directly
+        # from the preview itself, no reply/human step required.
+        "buy_url": f"{config.PUBLIC_BASE_URL}/buy/{lead['id']}",
         # Used by templates/default -- hyper-local hero tagline, niche
         # display name, real service names, tailored nav labels, and an
         # optional Google rating badge (only shown when the lead actually

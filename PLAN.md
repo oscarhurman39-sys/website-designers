@@ -154,3 +154,65 @@ variations is a `variant` parameter through the existing
 `render_template_files`/`NICHE_SECTIONS` machinery; audit-as-lead-magnet
 reuses `site_audit.audit_html()`'s existing pain-point/improvement output
 as a standalone report instead of a silent email-drafting input).
+
+## 2026-07-31 (cont'd): closing the manual-intervention gaps
+
+Every step from "new lead" through "site deployed" already runs
+unattended (`main.py`'s 60s loop). Every step from "client wants to buy"
+onward still needs a human at a keyboard. Full inventory of what actually
+requires a person, ranked by automation value/risk:
+
+1. **No self-serve payment path.** The cold email says "reply YES to
+   buy," but nothing turns that into a checkout link automatically --
+   `stripe_utils.create_checkout_session` is only ever called from the
+   human-typed `payment ready <id>` console command. A buyer who wants to
+   pay immediately has no way to.
+2. **Editor link is never actually delivered.** `editor_auth.create_editor_link`
+   is real and secure, but it's only ever shown in the dashboard or
+   printed to the operator's console -- nobody emails it to the client.
+   (This was already this repo's own `LEDGER.md` next-brick pointer.)
+3. **`transfer` is fully interactive.** Three `input()` prompts (GitHub
+   username, Vercel email, y/n on removing our own GitHub access) --
+   cannot run unattended, and the underlying data (GitHub username, which
+   email to invite) is never collected from the CLIENT, only typed by the
+   operator on the spot.
+4. **No way to end a takeover.** `sales_agent.end_takeover()` exists but
+   no console command ever calls it -- once a lead is manually taken
+   over, it stays that way until a process restart wipes the (non-
+   persistent) in-memory set. A real gap, not by design.
+5. **Lead sourcing is CSV-only.** No automated prospecting -- this is a
+   genuine product/data-source decision (paid Places API vs. scraping
+   ToS risk), not something to default into unilaterally; documented here
+   as the largest remaining gap, deliberately not built.
+6. **Reply intent is a blunt 3-way bucket.** positive/negative/
+   out_of_office, with every "positive" needing a human read before
+   deciding to trigger payment -- lower priority than (1), since a
+   self-serve checkout link removes the *need* for that decision on the
+   common path entirely rather than making the classifier smarter.
+
+(1) and (2) are pure upside with no new risk (Stripe owns payment
+security; emailing a link that already existed is not a new capability).
+(3) is the one that actually grants access/moves money on click, so its
+automation is config-gated and defaults to today's safer behavior --
+see `AUTO_REMOVE_GITHUB_ACCESS` in config.py once built.
+
+**Closed this pass:** (1) self-serve `/buy/<lead_id>` in the cold email,
+both follow-ups, and on the preview site itself (README's "Self-serve
+checkout"). (2) editor link now actually emailed at `transfer`. (3)
+automated onboarding (`agents/onboarding_agent.py`, README's "Automated
+onboarding") -- repo creation and GitHub/Vercel invites run automatically
+off a client-submitted form; removing our own access stays behind
+`AUTO_REMOVE_GITHUB_ACCESS` (default off). `transfer`'s interactive
+prompts remain as a manual fallback, not replaced. (4) fixed -- `release
+<lead_id>` console command added. (5) and (6) still open, deliberately:
+(5) is a real product/data-source decision, not mine to default into;
+(6) is lower-leverage now that (1) removes the need for the decision on
+the common self-serve path.
+
+The end-to-end loop -- cold email -> self-serve payment -> automated
+onboarding -> editor access -- can now run with zero human action for a
+buyer who self-serves cleanly. A human is still needed for: anyone who
+replies instead of clicking Buy Now (by design -- negotiation), and
+actually removing our own GitHub access (opt-in by design). Still
+nothing has been run against a real lead; see item 1 in "Next, in order"
+above -- that is still the actual next step, not more automation.

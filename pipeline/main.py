@@ -14,6 +14,7 @@ Then sleeps MAIN_LOOP_SLEEP_SECONDS and repeats, until Ctrl-C.
 A second thread reads operator commands from stdin so human-in-the-loop
 actions (takeover / payment / transfer) don't have to wait for the loop:
   takeover <lead_id>        - pause automation, hand negotiation to a human
+  release <lead_id>         - clear the takeover block (see its own note on lead status)
   payment ready <lead_id>   - create + email a Stripe Checkout link
   transfer <lead_id>        - hand the GitHub repo / Vercel project to the client
   report <lead_id>          - print a monthly maintenance report (see maintenance.py)
@@ -32,8 +33,8 @@ from pathlib import Path
 
 import config
 import maintenance
-from agents import design_agent, lead_agent, sales_agent
-from utils import db, editor_auth, github_api, stripe_utils, vercel_api
+from agents import design_agent, editor_agent, lead_agent, sales_agent
+from utils import db, github_api, stripe_utils, vercel_api
 
 PIPELINE_DIR = Path(__file__).resolve().parent
 LEADS_INBOX = PIPELINE_DIR / "leads_inbox"
@@ -136,6 +137,19 @@ def _handle_payment_ready(lead_id: int) -> None:
         print(f"[main] Could not email payment link: {exc}")
 
 
+def _send_editor_link_email(lead_id: int) -> None:
+    """Actually deliver the client's editor link by email instead of only
+    ever showing it in the dashboard or the operator's own console -- the
+    link (utils/editor_auth.create_editor_link) already existed and was
+    secure; nobody was sending it anywhere. Thin wrapper around
+    agents/editor_agent.send_editor_link, which also backs the
+    self-service "request a new link" flow -- one send path, not two."""
+    if editor_agent.send_editor_link(lead_id):
+        print(f"[main] Editor link emailed to lead {lead_id}.")
+    else:
+        print(f"[main] Could not email the editor link for lead {lead_id} (see above for why).")
+
+
 def _handle_transfer(lead_id: int) -> None:
     lead = db.get_lead(lead_id)
     website = db.get_website_by_lead(lead_id)
@@ -145,8 +159,6 @@ def _handle_transfer(lead_id: int) -> None:
     if lead["status"] != "won":
         print(f"[main] Lead {lead_id} is not marked 'won' yet (status: {lead['status']}). Aborting.")
         return
-
-    print(f"[main] Client editor link (share with the client): {editor_auth.create_editor_link(lead_id)}")
 
     # --- GitHub: create the hand-off repo now (previews don't get one) and
     # invite the client as a collaborator ---
@@ -203,6 +215,8 @@ def _handle_transfer(lead_id: int) -> None:
     else:
         print("[main] No GitHub repo exists for this lead (none was created), skipping access removal.")
 
+    _send_editor_link_email(lead_id)
+
     print(
         "[main] NOTE: Vercel access is never removed automatically. Your Vercel team "
         "membership is typically shared across every client's project, not scoped to "
@@ -221,6 +235,13 @@ def _handle_command(line: str) -> None:
     if cmd == "takeover" and len(parts) == 2 and parts[1].isdigit():
         sales_agent.begin_takeover(int(parts[1]))
         print(f"[main] Lead {parts[1]} is now under manual takeover. Automation paused for this lead.")
+    elif cmd == "release" and len(parts) == 2 and parts[1].isdigit():
+        sales_agent.end_takeover(int(parts[1]))
+        print(
+            f"[main] Lead {parts[1]} released from manual takeover. Note: this only clears the "
+            "block -- automation acts on a lead by its status, so it won't actually resume sending "
+            "unless the lead's status is also reset (e.g. back to 'designed') separately."
+        )
     elif cmd == "payment" and len(parts) == 3 and parts[1] == "ready" and parts[2].isdigit():
         _handle_payment_ready(int(parts[2]))
     elif cmd == "transfer" and len(parts) == 2 and parts[1].isdigit():

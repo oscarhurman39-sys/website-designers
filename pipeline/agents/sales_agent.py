@@ -280,16 +280,39 @@ def _checklist_html(city: str, lead: Optional[dict] = None) -> str:
     )
 
 
-def _closing_paragraphs(preview_link: str) -> list[str]:
+def _buy_link(lead_id: int) -> str:
+    """Self-serve checkout -- webhook_server.py's GET /buy/<lead_id>
+    creates a fresh Stripe Checkout Session on click (never a pre-
+    generated URL embedded here, since Checkout Sessions expire and this
+    email might be opened days later)."""
+    return f"{config.PUBLIC_BASE_URL}/buy/{lead_id}"
+
+
+def _urgency_note() -> str:
+    return "This preview is live for 7 days -- after that it'll be repurposed. No pressure, just didn't want you to miss it."
+
+
+def _buy_or_reply_line(lead_id: int) -> str:
+    return (
+        f"Ready to make it yours? Buy it directly here: {_buy_link(lead_id)} -- "
+        "or just reply YES and I'll take it from there."
+    )
+
+
+def _pricing_line() -> str:
+    return f"Standard package: £2,000. This completed draft: £{config.WEBSITE_OFFER_PRICE:,}."
+
+
+def _closing_paragraphs(lead_id: int, preview_link: str) -> list[str]:
     """Everything after the checklist: the live link, a no-pressure urgency
-    note, the reply-to-buy offer, plain (non-anchored) pricing, and the
-    sign-off. Deliberately just these lines -- no bullet points or feature
-    lists beyond the checklist above."""
+    note, a direct self-serve buy link alongside the reply-to-buy offer,
+    plain (non-anchored) pricing, and the sign-off. Deliberately just these
+    lines -- no bullet points or feature lists beyond the checklist above."""
     return [
         f"View the live preview: {preview_link}",
-        "This preview is live for 7 days -- after that it'll be repurposed. No pressure, just didn't want you to miss it.",
-        "If you'd like to own it, reply YES. I'll connect your domain, swap in your own photos, and make any changes you want.",
-        f"Standard package: £2,000. This completed draft: £{config.WEBSITE_OFFER_PRICE:,}.",
+        _urgency_note(),
+        _buy_or_reply_line(lead_id),
+        _pricing_line(),
         _SENDER_NAME,
     ]
 
@@ -307,16 +330,22 @@ def _plain_text_body(lead: dict, preview_link: str, intro: str) -> str:
     return "\n\n".join([
         intro,
         _checklist_paragraph(city, lead),
-        *_closing_paragraphs(preview_link),
+        *_closing_paragraphs(lead["id"], preview_link),
     ])
 
 
 def _build_html_body(lead: dict, preview_link: str, intro: str) -> str:
     """Intro greeting, then the cached screenshot, then the "what we
     improved" checklist, then the closing paragraphs -- only called when a
-    screenshot is actually available; see _send_cold_email_impl."""
+    screenshot is actually available; see _send_cold_email_impl.
+
+    Renders its own buttons for the preview link and the self-serve buy
+    link (nicer than a raw URL) rather than reusing _closing_paragraphs'
+    plain-text lines verbatim -- those two lines exist there for the
+    plain-text body, which has no buttons to render instead."""
     city = lead.get("location") or "your area"
     escaped_link = html_module.escape(preview_link)
+    escaped_buy_link = html_module.escape(_buy_link(lead["id"]))
     intro_html = f"<p>{html_module.escape(intro)}</p>"
     image_html = (
         f'<p><a href="{escaped_link}">'
@@ -330,10 +359,18 @@ def _build_html_body(lead: dict, preview_link: str, intro: str) -> str:
         'background:#2563eb;color:white;border-radius:8px;text-decoration:none;'
         'font-size:16px;font-weight:bold;margin:16px 0">View Your Free Website &rarr;</a>'
     )
-    closing_paragraphs = _closing_paragraphs(preview_link)
-    closing_html = preview_button_html + "".join(
-        f"<p>{html_module.escape(para).replace(chr(10), '<br>')}</p>"
-        for para in closing_paragraphs[1:]
+    buy_button_html = (
+        f'<p><a href="{escaped_buy_link}" style="display:inline-block;padding:14px 28px;'
+        'background:#16a34a;color:white;border-radius:8px;text-decoration:none;'
+        'font-size:16px;font-weight:bold;">Buy This Website &rarr;</a></p>'
+        "<p>Or just reply YES and I'll take it from there.</p>"
+    )
+    closing_html = (
+        preview_button_html
+        + f"<p>{html_module.escape(_urgency_note())}</p>"
+        + buy_button_html
+        + f"<p>{html_module.escape(_pricing_line())}</p>"
+        + f"<p>{html_module.escape(_SENDER_NAME)}</p>"
     )
     return intro_html + image_html + checklist_html + closing_html
 
@@ -496,12 +533,14 @@ def _followup_copy(lead: dict, followup_index: int, preview_link: str) -> tuple[
     text, no screenshot -- a quick personal note, not a second brochure."""
     original_subject = _first_outbound_subject(lead["id"]) or f"a website for {lead['business_name']}"
     subject = f"Re: {original_subject}"
+    buy_link = _buy_link(lead["id"])
     if followup_index == 0:
         body = (
             "Just floating this back up in case it got buried -- the free preview "
             f"site I built for {lead['business_name']} is still live here: {preview_link}\n\n"
-            "If you'd like to make it yours, reply YES and I'll get it set up on "
-            "your own domain. If not, no worries at all.\n\n"
+            f"If you'd like to make it yours, buy it directly here: {buy_link} -- or "
+            "just reply YES and I'll get it set up on your own domain. If not, no "
+            "worries at all.\n\n"
             f"{_SENDER_NAME}"
         )
     else:
@@ -509,8 +548,8 @@ def _followup_copy(lead: dict, followup_index: int, preview_link: str) -> tuple[
             "Last note from me, promise. I'll be taking "
             f"{lead['business_name']}'s preview site down at the end of this week -- "
             f"if you'd like to keep it, here's the link one more time: {preview_link}\n\n"
-            "Reply YES any time before then and it's yours. Either way, wishing "
-            "you a busy season.\n\n"
+            f"Buy it here: {buy_link} -- or reply YES any time before then and it's "
+            "yours. Either way, wishing you a busy season.\n\n"
             f"{_SENDER_NAME}"
         )
     return subject, body

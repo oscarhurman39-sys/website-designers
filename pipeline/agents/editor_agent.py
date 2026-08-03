@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
+import config
 from agents import design_agent
 from utils import db, editor_auth, email_utils, github_api, site_audit, ssrf_guard, url_safety, vercel_api
 
@@ -190,42 +191,58 @@ def publish(lead_id: int) -> dict[str, Any]:
     return {"preview_url": preview_url, "repo_updated": repo_updated}
 
 
-def request_new_editor_link(lead_id: int, submitted_email: str) -> bool:
-    """Issue and email a fresh editor link to a lead's ON-FILE contact
-    email. Returns True iff the submitted address matched (case-
-    insensitively) and an email was sent -- an HTTP handler for this MUST
-    show the identical response either way ("if that email is on file,
-    a new link is on its way") regardless of the return value, or this
-    endpoint becomes an oracle for enumerating valid emails per lead_id,
-    or worse, a way to get a working link without controlling that inbox
-    at all.
+def send_editor_link(lead_id: int) -> bool:
+    """Issue and email a fresh editor link to a lead's on-file contact
+    address. Used directly wherever we already know who this is (right
+    after transfer/onboarding) -- for a client-initiated "I lost my link"
+    request, see request_new_editor_link below, which additionally
+    verifies the submitted email actually matches before calling this.
 
-    Known simplification: if the lead's email previously unsubscribed
-    from cold-outreach email (db.is_unsubscribed), email_utils.send_email
-    refuses to send at all -- there's no separate transactional-vs-
-    marketing send path in this pipeline yet. That failure is caught and
-    treated as "could not deliver" here rather than raised.
+    Returns False (without raising) if there's no contact email on file
+    or the send fails. Known simplification: if the lead's email
+    previously unsubscribed from cold-outreach email (db.is_unsubscribed),
+    email_utils.send_email refuses to send at all -- there's no separate
+    transactional-vs-marketing send path in this pipeline yet. That
+    failure is caught and treated as "could not deliver" here rather than
+    raised.
     """
+    lead = db.get_lead(lead_id)
+    if lead is None or not lead.get("contact_email"):
+        return False
+    to_addr = lead["contact_email"]
+
+    link = editor_auth.create_editor_link(lead_id)
+    subject = f"Your website editing link -- {lead['business_name']}"
+    body = (
+        f"Here's a fresh link to edit your website:\n\n{link}\n\n"
+        f"This link expires in {editor_auth.SESSION_LIFETIME_DAYS} days. "
+        "If you didn't request this, you can safely ignore this email."
+    )
+    try:
+        message_id = email_utils.send_email(to_addr=to_addr, subject=subject, body_text=body, lead_id=lead_id)
+        db.insert_email_thread(
+            lead_id=lead_id, direction="outbound", subject=subject, body=body,
+            from_addr=config.EMAIL_USER, to_addr=to_addr, message_id=message_id,
+        )
+    except RuntimeError as exc:  # noqa: BLE001 - e.g. previously unsubscribed; see docstring
+        print(f"[editor_agent] Could not email a new editor link to lead {lead_id}: {exc}")
+        return False
+    return True
+
+
+def request_new_editor_link(lead_id: int, submitted_email: str) -> bool:
+    """Issue and email a fresh editor link, but ONLY if `submitted_email`
+    matches the lead's ON-FILE contact email (case-insensitively). Returns
+    True iff it matched and an email was sent -- an HTTP handler for this
+    MUST show the identical response either way ("if that email is on
+    file, a new link is on its way") regardless of the return value, or
+    this endpoint becomes an oracle for enumerating valid emails per
+    lead_id, or worse, a way to get a working link without controlling
+    that inbox at all."""
     lead = db.get_lead(lead_id)
     if lead is None:
         return False
     on_file = (lead.get("contact_email") or "").strip().lower()
     if not on_file or on_file != (submitted_email or "").strip().lower():
         return False
-
-    link = editor_auth.create_editor_link(lead_id)
-    try:
-        email_utils.send_email(
-            to_addr=on_file,
-            subject=f"Your website editing link -- {lead['business_name']}",
-            body_text=(
-                f"Here's a fresh link to edit your website:\n\n{link}\n\n"
-                f"This link expires in {editor_auth.SESSION_LIFETIME_DAYS} days. "
-                "If you didn't request this, you can safely ignore this email."
-            ),
-            lead_id=lead_id,
-        )
-    except RuntimeError as exc:  # noqa: BLE001 - e.g. previously unsubscribed; see docstring
-        print(f"[editor_agent] Could not email a new editor link to lead {lead_id}: {exc}")
-        return False
-    return True
+    return send_editor_link(lead_id)

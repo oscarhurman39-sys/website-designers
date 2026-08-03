@@ -7,6 +7,9 @@
   POST /edit/<lead_id>                         -- save + publish edits from that form
   GET  /edit/<lead_id>/request-link            -- form to request a fresh editor link
   POST /edit/<lead_id>/request-link            -- emails a fresh link if the address matches
+  GET  /buy/<lead_id>                          -- self-serve: creates a fresh Stripe Checkout Session and redirects
+  GET  /onboard/<lead_id>?token=<token>        -- claim-your-website form (see agents/onboarding_agent.py)
+  POST /onboard/<lead_id>                      -- runs the automated GitHub/Vercel handoff steps
   POST /webhook/stripe                         -- Stripe `checkout.session.completed` events
 
 Run standalone with `python webhook_server.py` (dev server) or behind a real
@@ -20,7 +23,7 @@ import stripe
 from flask import Flask, Response, abort, redirect, render_template_string, request, send_from_directory
 
 import config
-from agents import editor_agent
+from agents import editor_agent, onboarding_agent
 from utils import compliance, content_importer, db, editor_auth, screenshot, stripe_utils, tracker
 
 # Server-rendered (via Flask's autoescaping render_template_string --
@@ -86,6 +89,39 @@ _REQUEST_LINK_TEMPLATE = """
 <form method="post">
   <input type="email" name="email" placeholder="you@example.com" required style="width:100%;padding:8px;box-sizing:border-box;">
   <button type="submit" style="margin-top:12px;padding:10px 24px;border:none;border-radius:6px;background:#1e293b;color:white;cursor:pointer;">Send me a link</button>
+</form>
+</body></html>
+"""
+
+_ONBOARD_FORM_TEMPLATE = """
+<!doctype html><html><head><title>Claim your website -- {{ lead.business_name }}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; color: #1e293b; }
+  label { display: block; font-weight: 600; margin-bottom: 4px; }
+  input[type=text], input[type=email] { width: 100%; padding: 8px; box-sizing: border-box; font: inherit; border: 1px solid #cbd5e1; border-radius: 6px; }
+  .field { margin-bottom: 20px; }
+  .message { padding: 12px; background: #eef2ff; border-radius: 6px; margin-bottom: 20px; }
+  button { padding: 10px 24px; font-size: 1rem; border: none; border-radius: 6px; background: #1e293b; color: white; cursor: pointer; }
+</style>
+</head>
+<body>
+<h1>Claim {{ lead.business_name }}'s website</h1>
+<p>A couple of optional details and we'll set everything up in your name --
+takes under a minute. Leave anything blank if you'd rather we keep
+managing it for you.</p>
+{% if message %}<p class="message">{{ message }}</p>{% endif %}
+<form method="post">
+<input type="hidden" name="token" value="{{ token }}">
+<div class="field">
+  <label for="github_username">GitHub username (optional)</label>
+  <input type="text" id="github_username" name="github_username" value="{{ github_username }}">
+</div>
+<div class="field">
+  <label for="vercel_email">Email for site access</label>
+  <input type="email" id="vercel_email" name="vercel_email" value="{{ vercel_email }}">
+</div>
+<button type="submit">Claim my website</button>
 </form>
 </body></html>
 """
@@ -182,6 +218,66 @@ def create_app() -> Flask:
             message = "If that email is on file for this site, a new editing link is on its way."
         return render_template_string(_REQUEST_LINK_TEMPLATE, message=message)
 
+    @app.route("/buy/<int:lead_id>", methods=["GET"])
+    def buy_now(lead_id: int) -> Response:
+        """Self-serve checkout: creates a FRESH Stripe Checkout Session on
+        every click and redirects to it, rather than embedding a
+        pre-generated checkout URL in an email that might be opened days
+        later -- Checkout Sessions expire (Stripe's default is 24 hours),
+        so a stale embedded link would silently break. This is the
+        buy-now-with-zero-human-intervention path (see PLAN.md's
+        automation audit); `payment ready <lead_id>` in main.py's console
+        remains the operator-triggered path for a lead who replied
+        instead of self-serving."""
+        lead = db.get_lead(lead_id)
+        if lead is None:
+            abort(404)
+        if lead["status"] == "won":
+            return (
+                "<h1>You're all set!</h1>"
+                "<p>We already have your payment for this site -- no need to pay again. "
+                "Reach out if anything looks off.</p>",
+                200,
+            )
+        try:
+            checkout_url = stripe_utils.create_checkout_session(
+                lead_id=lead_id, business_name=lead["business_name"],
+                customer_email=lead.get("contact_email") or None,
+            )
+        except Exception as exc:  # noqa: BLE001 - show a friendly page instead of a raw 500
+            return f"<h1>Something went wrong</h1><p>Could not start checkout: {exc}</p>", 500
+        return redirect(checkout_url, code=302)
+
+    @app.route("/onboard/<int:lead_id>", methods=["GET", "POST"])
+    def onboard(lead_id: int) -> Response:
+        token = request.values.get("token", "")
+        if not editor_auth.verify_editor_session(lead_id, token):
+            return render_template_string(_LINK_EXPIRED_TEMPLATE, lead_id=lead_id), 403
+        lead = db.get_lead(lead_id)
+        if lead is None:
+            abort(404)
+        if lead["status"] != "won":
+            return (
+                "<h1>Payment not yet confirmed</h1>"
+                "<p>Please wait a moment and refresh, or reply to your confirmation email if this persists.</p>",
+                409,
+            )
+
+        message = ""
+        if request.method == "POST":
+            try:
+                result = onboarding_agent.complete_onboarding(
+                    lead_id, request.form.get("github_username", ""), request.form.get("vercel_email", ""),
+                )
+                message = result["message"]
+            except Exception as exc:  # noqa: BLE001 - show what happened instead of a 500
+                message = f"Something went wrong: {exc}"
+
+        return render_template_string(
+            _ONBOARD_FORM_TEMPLATE, lead=lead, token=token, message=message,
+            github_username="", vercel_email=lead.get("contact_email") or "",
+        )
+
     @app.route("/payment-success", methods=["GET"])
     def payment_success() -> tuple[str, int]:
         return "<h1>Payment received -- thank you!</h1><p>We'll be in touch shortly.</p>", 200
@@ -211,11 +307,19 @@ def create_app() -> Flask:
                 lead = db.get_lead(lead_id)
                 if lead is not None:
                     db.update_lead_status(lead_id, "won", notes="Stripe checkout.session.completed")
+                    onboarding_sent = onboarding_agent.send_onboarding_email(lead_id)
                     banner = "*" * 70
                     print(
                         f"\n{banner}\nPAYMENT RECEIVED: {lead['business_name']} (lead {lead_id})\n"
-                        f"Run 'transfer {lead_id}' in the pipeline console to hand over the "
-                        f"GitHub repo and Vercel project.\n{banner}\n"
+                        + (
+                            "An onboarding email was sent automatically -- the client can claim their "
+                            "own site without you doing anything.\n"
+                            if onboarding_sent else
+                            "Could not auto-email onboarding (no contact email on file, or the send "
+                            "failed -- see the log above).\n"
+                        )
+                        + f"You can still run 'transfer {lead_id}' in the pipeline console any time "
+                        f"to do it yourself instead.\n{banner}\n"
                     )
         return "", 200
 
