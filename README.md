@@ -361,6 +361,27 @@ idempotent primitives -- nothing breaks if a client never touches the
 onboarding form and the operator just runs `transfer` instead, or does
 both).
 
+## AI-generated hero copy
+
+Every lead in a niche used to get the exact same hero tagline
+(`NICHE_HERO_TEXT`, e.g. every cafe: "Your daily cup in {city}") --
+identical copy is one of the clearest tells that a site is templated, not
+built for the specific business. `design_agent.hero_tagline()` now drafts
+a per-lead tagline instead, grounded in that lead's own facts (business
+name, trade, city, real services, any recognized specialty -- same
+retrieval-then-generate split `sales_agent.py` uses for cold-email
+openings, so the model writes FROM real facts instead of inventing them).
+Optional and fails soft: falls back to the deterministic `NICHE_HERO_TEXT`
+template when `HF_API_TOKEN` is unset, the API call fails, or the model's
+response doesn't parse into a short, clean line -- a bad API day never
+blocks a deploy or renders broken copy on a live preview.
+
+This is the first concrete step on `BASELINE.md`'s "Path B" (AI-native
+content generation) -- deliberately scoped to just the hero tagline first
+("start small, measure, expand") rather than rewriting the whole template
+system in one pass. The natural next increments are the services list and
+section selection.
+
 ## QA/readiness scanner
 
 `utils/site_audit.py` has two distinct entry points for two distinct

@@ -71,11 +71,15 @@ product/data-source decision, not mine to default into."
 
 ### Still templates?
 
-Yes. Every site is Jinja2 + a fixed set of niche templates + copy pulled
-from `NICHE_SERVICES`/`NICHE_HERO_TEXT` dicts (or imported real copy via
-`content_importer.py`, but still dropped into the same fixed template
-structure). Two leads in the same niche get structurally identical sites
-with swapped-in text.
+Mostly yes, with one piece now started: `design_agent.hero_tagline()`
+(2026-08-04) drafts a per-lead hero tagline grounded in that lead's own
+facts instead of the fixed `NICHE_HERO_TEXT` template, optional and
+fails soft to the old template (see `PLAN.md`'s 2026-08-04 entry and
+README's "AI-generated hero copy"). Everything else -- the services list,
+which optional sections a site includes (`NICHE_SECTIONS`), overall
+layout -- is still fixed per niche, not per lead. Two leads in the same
+niche still get structurally identical sites, just with one line of copy
+that now actually differs.
 
 This is the more interesting lever, and unlike lead sourcing it's cheap to
 test incrementally: use Claude to generate bespoke section copy, pick which

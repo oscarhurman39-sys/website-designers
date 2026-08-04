@@ -216,3 +216,32 @@ replies instead of clicking Buy Now (by design -- negotiation), and
 actually removing our own GitHub access (opt-in by design). Still
 nothing has been run against a real lead; see item 1 in "Next, in order"
 above -- that is still the actual next step, not more automation.
+
+## 2026-08-04: BASELINE.md and the first AI-native content step
+
+Wrote `BASELINE.md`: an honest snapshot of what this app still is
+underneath the automation shipped above (lead discovery is still
+DuckDuckGo scraping, site generation is still Jinja2 templates + curated
+copy dicts), and a prioritized plan for a real step-change rather than
+more incremental features. It names four paths (validate against reality
+first, AI-native content, smarter lead sourcing, productizing) and argues
+for sequencing: nothing else is provably worth prioritizing until a real
+batch has actually run (still this repo's `LEDGER.md` brick).
+
+`BASELINE.md` names AI-native content generation as the one investment
+worth starting on immediately regardless of that real-batch data, since
+it's cheap to test incrementally and doesn't require a vendor/business
+decision the way lead sourcing does. Shipped the first concrete increment:
+`design_agent.hero_tagline()` now drafts a per-lead tagline (real
+business name/trade/city/services, not a fixed per-niche template) using
+the same HF retrieval-then-generate pattern `sales_agent.py` already uses
+for cold-email openings -- optional, falls back to the old
+`NICHE_HERO_TEXT` template on any failure. 9 new tests
+(`tests/test_design_agent_ai_hero_tagline.py`), all HF calls mocked.
+
+**Deliberately not touched this pass:** the services list and section
+selection (`NICHE_SECTIONS`) are still fixed per niche -- the natural next
+increments on the same pattern, not done here to keep this change small
+and independently measurable. Lead sourcing (`BASELINE.md`'s Path C) and
+productizing (Path D) remain untouched, per the same reasoning as before:
+real business/vendor decisions, not mine to default into.

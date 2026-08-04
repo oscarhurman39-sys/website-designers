@@ -11,6 +11,12 @@ gallery, service area banner, etc. -- see templates/_shared/sections.html
 and the NICHE_SECTIONS manifest below) instead of every niche hand-rolling
 its own copy of the same section.
 
+hero_tagline() prefers an AI-generated, per-lead tagline (grounded in this
+specific business's own facts -- name, trade, city, real services) over
+the fixed NICHE_HERO_TEXT template that every lead in a niche otherwise
+shares. Optional: falls back to the template when HF_API_TOKEN is unset
+or the call fails, same pattern as sales_agent.py's cold-email drafting.
+
 NO GitHub repo is created at preview time. Rendered files are kept on disk
 under pipeline/rendered_sites/ instead, and the private hand-off repo is
 created lazily by create_handoff_repo() -- only when a client actually buys
@@ -25,10 +31,17 @@ from pathlib import Path
 from typing import Optional
 
 import requests
+from huggingface_hub import InferenceClient
 from jinja2 import ChoiceLoader, Environment, FileSystemLoader, select_autoescape
 
 import config
 from utils import content_importer, db, github_api, screenshot, site_audit, tracer, tracker, url_safety, vercel_api
+
+# Same model sales_agent.py uses for cold-email opening lines -- kept as its
+# own constant here (not imported from sales_agent) since the two agents'
+# HF usage is otherwise independent and shouldn't be coupled just to share
+# one string.
+HF_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 # Shared Jinja macros (templates/_shared/sections.html) every niche template
@@ -156,7 +169,81 @@ def niche_services(lead: dict) -> list[str]:
     return [niche_display_name(niche)]
 
 
+def _hf_client() -> InferenceClient:
+    if not config.HF_API_TOKEN:
+        raise RuntimeError("HF_API_TOKEN is not configured.")
+    return InferenceClient(model=HF_MODEL, token=config.HF_API_TOKEN)
+
+
+def _hero_tagline_facts(lead: dict) -> list[str]:
+    """The concrete, verifiable hooks the model writes the tagline FROM --
+    same retrieval/generation split sales_agent.py uses for cold-email
+    openings, so per-lead copy stays grounded instead of invented."""
+    facts = [
+        f"Business name: {lead['business_name']}",
+        f"Trade: {niche_display_name(lead['niche'])}",
+        f"City: {lead.get('location') or 'their area'}",
+    ]
+    services = niche_services(lead)[:3]
+    if services:
+        facts.append(f"Services: {', '.join(services)}")
+    specialty = lead_specialty(lead)
+    if specialty:
+        facts.append(f"Specialty: {specialty}")
+    return facts
+
+
+def _hero_tagline_prompt(lead: dict) -> str:
+    facts = "\n".join(f"- {fact}" for fact in _hero_tagline_facts(lead))
+    return (
+        "<s>[INST] Write ONE short hero tagline for this local business's "
+        "website, to sit directly under its name at the top of the page.\n\n"
+        f"Facts (use them; invent nothing else):\n{facts}\n\n"
+        "Rules:\n"
+        "- One short sentence, 3-8 words\n"
+        "- No quotation marks, no period at the end\n"
+        "- Specific to this business/trade/city, not generic filler\n"
+        "- No hype, no exclamation marks, no emoji\n\n"
+        "Respond with ONLY the tagline, nothing else. [/INST]"
+    )
+
+
+_MAX_HERO_TAGLINE_WORDS = 10
+
+
+def _parse_hero_tagline(raw_text: str) -> Optional[str]:
+    """None (triggers the deterministic fallback) if the model's output is
+    empty or implausibly long -- a model that ignores instructions must
+    never be allowed to render broken/garbled copy on a live preview."""
+    stripped = raw_text.strip()
+    if not stripped:
+        return None
+    line = stripped.splitlines()[0].strip().strip("\"'").strip()
+    if not line or len(line.split()) > _MAX_HERO_TAGLINE_WORDS:
+        return None
+    return line
+
+
+def _ai_hero_tagline(lead: dict) -> Optional[str]:
+    """Per-lead AI hero tagline, or None on any failure (never raises) so
+    hero_tagline() can fall back to the deterministic NICHE_HERO_TEXT
+    template -- a bad API day must never break a deploy."""
+    if not config.HF_API_TOKEN:
+        return None
+    try:
+        raw = _hf_client().text_generation(
+            _hero_tagline_prompt(lead), max_new_tokens=40, temperature=0.7, do_sample=True
+        )
+    except Exception as exc:  # noqa: BLE001 - any HF/network failure falls back gracefully
+        print(f"[design_agent] AI hero tagline failed for lead {lead.get('id')}, using template: {exc}")
+        return None
+    return _parse_hero_tagline(raw)
+
+
 def hero_tagline(lead: dict) -> str:
+    ai_tagline = _ai_hero_tagline(lead)
+    if ai_tagline:
+        return ai_tagline
     niche = lead["niche"]
     city = lead.get("location") or "your area"
     template = NICHE_HERO_TEXT.get(niche, DEFAULT_HERO_TEXT)
