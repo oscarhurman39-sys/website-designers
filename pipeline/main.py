@@ -14,8 +14,10 @@ Then sleeps MAIN_LOOP_SLEEP_SECONDS and repeats, until Ctrl-C.
 A second thread reads operator commands from stdin so human-in-the-loop
 actions (takeover / payment / transfer) don't have to wait for the loop:
   takeover <lead_id>        - pause automation, hand negotiation to a human
+  release <lead_id>         - clear the takeover block (see its own note on lead status)
   payment ready <lead_id>   - create + email a Stripe Checkout link
   transfer <lead_id>        - hand the GitHub repo / Vercel project to the client
+  report <lead_id>          - print a monthly maintenance report (see maintenance.py)
   status                    - print a lead-count-by-status summary
   pause / resume            - pause/resume the automated loop
   help                      - list commands
@@ -30,7 +32,8 @@ import time
 from pathlib import Path
 
 import config
-from agents import design_agent, lead_agent, sales_agent
+import maintenance
+from agents import design_agent, editor_agent, lead_agent, offers, sales_agent
 from utils import db, github_api, stripe_utils, vercel_api
 
 PIPELINE_DIR = Path(__file__).resolve().parent
@@ -76,6 +79,12 @@ def _run_cycle() -> None:
     sent_lead_id = sales_agent.send_next_pending()
     if sent_lead_id:
         print(f"[main] Sent cold email to lead {sent_lead_id}")
+    else:
+        # Follow-ups only use send capacity left over after new cold emails,
+        # keeping the pipeline at one automated send per cycle.
+        followed_up_id = sales_agent.send_followups()
+        if followed_up_id:
+            print(f"[main] Sent follow-up to lead {followed_up_id}")
 
     replies = sales_agent.check_inbox()
     if replies:
@@ -103,7 +112,8 @@ def _handle_payment_ready(lead_id: int) -> None:
         return
     try:
         checkout_url = stripe_utils.create_checkout_session(
-            lead_id=lead_id, business_name=lead["business_name"], customer_email=lead["contact_email"]
+            lead_id=lead_id, business_name=lead["business_name"], customer_email=lead["contact_email"],
+            amount_usd=offers.get_offer(lead).price(lead),
         )
     except Exception as exc:  # noqa: BLE001
         print(f"[main] Failed to create Stripe checkout session: {exc}")
@@ -128,6 +138,19 @@ def _handle_payment_ready(lead_id: int) -> None:
         print(f"[main] Could not email payment link: {exc}")
 
 
+def _send_editor_link_email(lead_id: int) -> None:
+    """Actually deliver the client's editor link by email instead of only
+    ever showing it in the dashboard or the operator's own console -- the
+    link (utils/editor_auth.create_editor_link) already existed and was
+    secure; nobody was sending it anywhere. Thin wrapper around
+    agents/editor_agent.send_editor_link, which also backs the
+    self-service "request a new link" flow -- one send path, not two."""
+    if editor_agent.send_editor_link(lead_id):
+        print(f"[main] Editor link emailed to lead {lead_id}.")
+    else:
+        print(f"[main] Could not email the editor link for lead {lead_id} (see above for why).")
+
+
 def _handle_transfer(lead_id: int) -> None:
     lead = db.get_lead(lead_id)
     website = db.get_website_by_lead(lead_id)
@@ -138,16 +161,21 @@ def _handle_transfer(lead_id: int) -> None:
         print(f"[main] Lead {lead_id} is not marked 'won' yet (status: {lead['status']}). Aborting.")
         return
 
-    # --- GitHub: invite the client as a collaborator on their repo ---
+    # --- GitHub: create the hand-off repo now (previews don't get one) and
+    # invite the client as a collaborator ---
     github_username = input(f"GitHub username to invite for lead {lead_id} (blank to skip): ").strip()
     if github_username:
         try:
+            if not website.get("repo_full_name"):
+                repo_url, repo_full_name = design_agent.create_handoff_repo(lead_id)
+                website = db.get_website_by_lead(lead_id)
+                print(f"[main] Created hand-off repo {repo_full_name} ({repo_url})")
             github_api.invite_collaborator(website["repo_full_name"], github_username, permission="admin")
             print(f"[main] Invited {github_username} to {website['repo_full_name']}")
         except Exception as exc:  # noqa: BLE001
-            print(f"[main] Failed to invite GitHub collaborator: {exc}")
+            print(f"[main] Failed to create/invite on the GitHub repo: {exc}")
     else:
-        print("[main] Skipping GitHub invite.")
+        print("[main] Skipping GitHub invite (no repo is created until one is needed).")
 
     # --- Vercel: invite the client to the project (requires VERCEL_TEAM_ID) ---
     default_email = lead.get("contact_email") or ""
@@ -173,17 +201,22 @@ def _handle_transfer(lead_id: int) -> None:
         print("[main] Skipping Vercel invite.")
 
     # --- Removing your own access: GitHub only, and only on explicit confirmation ---
-    answer = input("Remove your own GitHub repo access now? (y/n): ").strip().lower()
-    if answer == "y":
-        try:
-            own_username = github_api.get_authenticated_username()
-            github_api.remove_collaborator(website["repo_full_name"], own_username)
-            db.mark_website_transferred(lead_id)
-            print(f"[main] GitHub access removed. Website for lead {lead_id} marked as transferred.")
-        except Exception as exc:  # noqa: BLE001
-            print(f"[main] Failed to remove own GitHub access: {exc}")
+    if website.get("repo_full_name"):
+        answer = input("Remove your own GitHub repo access now? (y/n): ").strip().lower()
+        if answer == "y":
+            try:
+                own_username = github_api.get_authenticated_username()
+                github_api.remove_collaborator(website["repo_full_name"], own_username)
+                db.mark_website_transferred(lead_id)
+                print(f"[main] GitHub access removed. Website for lead {lead_id} marked as transferred.")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[main] Failed to remove own GitHub access: {exc}")
+        else:
+            print("[main] Leaving GitHub access as-is (not marked transferred).")
     else:
-        print("[main] Leaving GitHub access as-is (not marked transferred).")
+        print("[main] No GitHub repo exists for this lead (none was created), skipping access removal.")
+
+    _send_editor_link_email(lead_id)
 
     print(
         "[main] NOTE: Vercel access is never removed automatically. Your Vercel team "
@@ -203,10 +236,22 @@ def _handle_command(line: str) -> None:
     if cmd == "takeover" and len(parts) == 2 and parts[1].isdigit():
         sales_agent.begin_takeover(int(parts[1]))
         print(f"[main] Lead {parts[1]} is now under manual takeover. Automation paused for this lead.")
+    elif cmd == "release" and len(parts) == 2 and parts[1].isdigit():
+        sales_agent.end_takeover(int(parts[1]))
+        print(
+            f"[main] Lead {parts[1]} released from manual takeover. Note: this only clears the "
+            "block -- automation acts on a lead by its status, so it won't actually resume sending "
+            "unless the lead's status is also reset (e.g. back to 'designed') separately."
+        )
     elif cmd == "payment" and len(parts) == 3 and parts[1] == "ready" and parts[2].isdigit():
         _handle_payment_ready(int(parts[2]))
     elif cmd == "transfer" and len(parts) == 2 and parts[1].isdigit():
         _handle_transfer(int(parts[1]))
+    elif cmd == "report" and len(parts) == 2 and parts[1].isdigit():
+        try:
+            print(maintenance.monthly_report(int(parts[1])))
+        except ValueError as exc:
+            print(f"[main] {exc}")
     elif cmd == "status":
         _print_status()
     elif cmd == "pause":

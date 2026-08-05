@@ -1,0 +1,68 @@
+{#
+  Shared section macros -- reusable building blocks a niche template can
+  {% import %} instead of hand-rolling its own copy of the same section.
+  Loaded via a second Jinja2 loader on top of the niche's own directory
+  (see design_agent.render_template_files's ChoiceLoader), so any template
+  under templates/<niche>/ can do:
+
+      {% import "sections.html" as sections %}
+      {{ sections.services_grid(services, title="Menu") }}
+
+  Every macro renders nothing (returns an empty string) when its data is
+  empty, so a template can call one unconditionally instead of wrapping
+  every call in its own {% if %} -- see design_agent.py's NICHE_SECTIONS
+  manifest for which niches opt into which of these.
+#}
+
+{% macro services_grid(services, title="What We Offer", section_id="", heading_class="text-slate-800") %}
+{% if services %}
+<section id="{{ section_id or (title | lower | replace(' ', '-')) }}" class="bg-slate-50 border-y border-slate-200">
+  <div class="max-w-3xl mx-auto px-6 py-16 text-center">
+    <h2 class="text-2xl font-bold {{ heading_class }} mb-6">{{ title }}</h2>
+    <ul class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left max-w-xl mx-auto">
+      {% for item in services %}
+      <li class="rounded-lg bg-white border border-slate-200 px-4 py-3 font-medium">{{ item }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+</section>
+{% endif %}
+{% endmacro %}
+
+{% macro photo_gallery(photos, title="Recent Work") %}
+{% if photos %}
+<section id="gallery" class="max-w-5xl mx-auto px-6 py-16 text-center">
+  <h2 class="text-2xl font-bold mb-6">{{ title }}</h2>
+  <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+    {% for photo in photos %}
+    <img src="{{ photo }}" alt="{{ title }}" class="rounded-lg object-cover h-32 w-full" loading="lazy">
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+{% endmacro %}
+
+{% macro service_area_banner(location, emergency=False, accent_class="bg-slate-800") %}
+<section id="service-area" class="{{ accent_class }} text-white">
+  <div class="max-w-3xl mx-auto px-6 py-16 text-center">
+    <h2 class="text-2xl font-bold mb-4">Service Area</h2>
+    <p class="text-white/80">Proudly serving {{ location }} and the surrounding area.</p>
+    {% if emergency %}
+    <p class="mt-3 inline-block rounded-full bg-white/10 px-4 py-1 text-sm font-semibold">24/7 Emergency Callouts</p>
+    {% endif %}
+  </div>
+</section>
+{% endmacro %}
+
+{% macro hours_list(hours, title="Opening Hours") %}
+{% if hours %}
+<section id="hours" class="max-w-3xl mx-auto px-6 py-16 text-center">
+  <h2 class="text-2xl font-bold mb-6">{{ title }}</h2>
+  <ul class="inline-block text-left text-slate-600 space-y-1">
+    {% for line in hours %}
+    <li>{{ line }}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% endmacro %}

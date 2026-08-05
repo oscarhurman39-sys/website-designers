@@ -22,7 +22,14 @@ _TOKEN_PURPOSE = b"click"
 def _sign(lead_id: int) -> str:
     payload = str(lead_id).encode("utf-8")
     mac = hmac.new(config.SECRET_KEY.encode("utf-8"), _TOKEN_PURPOSE + b":" + payload, hashlib.sha256).digest()
-    token_bytes = payload + b"." + mac
+    # No separator byte between payload and mac -- a sha256 digest is
+    # always exactly 32 bytes, so verify_click_token can split on that
+    # fixed length unambiguously. A literal separator (e.g. b".") would be
+    # wrong here: mac is effectively random bytes, so it can itself
+    # contain that byte, corrupting the split about 1 in 8 times
+    # (confirmed empirically -- every click link using the old scheme had
+    # a ~12% chance of 404ing instead of redirecting to the real preview).
+    token_bytes = payload + mac
     return urlsafe_b64encode(token_bytes).decode("utf-8").rstrip("=")
 
 
@@ -31,7 +38,7 @@ def verify_click_token(token: str) -> Optional[int]:
     try:
         padded = token + "=" * (-len(token) % 4)
         raw = urlsafe_b64decode(padded.encode("utf-8"))
-        payload, mac = raw.rsplit(b".", 1)
+        payload, mac = raw[:-32], raw[-32:]  # sha256 digest is always exactly 32 bytes
         expected = hmac.new(
             config.SECRET_KEY.encode("utf-8"), _TOKEN_PURPOSE + b":" + payload, hashlib.sha256
         ).digest()

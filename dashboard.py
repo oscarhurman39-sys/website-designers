@@ -9,6 +9,7 @@ table to CSV.
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -23,11 +24,11 @@ _PIPELINE_DIR = Path(__file__).resolve().parent / "pipeline"
 sys.path.insert(0, str(_PIPELINE_DIR))
 
 import config  # noqa: E402
+import maintenance  # noqa: E402
 from agents import design_agent, lead_agent, sales_agent  # noqa: E402
-from utils import db, tracer  # noqa: E402
+from utils import db, editor_auth, tracer  # noqa: E402
 
 PAUSE_FLAG = _PIPELINE_DIR / ".paused"
-TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
 st.set_page_config(page_title="Cold Email Sales Pipeline", layout="wide")
 db.init_db()  # safe/idempotent if main.py hasn't started the DB yet
@@ -63,7 +64,7 @@ st.divider()
 
 # --- Add a lead manually --------------------------------------------------------
 st.subheader("Add a lead manually")
-_available_niches = sorted(p.name for p in TEMPLATES_DIR.iterdir() if p.is_dir()) if TEMPLATES_DIR.exists() else []
+_available_niches = sorted(design_agent.available_niches())
 with st.form("add_lead_form", clear_on_submit=True):
     col_a, col_b, col_c = st.columns(3)
     with col_a:
@@ -138,9 +139,17 @@ if not leads:
     st.info("No leads yet. Add one above, drop a CSV into pipeline/leads_inbox/, and start main.py.")
     st.stop()
 
+def _latest_readiness(lead_id: int):
+    """Prefer the live client site's own audit (maintenance.py) once one
+    exists -- it's the current truth for a sold/transferred site -- else
+    fall back to the free preview's audit."""
+    return db.get_latest_site_audit(lead_id, "live_client_site") or db.get_latest_site_audit(lead_id, "generated_preview")
+
+
 rows = []
 for lead in leads:
     website = db.get_website_by_lead(lead["id"])
+    readiness = _latest_readiness(lead["id"])
     rows.append(
         {
             "id": lead["id"],
@@ -149,6 +158,7 @@ for lead in leads:
             "status": lead["status"],
             "contact_email": lead["contact_email"],
             "preview_url": website["preview_url"] if website else "",
+            "readiness_pct": readiness["readiness_pct"] if readiness else None,
             "last_email": db.get_last_email_timestamp(lead["id"]) or "",
             "unsubscribed": bool(lead["unsubscribed"]),
         }
@@ -164,6 +174,19 @@ st.dataframe(
     use_container_width=True,
     column_config={
         "preview_url": st.column_config.LinkColumn("Preview"),
+        "readiness_pct": st.column_config.ProgressColumn(
+            "Basic checks",
+            help=(
+                "Percentage of BASIC publishing checks actually performed that passed "
+                "(HTTPS, mobile viewport, title/meta description, h1, image alt text, "
+                "inline-style colour contrast, and -- only when performed -- a broken-"
+                "link crawl). NOT a WCAG compliance certification or a complete link "
+                "audit: contrast only sees inline style= colour pairs, and the link "
+                "crawl only checks the first 15 links/images on the homepage. See "
+                "utils/site_audit.py's audit_readiness()."
+            ),
+            min_value=0, max_value=100, format="%d%%",
+        ),
     },
 )
 
@@ -197,11 +220,41 @@ if lead_id:
         }
     )
 
+    if website:
+        st.write(f"**Client editor link:** {editor_auth.create_editor_link(int(lead_id))}")
+        st.caption(
+            "Share this with the client -- it lets them edit text/photos/hours/services/"
+            "reviews on their own site (see agents/editor_agent.py) without touching layout, "
+            "colours, fonts, or navigation."
+        )
+
     if lead["status"] == "bounced":
         if st.button(f"Retry bounce for lead {lead_id} (reset to 'researched')"):
             db.update_lead_status(int(lead_id), "researched", notes="Manually retried from dashboard")
             st.success("Lead reset to 'researched'. It will be re-designed/emailed on the next cycle.")
             st.rerun()
+
+    readiness = _latest_readiness(int(lead_id))
+    if readiness:
+        result = json.loads(readiness["result"])
+        performed, total = result.get("checks_performed"), result.get("checks_total")
+        scope_note = f" ({performed}/{total} checks performed)" if performed is not None else ""
+        st.write(f"**Basic publishing checks: {readiness['readiness_pct']}%{scope_note}**")
+        st.caption(
+            "Not a WCAG compliance certification or a complete link audit -- see the "
+            "\"Basic checks\" column help text above for exactly what this covers."
+        )
+        issues = result.get("issues", [])
+        if issues:
+            st.write(f"{len(issues)} issue(s) remaining:")
+            for issue in issues:
+                st.write(f"- {issue}")
+        else:
+            st.write("No issues found in the checks performed.")
+
+    if lead["status"] == "won" and website:
+        with st.expander("Monthly maintenance report"):
+            st.text(maintenance.monthly_report(int(lead_id)))
 
     st.write("**Email thread**")
     thread = db.get_email_threads(int(lead_id))

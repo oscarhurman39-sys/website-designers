@@ -10,6 +10,9 @@ streamlit==1.38.0
 pandas==2.2.3
 huggingface_hub==0.25.2
 slack-sdk==3.33.1
+# Optional transport: only used when SENDGRID_API_KEY is set (SMTP is the
+# default). email_utils.py degrades gracefully if this isn't installed.
+sendgrid==6.11.0
 
 # Website preview screenshots (pipeline/utils/screenshot.py). After
 # installing, run `playwright install chromium` once (not needed if

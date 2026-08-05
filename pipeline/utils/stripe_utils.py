@@ -1,8 +1,15 @@
 """Stripe Checkout session creation and webhook signature verification.
 
-Payment is only ever triggered by an explicit human action (typing
-`payment ready <lead_id>` in the main.py console, see agents/sales_agent.py),
-never automatically by the pipeline itself.
+Two ways a Checkout Session gets created:
+  - Self-serve: webhook_server.py's `GET /buy/<lead_id>` creates one
+    on-the-fly and redirects, for a buyer clicking "Buy Now" in the cold
+    email or on the preview site itself -- zero human action on our side.
+  - Operator-triggered: `payment ready <lead_id>` in the main.py console
+    (see agents/sales_agent.py), for a lead who replied instead of
+    self-serving.
+Either way, the actual CHARGE is only ever initiated by the buyer's own
+action on Stripe's hosted page -- this module never charges a card
+without the customer entering their own payment details there.
 """
 from __future__ import annotations
 
@@ -18,16 +25,22 @@ stripe.api_key = config.STRIPE_SECRET_KEY
 def create_checkout_session(
     lead_id: int,
     business_name: str,
-    customer_email: str,
+    customer_email: Optional[str] = None,
     amount_usd: Optional[int] = None,
 ) -> str:
     """Create a Stripe Checkout Session for the fixed website price and
-    return its hosted checkout URL. Amount defaults to config.WEBSITE_PRICE_USD."""
+    return its hosted checkout URL. Amount defaults to
+    config.WEBSITE_PRICE_USD. `customer_email` pre-fills the checkout
+    page when known (e.g. the operator-triggered path); when None (the
+    self-serve `/buy/<lead_id>` path, where we don't necessarily know who
+    is clicking), Stripe just collects it during checkout instead."""
     amount_cents = (amount_usd if amount_usd is not None else config.WEBSITE_PRICE_USD) * 100
+    kwargs = {}
+    if customer_email:
+        kwargs["customer_email"] = customer_email
     session = stripe.checkout.Session.create(
         mode="payment",
         payment_method_types=["card"],
-        customer_email=customer_email,
         line_items=[
             {
                 "price_data": {
@@ -44,6 +57,7 @@ def create_checkout_session(
         metadata={"lead_id": str(lead_id)},
         success_url=f"{config.PUBLIC_BASE_URL}/payment-success?lead_id={lead_id}",
         cancel_url=f"{config.PUBLIC_BASE_URL}/payment-cancelled?lead_id={lead_id}",
+        **kwargs,
     )
     return session.url
 

@@ -5,6 +5,7 @@ from unittest.mock import Mock
 import pytest
 
 from agents import sales_agent
+from utils import url_safety
 
 
 def _response(url: str, text: str = "<html><body>site</body></html>", status_code: int = 200) -> Mock:
@@ -17,7 +18,7 @@ def _response(url: str, text: str = "<html><body>site</body></html>", status_cod
 
 def test_validate_preview_link_for_send_accepts_public_site(monkeypatch):
     monkeypatch.setattr(
-        sales_agent.requests,
+        url_safety.requests,
         "get",
         Mock(return_value=_response("https://example.vercel.app")),
     )
@@ -40,7 +41,7 @@ def test_validate_preview_link_for_send_rejects_bad_urls(preview_url):
 
 def test_validate_preview_link_for_send_rejects_auth_page(monkeypatch):
     monkeypatch.setattr(
-        sales_agent.requests,
+        url_safety.requests,
         "get",
         Mock(return_value=_response("https://example.vercel.app", "Vercel Authentication")),
     )

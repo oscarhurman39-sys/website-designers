@@ -29,13 +29,15 @@ REQUIRED_VARS: list[str] = [
     "EMAIL_PORT",
     "EMAIL_USER",
     "EMAIL_PASSWORD",
-    "HF_API_TOKEN",
     "STRIPE_SECRET_KEY",
     "STRIPE_WEBHOOK_SECRET",
     "ADMIN_EMAIL",
     "SENDING_DOMAIN",
     "PHYSICAL_ADDRESS",
 ]
+# HF_API_TOKEN is deliberately NOT required: sales_agent.py falls back to a
+# deterministic subject/intro when it's unset, so the pipeline runs
+# end-to-end with one less signup. Set it to get LLM-personalized openings.
 
 # --- Values (all optional at import time; validated via validate()) --------
 GITHUB_TOKEN: str = os.getenv("GITHUB_TOKEN", "")
@@ -70,6 +72,17 @@ WEBSITE_PRICE_USD: int = int(os.getenv("WEBSITE_PRICE_USD", "750") or 750)
 # the amount actually charged via Stripe checkout once a lead says yes.
 WEBSITE_OFFER_PRICE: int = int(os.getenv("WEBSITE_OFFER_PRICE", "750") or 750)
 
+# When True, agents/onboarding_agent.py removes our own GitHub access
+# automatically once a client submits the onboarding form -- completing a
+# fully hands-off transfer with no operator action. Defaults to False:
+# repo/Vercel collaborator INVITES still happen automatically either way
+# (both are invite-acceptance flows the invitee must approve, not
+# unilateral grants), but giving up our own access is a one-way,
+# consequential step, so it stays behind an explicit opt-in rather than
+# defaulting to today's safer manual-confirmation behavior (main.py's
+# `transfer` console command) being silently replaced.
+AUTO_REMOVE_GITHUB_ACCESS: bool = os.getenv("AUTO_REMOVE_GITHUB_ACCESS", "").strip().lower() in ("1", "true", "yes")
+
 # --- SendGrid configuration (optional) ----------------------------------------
 SENDGRID_API_KEY: str = os.getenv("SENDGRID_API_KEY", "")
 SENDGRID_FROM_EMAIL: str = os.getenv("SENDGRID_FROM_EMAIL", "")
@@ -90,6 +103,13 @@ EMAIL_MIN_DELAY_SECONDS: int = 120
 EMAIL_MAX_DELAY_SECONDS: int = 300
 EMAIL_MAX_PER_HOUR: int = 20
 EMAIL_MAX_PER_DAY: int = 50
+
+# --- Follow-up sequence -------------------------------------------------------
+# Days to wait after the PREVIOUS outbound email before each follow-up:
+# (3, 4) = nudge ~day 3, breakup ~day 7, then never contact again unless
+# they reply. Every follow-up carries the same unsubscribe footer and obeys
+# the same rate limits as the initial send.
+FOLLOWUP_GAPS_DAYS: tuple[int, ...] = (3, 4)
 # NOTE: A dedicated IP/domain warm-up tool (e.g. Instantly, Mailwarm, or a
 # manual warm-up schedule) is strongly recommended for the first 2-4 weeks of
 # a new sending domain's life. This pipeline only staggers *send timing* and
