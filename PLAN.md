@@ -245,3 +245,44 @@ increments on the same pattern, not done here to keep this change small
 and independently measurable. Lead sourcing (`BASELINE.md`'s Path C) and
 productizing (Path D) remain untouched, per the same reasoning as before:
 real business/vendor decisions, not mine to default into.
+
+## 2026-08-05: PLATFORM.md and extracting the Offer interface
+
+Wrote `PLATFORM.md`: a plan for generalizing this from "sells websites"
+to "runs cold-email sales pipelines for whatever gets plugged in" --
+explicitly not phone sales; "sales team" means more people running the
+same async, email-first takeover flow, never calls. It found that
+`sales_agent.py`, `stripe_utils.py`, `webhook_server.py`'s `/buy` +
+webhook, and `compliance.py`/`tracker.py` are already offer-agnostic; only
+three things actually vary by offer (what gets built, what it costs, how
+it's handed over), and those were hardcoded directly into otherwise-
+generic call sites.
+
+Shipped step 2 of that plan: `agents/offers/base.py` defines the
+three-method contract (`build_artifact`/`price`/`fulfill`, plus
+`validate_offer()` so a broken offer module fails at import, not on the
+first real lead); `agents/offers/website.py` implements it as thin
+delegation to the exact same, unmodified `design_agent.py`/
+`onboarding_agent.py`/`config.py` -- no behavior changed, nothing
+rewritten. `agents/offers/registry.get_offer(lead)` resolves every lead to
+the website offer today (there's only one); it's the one seam a future
+`offer_id` column changes without touching any caller. Wired the three
+real touch points that were hardcoding website specifics: `main.py`'s
+`payment ready` command and `webhook_server.py`'s `/buy` route now price
+via `offers.get_offer(lead).price(lead)` instead of relying on
+`stripe_utils`'s default; `/onboard`'s POST handler now fulfills via
+`offers.get_offer(lead).fulfill(...)` instead of importing
+`onboarding_agent` directly. 9 new tests
+(`tests/test_offers_interface.py`); 2 existing tests updated for the new
+`amount_usd` kwarg. 219 total, up from 210.
+
+**Deliberately not touched:** `design_agent.run()`'s per-lead build loop
+(with its retry/attempt-counting) still lives in `design_agent.py` and is
+still called directly by `main.py` -- generalizing that loop into
+"for lead in researched: get_offer(lead).build_artifact(lead)" is step
+3's job once an `offer_id` column exists to dispatch on; doing it now
+would mean guessing at retry semantics for offers that don't exist yet.
+`sales_agent.py`'s pitch copy was never touched or wrapped in the
+interface either -- on inspection it turned out to already be fully
+generic (drafts from the lead's own scraped facts, not anything website-
+specific), so there was nothing there to extract.

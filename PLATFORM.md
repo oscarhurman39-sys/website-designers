@@ -135,11 +135,19 @@ team needs:
 1. **Still Path A first, unchanged from `BASELINE.md`.** Validate the
    core six-step pattern against one real offer (websites) before
    multiplying it — scaling something unproven just multiplies the
-   waste if the pattern itself doesn't convert.
+   waste if the pattern itself doesn't convert. Still not done — see
+   `LEDGER.md`.
 2. **Extract the `Offer` interface**, with website as the first (proven)
-   implementation. Pure refactor, no new capability, validated by the
-   existing 210 tests continuing to pass. Doesn't require knowing your
-   second offer yet.
+   implementation. **Done (2026-08-05, see `PLAN.md`).**
+   `agents/offers/base.py`'s contract (`build_artifact`/`price`/
+   `fulfill`) plus `agents/offers/website.py` as pure delegation to the
+   unchanged `design_agent.py`/`onboarding_agent.py`/`config.py`;
+   `main.py`'s `payment ready` and `webhook_server.py`'s `/buy` +
+   `/onboard` now go through `agents/offers/registry.get_offer(lead)`
+   instead of hardcoding website specifics. `design_agent.run()`'s build
+   loop and its retry/attempt-counting were deliberately left in place,
+   still called directly by `main.py` — generalizing that loop is step
+   3's job, once there's an `offer_id` to dispatch on.
 3. **Add `offer_id` to the data model** and offer-scoped reporting.
 4. **Pick and build ONE second offer**, end to end, through the new
    interface — a real decision only you can make, and the only real test

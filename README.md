@@ -382,6 +382,29 @@ content generation) -- deliberately scoped to just the hero tagline first
 system in one pass. The natural next increments are the services list and
 section selection.
 
+## Offer interface
+
+`sales_agent.py` (drafting, sending, follow-ups, reply classification,
+takeover), `stripe_utils.py`/`webhook_server.py`'s `/buy` + Stripe
+webhook, and `compliance.py`/`tracker.py` were already offer-agnostic --
+none of them know or care that what's being sold is a website. Only three
+things actually varied by offer: what gets built (`design_agent.
+process_lead`), what it costs (`config.WEBSITE_PRICE_USD`), and how it's
+handed over (`onboarding_agent.complete_onboarding`) -- and those were
+hardcoded directly into the generic call sites (`main.py`'s
+`payment ready` command, `webhook_server.py`'s `/buy` and `/onboard`
+routes).
+
+`agents/offers/` formalizes that three-method contract
+(`build_artifact`/`price`/`fulfill`, see `offers/base.py`) and
+`agents/offers/website.py` implements it as thin delegation to the exact
+same, unmodified `design_agent.py`/`onboarding_agent.py`/`config.py` --
+no behavior changed, no new capability, only where the call sites look
+up "which offer." `agents/offers/registry.get_offer(lead)` resolves every
+lead to the website offer today (there's only one); it's the one seam a
+future `offer_id` column would change without touching any of its
+callers. See `PLATFORM.md` for the full plan this is step 2 of.
+
 ## QA/readiness scanner
 
 `utils/site_audit.py` has two distinct entry points for two distinct

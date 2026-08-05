@@ -33,7 +33,7 @@ from pathlib import Path
 
 import config
 import maintenance
-from agents import design_agent, editor_agent, lead_agent, sales_agent
+from agents import design_agent, editor_agent, lead_agent, offers, sales_agent
 from utils import db, github_api, stripe_utils, vercel_api
 
 PIPELINE_DIR = Path(__file__).resolve().parent
@@ -112,7 +112,8 @@ def _handle_payment_ready(lead_id: int) -> None:
         return
     try:
         checkout_url = stripe_utils.create_checkout_session(
-            lead_id=lead_id, business_name=lead["business_name"], customer_email=lead["contact_email"]
+            lead_id=lead_id, business_name=lead["business_name"], customer_email=lead["contact_email"],
+            amount_usd=offers.get_offer(lead).price(lead),
         )
     except Exception as exc:  # noqa: BLE001
         print(f"[main] Failed to create Stripe checkout session: {exc}")

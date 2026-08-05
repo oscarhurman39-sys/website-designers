@@ -23,7 +23,7 @@ import stripe
 from flask import Flask, Response, abort, redirect, render_template_string, request, send_from_directory
 
 import config
-from agents import editor_agent, onboarding_agent
+from agents import editor_agent, offers, onboarding_agent
 from utils import compliance, content_importer, db, editor_auth, screenshot, stripe_utils, tracker
 
 # Server-rendered (via Flask's autoescaping render_template_string --
@@ -243,6 +243,7 @@ def create_app() -> Flask:
             checkout_url = stripe_utils.create_checkout_session(
                 lead_id=lead_id, business_name=lead["business_name"],
                 customer_email=lead.get("contact_email") or None,
+                amount_usd=offers.get_offer(lead).price(lead),
             )
         except Exception as exc:  # noqa: BLE001 - show a friendly page instead of a raw 500
             return f"<h1>Something went wrong</h1><p>Could not start checkout: {exc}</p>", 500
@@ -266,8 +267,10 @@ def create_app() -> Flask:
         message = ""
         if request.method == "POST":
             try:
-                result = onboarding_agent.complete_onboarding(
-                    lead_id, request.form.get("github_username", ""), request.form.get("vercel_email", ""),
+                result = offers.get_offer(lead).fulfill(
+                    lead_id,
+                    github_username=request.form.get("github_username", ""),
+                    vercel_email=request.form.get("vercel_email", ""),
                 )
                 message = result["message"]
             except Exception as exc:  # noqa: BLE001 - show what happened instead of a 500

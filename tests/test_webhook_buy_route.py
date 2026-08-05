@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from unittest.mock import Mock
 
+import config
 import webhook_server
 from utils import db
 
@@ -31,6 +32,7 @@ def test_buy_now_redirects_to_a_fresh_checkout_session(tmp_path, monkeypatch):
     assert resp.headers["Location"] == "https://checkout.stripe.com/pay/cs_test_123"
     create_mock.assert_called_once_with(
         lead_id=lead_id, business_name="Joes Cafe", customer_email="owner@joescafe.example",
+        amount_usd=config.WEBSITE_PRICE_USD,
     )
 
 
@@ -42,7 +44,9 @@ def test_buy_now_omits_customer_email_when_unknown(tmp_path, monkeypatch):
     client = webhook_server.app.test_client()
     client.get(f"/buy/{lead_id}")
 
-    create_mock.assert_called_once_with(lead_id=lead_id, business_name="Joes Cafe", customer_email=None)
+    create_mock.assert_called_once_with(
+        lead_id=lead_id, business_name="Joes Cafe", customer_email=None, amount_usd=config.WEBSITE_PRICE_USD,
+    )
 
 
 def test_buy_now_404s_for_missing_lead(tmp_path, monkeypatch):
