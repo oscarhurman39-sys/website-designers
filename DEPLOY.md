@@ -46,6 +46,12 @@ from a phone browser; the same Dockerfile works on Render or Fly.io.
    positively. `SENDGRID_API_KEY` + `SENDGRID_FROM_EMAIL` if you send via
    SendGrid instead of SMTP.
 
+   For hands-off lead flow: `GOOGLE_PLACES_API_KEY` plus
+   `DISCOVER_NICHES` and `DISCOVER_LOCATIONS` (comma-separated, e.g.
+   `plumber,electrician` / `Leeds UK,York UK`) — the loop then refills
+   its own lead queue from Google Places whenever it runs low, so the
+   pipeline feeds itself all day without you uploading CSVs.
+
    Leave `DB_PATH` / `TRACES_PATH` alone — the image already points them
    at `/data`.
 

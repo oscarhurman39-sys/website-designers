@@ -24,6 +24,7 @@ actions (takeover / payment / transfer) don't have to wait for the loop:
 from __future__ import annotations
 
 import json
+import random
 import shutil
 import sys
 import threading
@@ -66,8 +67,33 @@ def _process_inbox_csvs() -> None:
             shutil.move(str(csv_file), str(LEADS_PROCESSED / csv_file.name))
 
 
+def _maybe_discover() -> None:
+    """Keep the send queue fed: when the pipeline's working queue (leads
+    not yet sent) drops below DISCOVER_MIN_QUEUE, pull one batch of fresh
+    businesses from Google Places for a random configured niche x location
+    combo. One query per cycle at most, and only when needed -- the send
+    rate caps are the real throughput limit, so discovery just has to stay
+    ahead of them, not maximize itself."""
+    if not (config.GOOGLE_PLACES_API_KEY and config.DISCOVER_NICHES and config.DISCOVER_LOCATIONS):
+        return
+    queue_size = sum(
+        len(db.list_leads_by_status(status)) for status in ("new", "researched", "designed")
+    )
+    if queue_size >= config.DISCOVER_MIN_QUEUE:
+        return
+    niche = random.choice(config.DISCOVER_NICHES)
+    location = random.choice(config.DISCOVER_LOCATIONS)
+    try:
+        added = lead_agent.discover(niche, location, limit=config.DISCOVER_MAX_PER_QUERY)
+        print(f"[main] Auto-discovery: added {added} lead(s) for '{niche}' in {location} "
+              f"(queue was {queue_size})")
+    except Exception as exc:  # noqa: BLE001 - a failed discovery query must not kill the cycle
+        print(f"[main] Auto-discovery failed (will retry next cycle): {exc}")
+
+
 def _run_cycle() -> None:
     _process_inbox_csvs()
+    _maybe_discover()
 
     for lead in db.list_leads_by_status("new"):
         lead_agent.research_lead(lead)

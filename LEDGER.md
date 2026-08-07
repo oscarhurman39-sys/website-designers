@@ -1,7 +1,7 @@
 # Ledger
 
 ## website-designers  [active]
-brick: Deploy to Railway using DEPLOY.md and verify https://<domain>/ responds + logs show the loop ticking
+brick: Add GOOGLE_PLACES_API_KEY + DISCOVER_NICHES/DISCOVER_LOCATIONS to .env and run one real --discover query to confirm live Places results land in the DB
 since: 2026-08-07  sessions-unchanged: 0
 
 ## refactored-engine  [parked]

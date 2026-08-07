@@ -19,7 +19,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from utils import db, tracer
+from utils import db, places_api, tracer
 
 USER_AGENT = "ColdEmailSalesPipelineBot/1.0 (+mailto:contact@example.com)"
 REQUEST_TIMEOUT = 10
@@ -67,6 +67,45 @@ def ingest_csv(csv_path: str) -> list[int]:
         lead_id = db.insert_lead(row.business_name, row.niche, row.location, status="new")
         lead_ids.append(lead_id)
     return lead_ids
+
+
+def discover(niche: str, location: str, limit: int = 60) -> int:
+    """Find businesses via Google Places and ingest them as 'new' leads.
+    Returns the number of leads actually inserted (already-seen place ids
+    are skipped, so re-running the same query is safe and cheap).
+
+    Discovered leads arrive with website/phone/rating/types prefilled, so
+    the research step can skip its own website search and go straight to
+    scraping for a contact email."""
+    return tracer.run_traced(
+        agent_id="lead-agent",
+        agent_name="LeadResearcher",
+        tool_name="discover_businesses",
+        input_data={"niche": niche, "location": location, "limit": limit},
+        fn=lambda: _discover_impl(niche, location, limit),
+    )
+
+
+def _discover_impl(niche: str, location: str, limit: int) -> int:
+    businesses = places_api.search_businesses(f"{niche} in {location}", limit=limit)
+    inserted = 0
+    for biz in businesses:
+        if db.lead_exists_by_place_id(biz["place_id"]):
+            continue
+        db.insert_lead(
+            business_name=biz["name"],
+            niche=niche.strip().lower(),
+            location=location,
+            status="new",
+            website_url=biz["website"],
+            phone=biz["phone"],
+            google_place_id=biz["place_id"],
+            google_rating=biz["rating"],
+            google_reviews_count=biz["reviews_count"],
+            google_maps_types=biz["types"] or None,
+        )
+        inserted += 1
+    return inserted
 
 
 def _robots_allows(url: str) -> bool:
@@ -178,7 +217,11 @@ def research_lead(lead: dict) -> None:
 
 def _research_lead_impl(lead: dict) -> None:
     lead_id = lead["id"]
-    website_url = find_business_website(lead["business_name"], lead["location"] or "")
+    # Leads from Places discovery already carry their website; only
+    # CSV-ingested leads need the (slower, fuzzier) search step.
+    website_url = (lead.get("website_url") or "").strip() or find_business_website(
+        lead["business_name"], lead["location"] or ""
+    )
 
     if not website_url:
         db.update_lead_status(lead_id, "lost", notes="No website found during research")
@@ -229,16 +272,29 @@ def run(csv_path: Optional[str] = None) -> None:
 
 
 def _main() -> None:
-    """CLI entrypoint: `python -m agents.lead_agent path/to/leads.csv`
-    (run from inside the `pipeline/` directory so the flat `utils`/`config`
-    imports resolve, same as main.py and webhook_server.py)."""
+    """CLI entrypoint (run from inside the `pipeline/` directory so the
+    flat `utils`/`config` imports resolve, same as main.py):
+
+        python -m agents.lead_agent path/to/leads.csv
+        python -m agents.lead_agent --discover "plumber" "Leeds, UK" --limit 60
+    """
     import argparse
 
-    parser = argparse.ArgumentParser(description="Ingest and research leads from a CSV file.")
-    parser.add_argument("csv_path", help="CSV with columns: business_name, niche, location")
+    parser = argparse.ArgumentParser(description="Ingest (CSV) or discover (Google Places) and research leads.")
+    parser.add_argument("csv_path", nargs="?", help="CSV with columns: business_name, niche, location")
+    parser.add_argument("--discover", nargs=2, metavar=("NICHE", "LOCATION"),
+                        help='Discover businesses via Google Places, e.g. --discover "plumber" "Leeds, UK"')
+    parser.add_argument("--limit", type=int, default=60, help="Max businesses per discovery query (default 60)")
     args = parser.parse_args()
 
+    if not args.csv_path and not args.discover:
+        parser.error("Provide a CSV path, --discover NICHE LOCATION, or both.")
+
     db.init_db()
+    if args.discover:
+        niche, location = args.discover
+        added = discover(niche, location, limit=args.limit)
+        print(f"[lead_agent] Discovery added {added} new lead(s) for '{niche}' in {location}")
     run(args.csv_path)
 
 

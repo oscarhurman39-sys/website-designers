@@ -6,6 +6,7 @@ schema constraints enforced in one place.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -114,6 +115,13 @@ def init_db(db_path: Optional[str] = None) -> None:
         _migrate_add_column(conn, "websites", "screenshot_url", "TEXT")
         _migrate_add_column(conn, "websites", "screenshot_path", "TEXT")
         _migrate_add_column(conn, "websites", "rendered_files", "TEXT")
+        # Google Places discovery fields (see utils/places_api.py and
+        # lead_agent.discover). google_maps_types is stored as a JSON array
+        # and deserialized back to a list by _lead_to_dict.
+        _migrate_add_column(conn, "leads", "google_place_id", "TEXT")
+        _migrate_add_column(conn, "leads", "google_rating", "REAL")
+        _migrate_add_column(conn, "leads", "google_reviews_count", "INTEGER")
+        _migrate_add_column(conn, "leads", "google_maps_types", "TEXT")
         conn.commit()
 
 
@@ -154,16 +162,46 @@ def _row_to_dict(row: Optional[sqlite3.Row]) -> Optional[dict[str, Any]]:
 
 # --- Leads -------------------------------------------------------------------
 
+def _lead_to_dict(row: Optional[sqlite3.Row]) -> Optional[dict[str, Any]]:
+    """Lead rows only: deserialize google_maps_types (stored as a JSON
+    array) back to a Python list, so consumers like design_agent can
+    iterate real type strings rather than a raw JSON string's characters."""
+    lead = _row_to_dict(row)
+    if lead is None:
+        return None
+    raw_types = lead.get("google_maps_types")
+    if isinstance(raw_types, str) and raw_types:
+        try:
+            lead["google_maps_types"] = json.loads(raw_types)
+        except ValueError:
+            lead["google_maps_types"] = []
+    return lead
+
+
 def insert_lead(
     business_name: str,
     niche: str,
     location: str = "",
     status: str = "new",
+    website_url: str = "",
+    phone: str = "",
+    google_place_id: str = "",
+    google_rating: Optional[float] = None,
+    google_reviews_count: int = 0,
+    google_maps_types: Optional[list[str]] = None,
 ) -> int:
+    """The optional fields are filled by lead_agent.discover (Google Places
+    already knows them); CSV ingestion leaves them at their defaults and
+    the research step fills what it can."""
     with get_connection() as conn:
         cur = conn.execute(
-            "INSERT INTO leads (business_name, niche, location, status) VALUES (?, ?, ?, ?)",
-            (business_name, niche, location, status),
+            """INSERT INTO leads
+               (business_name, niche, location, status, website_url, phone,
+                google_place_id, google_rating, google_reviews_count, google_maps_types)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (business_name, niche, location, status, website_url, phone,
+             google_place_id, google_rating, google_reviews_count,
+             json.dumps(google_maps_types) if google_maps_types else ""),
         )
         lead_id = cur.lastrowid
         conn.execute(
@@ -173,10 +211,22 @@ def insert_lead(
         return lead_id
 
 
+def lead_exists_by_place_id(google_place_id: str) -> bool:
+    """Dedup guard for discovery: has this Places result already been
+    ingested (in any status)?"""
+    if not google_place_id:
+        return False
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM leads WHERE google_place_id = ? LIMIT 1", (google_place_id,)
+        ).fetchone()
+        return row is not None
+
+
 def get_lead(lead_id: int) -> Optional[dict[str, Any]]:
     with get_connection() as conn:
         row = conn.execute("SELECT * FROM leads WHERE id = ?", (lead_id,)).fetchone()
-        return _row_to_dict(row)
+        return _lead_to_dict(row)
 
 
 def get_lead_by_email(email: str) -> Optional[dict[str, Any]]:
@@ -184,7 +234,7 @@ def get_lead_by_email(email: str) -> Optional[dict[str, Any]]:
         row = conn.execute(
             "SELECT * FROM leads WHERE contact_email = ? ORDER BY id DESC LIMIT 1", (email,)
         ).fetchone()
-        return _row_to_dict(row)
+        return _lead_to_dict(row)
 
 
 def list_leads_by_status(status: str) -> list[dict[str, Any]]:
@@ -192,13 +242,13 @@ def list_leads_by_status(status: str) -> list[dict[str, Any]]:
         rows = conn.execute(
             "SELECT * FROM leads WHERE status = ? ORDER BY id ASC", (status,)
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_lead_to_dict(r) for r in rows]
 
 
 def list_all_leads() -> list[dict[str, Any]]:
     with get_connection() as conn:
         rows = conn.execute("SELECT * FROM leads ORDER BY id DESC").fetchall()
-        return [dict(r) for r in rows]
+        return [_lead_to_dict(r) for r in rows]
 
 
 def update_lead_fields(lead_id: int, **fields: Any) -> None:

@@ -60,6 +60,26 @@ SENDING_DOMAIN: str = os.getenv("SENDING_DOMAIN", "")
 PHYSICAL_ADDRESS: str = os.getenv("PHYSICAL_ADDRESS", "")
 
 UNSPLASH_ACCESS_KEY: str = os.getenv("UNSPLASH_ACCESS_KEY", "")
+
+# --- Lead discovery via Google Places (optional) ----------------------------
+# With a key plus both DISCOVER_ lists set, main.py tops the lead queue up
+# automatically whenever it runs low (see main.py's _maybe_discover); the
+# same discovery is available manually via
+# `python -m agents.lead_agent --discover "plumber" "Leeds, UK"`.
+GOOGLE_PLACES_API_KEY: str = os.getenv("GOOGLE_PLACES_API_KEY", "")
+
+
+def _csv_list(name: str) -> list[str]:
+    return [item.strip() for item in os.getenv(name, "").split(",") if item.strip()]
+
+
+DISCOVER_NICHES: list[str] = _csv_list("DISCOVER_NICHES")
+DISCOVER_LOCATIONS: list[str] = _csv_list("DISCOVER_LOCATIONS")
+# Top up when new+researched+designed drops below this many leads.
+DISCOVER_MIN_QUEUE: int = int(os.getenv("DISCOVER_MIN_QUEUE", "25") or 25)
+# Max businesses fetched per discovery query (Places text search caps out
+# around 60 results across 3 pages).
+DISCOVER_MAX_PER_QUERY: int = int(os.getenv("DISCOVER_MAX_PER_QUERY", "60") or 60)
 # `.strip() or default` (rather than getenv's own default) so an empty
 # `DB_PATH=` line in .env falls back too, not just a fully-absent key.
 DB_PATH: str = os.getenv("DB_PATH", "").strip() or str(Path(__file__).resolve().parent / "leads.db")

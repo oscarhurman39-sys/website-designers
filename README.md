@@ -80,6 +80,23 @@ python -m agents.lead_agent /path/to/leads.csv
 cd ..
 ```
 
+**Discover leads automatically via Google Places** (needs
+`GOOGLE_PLACES_API_KEY` in `.env`, with "Places API (New)" enabled on the
+key's project). Each query pulls up to ~60 real businesses with website,
+phone, rating, and category data prefilled, deduped against everything
+already in the DB:
+
+```bash
+cd pipeline
+python -m agents.lead_agent --discover "plumber" "Leeds, UK" --limit 60
+cd ..
+```
+
+Set `DISCOVER_NICHES` and `DISCOVER_LOCATIONS` (comma-separated) in `.env`
+and the main loop tops the queue up on its own whenever the pipeline runs
+low -- fully hands-off lead flow, bounded by the email rate caps rather
+than by how many leads you can find.
+
 **Quick single-shot test run** (takes the oldest `'new'` lead through
 LeadAgent -> DesignAgent -> SalesAgent once, no loop, no rate limits --
 good for a first end-to-end smoke test):
