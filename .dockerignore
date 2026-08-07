@@ -1,0 +1,13 @@
+# Never bake secrets or local state into the image.
+.env
+*.db
+pipeline/leads.db
+pipeline/screenshots/
+pipeline/traces.json
+pipeline/.secret_key
+pipeline/.scheduler.pid
+pipeline/scheduler.log
+venv/
+.git/
+.pytest_cache/
+__pycache__/
