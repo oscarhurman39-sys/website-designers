@@ -23,6 +23,7 @@ actions (takeover / payment / transfer) don't have to wait for the loop:
 """
 from __future__ import annotations
 
+import json
 import shutil
 import sys
 import threading
@@ -139,13 +140,34 @@ def _handle_transfer(lead_id: int) -> None:
         return
 
     # --- GitHub: invite the client as a collaborator on their repo ---
+    # Repos are created lazily, right here -- design_agent deploys previews
+    # to Vercel from inline files and only stores the rendered files in the
+    # DB, so the only leads that ever get a GitHub repo are the ones being
+    # handed over. Older leads (from before lazy creation) already have a
+    # repo recorded and skip the create step.
     github_username = input(f"GitHub username to invite for lead {lead_id} (blank to skip): ").strip()
+    repo_full_name = website.get("repo_full_name") or ""
     if github_username:
-        try:
-            github_api.invite_collaborator(website["repo_full_name"], github_username, permission="admin")
-            print(f"[main] Invited {github_username} to {website['repo_full_name']}")
-        except Exception as exc:  # noqa: BLE001
-            print(f"[main] Failed to invite GitHub collaborator: {exc}")
+        if not repo_full_name:
+            files = json.loads(website.get("rendered_files") or "{}")
+            if not files:
+                print(f"[main] No stored site files for lead {lead_id}; cannot create the client repo. "
+                      "Re-run the design step for this lead first.")
+            else:
+                try:
+                    _repo, repo_url, repo_full_name = github_api.create_repo_with_files(
+                        lead["business_name"], lead_id, files
+                    )
+                    db.update_website_repo(lead_id, repo_url, repo_full_name)
+                    print(f"[main] Created client repo {repo_full_name}")
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[main] Failed to create client repo: {exc}")
+        if repo_full_name:
+            try:
+                github_api.invite_collaborator(repo_full_name, github_username, permission="admin")
+                print(f"[main] Invited {github_username} to {repo_full_name}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[main] Failed to invite GitHub collaborator: {exc}")
     else:
         print("[main] Skipping GitHub invite.")
 
@@ -173,17 +195,21 @@ def _handle_transfer(lead_id: int) -> None:
         print("[main] Skipping Vercel invite.")
 
     # --- Removing your own access: GitHub only, and only on explicit confirmation ---
-    answer = input("Remove your own GitHub repo access now? (y/n): ").strip().lower()
-    if answer == "y":
-        try:
-            own_username = github_api.get_authenticated_username()
-            github_api.remove_collaborator(website["repo_full_name"], own_username)
-            db.mark_website_transferred(lead_id)
-            print(f"[main] GitHub access removed. Website for lead {lead_id} marked as transferred.")
-        except Exception as exc:  # noqa: BLE001
-            print(f"[main] Failed to remove own GitHub access: {exc}")
+    if not repo_full_name:
+        print("[main] No GitHub repo exists for this lead (invite was skipped or creation failed); "
+              "nothing to remove. Not marked transferred.")
     else:
-        print("[main] Leaving GitHub access as-is (not marked transferred).")
+        answer = input("Remove your own GitHub repo access now? (y/n): ").strip().lower()
+        if answer == "y":
+            try:
+                own_username = github_api.get_authenticated_username()
+                github_api.remove_collaborator(repo_full_name, own_username)
+                db.mark_website_transferred(lead_id)
+                print(f"[main] GitHub access removed. Website for lead {lead_id} marked as transferred.")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[main] Failed to remove own GitHub access: {exc}")
+        else:
+            print("[main] Leaving GitHub access as-is (not marked transferred).")
 
     print(
         "[main] NOTE: Vercel access is never removed automatically. Your Vercel team "

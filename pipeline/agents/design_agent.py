@@ -4,6 +4,7 @@ preview URL.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -339,9 +340,10 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
     context = build_context(lead)
     files = render_template_files(niche, context)
 
-    _repo, repo_url, repo_full_name = github_api.create_repo_with_files(
-        lead["business_name"], lead["id"], files
-    )
+    # No GitHub repo at this stage: Vercel deploys the files inline, and a
+    # repo per cold lead just clutters the operator's GitHub account. The
+    # rendered files are stored on the website row instead, and main.py's
+    # `transfer` command creates the repo lazily for the one lead that buys.
     deployment = vercel_api.deploy_files(
         github_api.make_repo_name(lead["business_name"], lead["id"]), files
     )
@@ -352,12 +354,11 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
     website_id = db.insert_website(
         lead_id=lead["id"],
         template_niche=niche,
-        repo_url=repo_url,
-        repo_full_name=repo_full_name,
         preview_url=preview_url,
         vercel_project_id=deployment["deployment_id"],
         screenshot_url=screenshot_url,
         screenshot_path=screenshot_path,
+        rendered_files=json.dumps(files),
     )
     db.update_lead_status(lead["id"], "designed", notes=f"Preview deployed: {preview_url}")
     return db.get_website_by_lead(lead["id"]) if website_id else None

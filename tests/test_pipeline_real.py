@@ -156,7 +156,11 @@ def test_design_and_deploy(real_env, test_lead, cleanup_created_resources):
 
     assert website is not None, "process_lead returned None -- design/deploy failed"
     assert website["preview_url"].startswith("https://")
-    assert website["repo_full_name"]
+    # GitHub repos are created lazily at transfer time now, so design must
+    # NOT have created one -- but it must have stored the rendered files
+    # the transfer step will build the repo from.
+    assert not website["repo_full_name"]
+    assert website["rendered_files"], "design step did not store rendered site files"
 
     # Record what was created so the module-scoped cleanup fixture deletes
     # it, whether or not later tests in this module fail. Vercel's project
@@ -164,7 +168,6 @@ def test_design_and_deploy(real_env, test_lead, cleanup_created_resources):
     # pre-sanitized repo name) rather than trusting the `vercel_project_id`
     # DB column, which -- pre-existing behavior this test doesn't change --
     # actually stores a deployment id, not a project name.
-    cleanup_created_resources["repo_full_name"] = website["repo_full_name"]
     cleanup_created_resources["vercel_project_raw_name"] = github_api.make_repo_name(
         lead["business_name"], lead["id"]
     )

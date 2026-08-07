@@ -113,6 +113,7 @@ def init_db(db_path: Optional[str] = None) -> None:
         conn.executescript(_SCHEMA)
         _migrate_add_column(conn, "websites", "screenshot_url", "TEXT")
         _migrate_add_column(conn, "websites", "screenshot_path", "TEXT")
+        _migrate_add_column(conn, "websites", "rendered_files", "TEXT")
         conn.commit()
 
 
@@ -308,23 +309,38 @@ def message_id_seen(message_id: str) -> bool:
 def insert_website(
     lead_id: int,
     template_niche: str,
-    repo_url: str,
-    repo_full_name: str,
     preview_url: str,
+    repo_url: str = "",
+    repo_full_name: str = "",
     vercel_project_id: str = "",
     screenshot_url: str = "",
     screenshot_path: str = "",
+    rendered_files: str = "",
 ) -> int:
+    """`repo_url`/`repo_full_name` are blank until a deal closes -- GitHub
+    repos are created lazily at transfer time (see main.py), not per
+    preview, so the operator's GitHub account isn't flooded with one repo
+    per cold lead. `rendered_files` (JSON path->content) is what the
+    transfer-time repo gets built from."""
     with get_connection() as conn:
         cur = conn.execute(
             """INSERT INTO websites
                (lead_id, template_niche, repo_url, repo_full_name, preview_url, vercel_project_id,
-                screenshot_url, screenshot_path)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                screenshot_url, screenshot_path, rendered_files)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (lead_id, template_niche, repo_url, repo_full_name, preview_url, vercel_project_id,
-             screenshot_url, screenshot_path),
+             screenshot_url, screenshot_path, rendered_files),
         )
         return cur.lastrowid
+
+
+def update_website_repo(lead_id: int, repo_url: str, repo_full_name: str) -> None:
+    """Record the GitHub repo created lazily at transfer time."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE websites SET repo_url = ?, repo_full_name = ? WHERE lead_id = ?",
+            (repo_url, repo_full_name, lead_id),
+        )
 
 
 def update_website_screenshot_url(lead_id: int, screenshot_url: str) -> None:
