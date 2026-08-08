@@ -17,6 +17,13 @@ slack-sdk==3.33.1
 # container image -- screenshot.py auto-detects that case).
 playwright==1.56.0
 
+# SendGrid sending path (utils/email_utils.py send_email_sendgrid()). The
+# SendGrid config keys are optional, but the module imports sendgrid at load
+# time, so the package must be installed even when only SMTP is used.
+# Pinned at 6.11.0: later releases pull in a cryptography upgrade that
+# conflicts with distro-managed cryptography packages on Debian/Ubuntu hosts.
+sendgrid==6.11.0
+
 # Observability (optional cloud mirroring; local tracing works without any
 # VoltAgent account -- see pipeline/utils/tracer.py)
 voltagent==0.1.1
