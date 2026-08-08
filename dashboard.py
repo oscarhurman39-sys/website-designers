@@ -10,6 +10,7 @@ table to CSV.
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -23,6 +24,7 @@ _PIPELINE_DIR = Path(__file__).resolve().parent / "pipeline"
 sys.path.insert(0, str(_PIPELINE_DIR))
 
 import config  # noqa: E402
+import scheduler  # noqa: E402
 from agents import design_agent, lead_agent, sales_agent  # noqa: E402
 from utils import db, tracer  # noqa: E402
 
@@ -46,6 +48,54 @@ def _set_paused(paused: bool) -> None:
 
 st.title("Cold Email Sales Pipeline")
 
+
+def _log_tail(path: Path, lines: int = 15) -> str:
+    try:
+        return "\n".join(path.read_text(errors="replace").splitlines()[-lines:]) or "(log is empty)"
+    except OSError:
+        return "(no log available)"
+
+
+# --- Orchestrator process controls -------------------------------------------
+# Start/stop main.py itself, via scheduler.py's PID-file-guarded background
+# start -- the same mechanism cron's --check mode uses. A main.py started here
+# is headless: automation runs, but the operator console commands (takeover /
+# payment ready / transfer) need a real terminal session (see README
+# "Deployment" and the limitation note in scheduler.py's docstring).
+_orch_pid = scheduler.current_pid()
+col_start, col_stop, col_proc = st.columns([1, 1, 4])
+with col_start:
+    if st.button("Start pipeline", disabled=_orch_pid is not None):
+        scheduler.run_check_once()
+        time.sleep(2)  # long enough for a misconfigured main.py to die on config.validate()
+        if scheduler.current_pid() is None:
+            st.error(
+                "main.py exited immediately after starting. Last scheduler.log lines:\n\n"
+                f"```\n{_log_tail(scheduler.LOG_FILE)}\n```"
+            )
+        else:
+            st.rerun()
+with col_stop:
+    if st.button("Stop pipeline", disabled=_orch_pid is None):
+        if scheduler.stop_main():
+            st.rerun()
+        else:
+            st.error("main.py did not stop within the timeout -- check it manually (see pipeline/.scheduler.pid).")
+with col_proc:
+    if _orch_pid is not None:
+        st.write(f"**Orchestrator:** running (pid {_orch_pid}) -- logs in `pipeline/scheduler.log`")
+    else:
+        st.write("**Orchestrator:** not running")
+st.caption(
+    "Started from here, main.py runs headless (exactly like cron's `scheduler.py --check`): "
+    "research, design, sending and inbox polling all work, but `takeover` / `payment ready` / "
+    "`transfer` need main.py in a real terminal (tmux) instead. If main.py runs under the "
+    "foreground supervisor (`python scheduler.py`), stop it from that terminal, not here -- "
+    "the supervisor restarts whatever this Stop button kills."
+)
+
+st.divider()
+
 # --- Pause/resume controls ---------------------------------------------------
 col1, col2, col3 = st.columns([1, 1, 4])
 with col1:
@@ -57,7 +107,7 @@ with col2:
         _set_paused(False)
         st.rerun()
 with col3:
-    st.write("**Status:** " + ("PAUSED" if _is_paused() else "RUNNING"))
+    st.write("**Loop:** " + ("PAUSED (flag set -- a running main.py idles)" if _is_paused() else "ACTIVE"))
 
 st.divider()
 

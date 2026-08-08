@@ -123,6 +123,14 @@ python webhook_server.py
 streamlit run dashboard.py
 ```
 
+The dashboard's top row also starts/stops the orchestrator process itself
+(via `scheduler.py`'s PID-file-guarded background start), so a phone or
+browser is enough to bring the pipeline up. A main.py started this way is
+headless, exactly like one started by cron -- the operator console commands
+(`takeover`, `payment ready`, `transfer`) still need a real terminal
+session (see "Deployment"). Tip: open the dashboard URL on your phone and
+use the browser's "Add to Home Screen" for a one-tap start button.
+
 ## Templates
 
 `templates/` holds one subfolder per business niche, each with an

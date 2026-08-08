@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -89,6 +90,53 @@ def _read_pid() -> Optional[int]:
         return int(PID_FILE.read_text().strip())
     except ValueError:
         return None
+
+
+def current_pid() -> Optional[int]:
+    """Pid of a live main.py started via this scheduler, or None.
+
+    Public liveness check for other processes (the dashboard's start/stop
+    controls) so they don't reimplement the PID-file + /proc logic above.
+    """
+    pid = _read_pid()
+    if pid is not None and _pid_is_alive(pid):
+        return pid
+    return None
+
+
+def stop_main(timeout_seconds: float = 15.0) -> bool:
+    """Stop a running main.py: SIGTERM, then SIGKILL if still alive at timeout.
+
+    Returns True iff main.py is no longer running on return. main.py installs
+    no SIGTERM handler, so SIGTERM normally ends it immediately; that is the
+    same crash-safety contract cron/--check mode already relies on (each cycle
+    is try/except-wrapped and the DB is SQLite).
+
+    Only meaningful against a background main.py (started by --check mode or
+    the dashboard). If main.py is running under the foreground supervisor
+    (`python scheduler.py`), the supervisor will restart it ~10s after this
+    kills it -- stop the supervisor from its own terminal instead.
+    """
+    pid = current_pid()
+    if pid is None:
+        PID_FILE.unlink(missing_ok=True)
+        return True
+    for sig, wait_seconds in ((signal.SIGTERM, timeout_seconds), (signal.SIGKILL, 3.0)):
+        try:
+            os.kill(pid, sig)
+        except ProcessLookupError:
+            break
+        deadline = time.monotonic() + wait_seconds
+        while time.monotonic() < deadline:
+            if not _pid_is_alive(pid):
+                break
+            time.sleep(0.5)
+        if not _pid_is_alive(pid):
+            break
+    if _pid_is_alive(pid):
+        return False
+    PID_FILE.unlink(missing_ok=True)
+    return True
 
 
 def run_supervisor() -> None:
