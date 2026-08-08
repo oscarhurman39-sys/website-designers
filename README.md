@@ -131,6 +131,20 @@ headless, exactly like one started by cron -- the operator console commands
 session (see "Deployment"). Tip: open the dashboard URL on your phone and
 use the browser's "Add to Home Screen" for a one-tap start button.
 
+**One-click start from your PC desktop**: double-click launchers live in
+the repo root -- they start the dashboard (auto-opening it in your
+browser), and its Start pipeline button does the rest.
+
+- **Windows**: right-click `start-dashboard.bat` -> Send to -> Desktop
+  (create shortcut), then double-click the desktop icon.
+- **macOS**: drag `start-dashboard.command` (or an alias) to the Dock or
+  Desktop; first run may need right-click -> Open.
+- **Linux**: run `./start-dashboard.command`, or point a `.desktop`
+  launcher's `Exec=` at it.
+
+Both launchers activate `venv/` automatically if it exists at the repo
+root (see "Setup").
+
 ## Templates
 
 `templates/` holds one subfolder per business niche, each with an
