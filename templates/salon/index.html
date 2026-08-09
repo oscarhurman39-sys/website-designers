@@ -16,7 +16,7 @@
       <nav class="hidden sm:flex gap-6 text-sm font-medium text-slate-600">
         <a href="#services" class="hover:text-rose-700">Services</a>
         <a href="#about" class="hover:text-rose-700">About</a>
-        <a href="#testimonial" class="hover:text-rose-700">Reviews</a>
+        {% if testimonial %}<a href="#testimonial" class="hover:text-rose-700">Reviews</a>{% endif %}
         <a href="#contact" class="hover:text-rose-700">Contact</a>
       </nav>
       <a href="tel:{{ phone }}"
@@ -53,11 +53,13 @@
   </section>
 
   <!-- Testimonial -->
+  {% if testimonial %}
   <section id="testimonial" class="bg-rose-700 text-white">
     <div class="max-w-3xl mx-auto px-6 py-16 text-center">
       <blockquote class="text-xl italic">&ldquo;{{ testimonial }}&rdquo;</blockquote>
     </div>
   </section>
+  {% endif %}
 
   <!-- Contact -->
   <section id="contact" class="max-w-3xl mx-auto px-6 py-16 text-center">

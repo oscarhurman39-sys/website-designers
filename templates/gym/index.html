@@ -13,7 +13,7 @@
       <nav>
         <a href="#services">Services</a>
         <a href="#about">About</a>
-        <a href="#testimonial">Reviews</a>
+        {% if testimonial %}<a href="#testimonial">Reviews</a>{% endif %}
         <a href="#contact">Contact</a>
       </nav>
     </div>
@@ -44,11 +44,13 @@
     </div>
   </section>
 
+  {% if testimonial %}
   <section id="testimonial" class="testimonial">
     <div class="container">
       <blockquote>&ldquo;{{ testimonial }}&rdquo;</blockquote>
     </div>
   </section>
+  {% endif %}
 
   <section id="contact" class="contact">
     <div class="container">

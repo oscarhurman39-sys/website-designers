@@ -178,6 +178,14 @@ placeholder sets to every render, so either style works regardless of
 which niche a lead matches -- unused keys are simply ignored by whichever
 template doesn't reference them.
 
+`{{ testimonial }}` is only ever the lead's own testimonial, scraped from
+their existing site, and is `""` when none was found -- the pipeline never
+invents one. Every template wraps its testimonial markup (and the nav link
+pointing at it) in `{% if testimonial %}`, so an empty value removes the
+block rather than publishing empty quote marks. **A new template that
+renders `{{ testimonial }}` must do the same** -- `tests/test_truthful_claims.py`
+discovers templates automatically and will fail if it doesn't.
+
 ## Compliance
 
 Every outbound email is routed through `utils/compliance.py` and always

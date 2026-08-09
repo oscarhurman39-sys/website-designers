@@ -63,7 +63,7 @@
   <section id="why-us" class="max-w-3xl mx-auto px-6 py-16 text-center">
     <h2 class="text-2xl font-bold text-slate-800 mb-4">Why {{ business_name }}?</h2>
     <p class="text-slate-600 leading-relaxed">{{ pain_point_solution }}</p>
-    <blockquote class="mt-8 text-lg italic text-slate-500">&ldquo;{{ testimonial }}&rdquo;</blockquote>
+    {% if testimonial %}<blockquote class="mt-8 text-lg italic text-slate-500">&ldquo;{{ testimonial }}&rdquo;</blockquote>{% endif %}
   </section>
 
   <!-- Service Area -->

@@ -197,22 +197,34 @@ _AUTH_PAGE_MARKERS = (
 
 
 def _intro_line(business_name: str) -> str:
-    """Plain-text greeting that always sits above the screenshot image --
-    frames this as solving a discoverability problem, not just a sales pitch."""
+    """Plain-text greeting that always sits above the screenshot image.
+
+    Claims only what the pipeline actually knows. It used to open with "people
+    searching for X only find your Google listing" -- which was false for every
+    single recipient by construction: lead_agent marks a lead 'lost' when it
+    can't find a website, so a lead only reaches the sending stage if it HAS a
+    site, which this pipeline then fetched and scraped. Telling someone they
+    have no website in an email built from their website is the fastest way to
+    lose them, so this frames it as what it is: an unsolicited redesign.
+    """
     return (
-        f"I noticed people searching for {business_name} only find your Google "
-        "listing. So I built a site that could help you appear more professional "
-        "online."
+        f"I came across {business_name} online and put together a redesigned "
+        "version of your website -- it's live and you can look round it below."
     )
 
 
-_CHECKLIST_HEADER = "What we improved"
+# "What we improved" asserted the recipient's existing site was worse on all
+# five counts. Nothing in the pipeline measures their site (lead_agent's
+# "pain point" is just the first substantial paragraph of copy, not a
+# diagnosis), so the header describes what this build contains instead of
+# claiming a comparison we never made.
+_CHECKLIST_HEADER = "What's included"
 
 
 def _checklist_items(city: str) -> list[str]:
     return [
         "Mobile-friendly design",
-        "Faster page speed",
+        "Fast page loads",  # not "Faster": nothing here measures their current site
         "Clear calls-to-action",
         f"Local SEO for {city}",
         "Professional, trust-building look",

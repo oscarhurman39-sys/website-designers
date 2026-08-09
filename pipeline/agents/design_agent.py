@@ -192,10 +192,15 @@ def _pain_point_solution(lead: dict) -> str:
 
 
 def _testimonial(lead: dict) -> str:
-    return (lead.get("testimonial") or "").strip() or (
-        f"{lead['business_name']} always takes great care of us -- highly recommend "
-        "to anyone in the area."
-    )
+    """The lead's own scraped testimonial, or "" -- never an invented one.
+
+    This previously fell back to a fabricated review ("... always takes great
+    care of us"), attributed to nobody, published on a public page carrying the
+    business's real name and then emailed to that business. Every template now
+    wraps its testimonial block in {% if testimonial %}, so an empty string
+    drops the section (and its nav link) instead of quoting an empty blockquote.
+    """
+    return (lead.get("testimonial") or "").strip()
 
 
 def build_context(lead: dict) -> dict:
