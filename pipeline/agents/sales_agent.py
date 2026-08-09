@@ -181,6 +181,20 @@ def draft_cold_email(lead: dict) -> tuple[str, str]:
 _SCREENSHOT_CID = "preview"
 _SENDER_NAME = "Casey"
 
+# --- Preview-link safety gate (see _validate_preview_link_for_send) -----------
+# A cold email whose preview link 404s or lands on a login wall is worse than
+# no email at all: it burns the prospect and the sending domain's reputation.
+# A Vercel deployment with protection left on serves exactly such a login wall,
+# which is what these markers catch.
+_PREVIEW_VALIDATION_TIMEOUT_SECONDS = 15
+_AUTH_URL_PARTS = ("/login", "/signin", "/sign-in", "/auth", "/sso")
+_AUTH_PAGE_MARKERS = (
+    "vercel authentication",
+    "authentication required",
+    "log in to vercel",
+    "sign in to continue",
+)
+
 
 def _intro_line(business_name: str) -> str:
     """Plain-text greeting that always sits above the screenshot image --
@@ -242,18 +256,12 @@ def _closing_paragraphs(preview_link: str) -> list[str]:
 
 
 def _validate_preview_link_for_send(preview_link: str) -> str:
-    """Return a public preview URL or raise before any cold email is sent."""
-    website = db.get_website_by_lead(lead["id"])
-    preview_link = website["preview_url"] if website and website.get("preview_url") else ""
-    try:
-        preview_link = _validate_preview_link_for_send(preview_link)
-    except RuntimeError as exc:
-        db.update_lead_status(
-            lead["id"],
-            "researched",
-            notes=f"Email blocked: preview URL is not publicly sendable ({exc})",
-        )
-        return False
+    """Return a public preview URL or raise before any cold email is sent.
+
+    Pure validator: it only inspects the URL it is given. Looking the URL up
+    for a lead, and deciding what to do when validation fails, both belong to
+    the caller (_send_cold_email_impl).
+    """
     parsed = urlparse(preview_link)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise RuntimeError(f"Preview URL is missing or invalid: {preview_link!r}")
