@@ -132,8 +132,13 @@ session (see "Deployment"). Tip: open the dashboard URL on your phone and
 use the browser's "Add to Home Screen" for a one-tap start button.
 
 **One-click start from your PC desktop**: double-click launchers live in
-the repo root -- they start the dashboard (auto-opening it in your
-browser), and its Start pipeline button does the rest.
+the repo root. They do the whole setup themselves -- create the venv,
+install dependencies, fetch the screenshot browser, create `.env` from the
+template, and check the config (reopening `.env` if anything's missing) --
+then start the dashboard and open it in your browser. Its Start pipeline
+button does the rest. Every step is skipped when already done, so after the
+first run they're just a fast launch, and re-running after a failed or
+interrupted setup picks up where it left off.
 
 - **Windows**: right-click `start-dashboard.bat` -> Send to -> Desktop
   (create shortcut), then double-click the desktop icon.
@@ -142,8 +147,8 @@ browser), and its Start pipeline button does the rest.
 - **Linux**: run `./start-dashboard.command`, or point a `.desktop`
   launcher's `Exec=` at it.
 
-Both launchers activate `venv/` automatically if it exists at the repo
-root (see "Setup").
+The manual Setup steps above are only needed if you'd rather drive it
+yourself -- the launchers perform the equivalent work on first run.
 
 ## Templates
 
