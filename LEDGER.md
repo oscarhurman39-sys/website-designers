@@ -1,5 +1,5 @@
 # Ledger
 
 ## website-designers  [active]
-brick: On your PC, run `git pull`, then double-click start-dashboard.bat and tap Start -- confirm one clean loop cycle in pipeline/scheduler.log
+brick: Build the Companies House filter -- lookup before send, only Ltd/LLP proceed, everything else marked lost with a note
 since: 2026-08-08  sessions-unchanged: 0
