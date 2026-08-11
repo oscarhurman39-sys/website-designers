@@ -44,18 +44,34 @@ _TAKEOVER_LEAD_IDS: set[int] = set()
 # a system that otherwise enforces hard per-hour/per-day caps from the DB.
 _next_send_allowed_at: datetime = datetime.min.replace(tzinfo=timezone.utc)
 
+# An explicit opt-out. These must suppress the address permanently, not just
+# end this lead -- a reply saying "remove me" is a withdrawal of consent, and
+# under UK GDPR the right to object to direct marketing is absolute.
+_OPTOUT_PATTERNS = (
+    r"\bunsubscribe\b", r"\bremove me\b", r"\btake me off\b", r"\bdo not contact\b",
+    r"\bdon'?t contact\b", r"\bstop (emailing|contacting|messaging)\b",
+    r"\bopt me out\b", r"\bno longer wish\b",
+)
+
+# A soft decline: this lead is dead, but the sender has not asked to be
+# suppressed. Deliberately does NOT contain a bare r"\bstop\b" -- that matched
+# "non-stop busy", "don't stop" and "can you stop by next week", marking
+# buying signals as rejections and mailing them a goodbye.
 _NEGATIVE_PATTERNS = (
-    r"\bunsubscribe\b", r"\bremove me\b", r"\bstop emailing\b", r"\bnot interested\b",
-    r"\bno thanks\b", r"\btake me off\b", r"\bdo not contact\b", r"\bstop\b",
+    r"\bnot interested\b", r"\bno thanks\b", r"\bno thank you\b",
+    r"\bnot for us\b", r"\bwe'?re all set\b",
 )
 _POSITIVE_PATTERNS = (
     r"\binterested\b", r"\btell me more\b", r"\bhow much\b", r"\bpricing\b", r"\bprice\b",
     r"\bcost\b", r"\bsounds good\b", r"\blet'?s talk\b", r"\bschedule a call\b",
     r"\bsign me up\b", r"\byes\b", r"\bwhen can we\b",
 )
+# Matched against lowercased text, so every pattern here must be lowercase --
+# an uppercase "OOO" here silently never matched.
 _OOO_PATTERNS = (
     r"\bout of (the )?office\b", r"\bauto(-| )?reply\b", r"\bautomatic reply\b",
-    r"\bon vacation\b", r"\bcurrently away\b", r"\b\bOOO\b",
+    r"\bon vacation\b", r"\bcurrently away\b", r"\booo\b", r"\bannual leave\b",
+    r"\bon leave until\b", r"\bmaternity leave\b", r"\bpaternity leave\b",
 )
 
 
@@ -472,6 +488,10 @@ def classify_reply(subject: str, body: str) -> str:
     lead bounced/lost -- so it needs to be fast, free, and 100% deterministic
     rather than dependent on a third-party inference API's uptime."""
     text = f"{subject}\n{body}".lower()
+    # Opt-out is checked before everything, including out-of-office: an
+    # auto-reply that also says "remove me" is still an opt-out.
+    if any(re.search(p, text) for p in _OPTOUT_PATTERNS):
+        return "optout"
     if any(re.search(p, text) for p in _OOO_PATTERNS):
         return "out_of_office"
     if any(re.search(p, text) for p in _NEGATIVE_PATTERNS):
@@ -540,7 +560,18 @@ def _handle_inbound_impl(lead: dict, msg) -> None:  # msg: email_utils.InboundEm
         classification=classification,
     )
 
-    if classification == "negative":
+    if classification == "optout":
+        # Suppress the address itself, not just this lead. Without this an
+        # opt-out only ended one lead, and the same person could be emailed
+        # again from any other lead carrying that address.
+        # No goodbye is sent: someone who asked to be left alone should not
+        # receive one more email as confirmation.
+        db.mark_unsubscribed(
+            lead["id"],
+            lead.get("contact_email") or msg.from_addr,
+            note="opted out by reply",
+        )
+    elif classification == "negative":
         db.update_lead_status(lead["id"], "lost", notes="Replied negative")
         _send_goodbye(lead)
     elif classification == "out_of_office":
@@ -565,7 +596,29 @@ def check_inbox() -> int:
             continue  # already processed in a prior poll
         lead = db.get_lead_by_email(msg.from_addr)
         if lead is None:
-            continue  # reply from an address we have no lead for; nothing to act on
-        _handle_inbound(lead, msg)
+            # Fetching marked this message \Seen, so it will never come back
+            # from a UNSEEN search -- dropping it silently loses the reply for
+            # good. This is common and valuable: you mail info@business.com
+            # and a person answers from their own address. Try to match the
+            # lead by domain, and shout about it either way.
+            lead = db.get_lead_by_email_domain(msg.from_addr)
+            if lead is None:
+                print(
+                    f"[sales_agent] UNMATCHED REPLY from {msg.from_addr!r} "
+                    f"subj={msg.subject!r} -- no lead for that address or domain. "
+                    "It is now marked read in the inbox; go and read it by hand."
+                )
+                continue
+            print(
+                f"[sales_agent] Reply from {msg.from_addr!r} matched lead "
+                f"{lead['id']} ({lead['business_name']}) by domain, not address."
+            )
+        try:
+            _handle_inbound(lead, msg)
+        except Exception as exc:  # noqa: BLE001 - one bad reply must not lose the rest
+            # Without this, an exception here abandoned every remaining message
+            # in the batch -- all already marked \Seen, so all unrecoverable.
+            print(f"[sales_agent] Failed to handle reply {msg.message_id!r}: {exc}")
+            continue
         processed += 1
     return processed

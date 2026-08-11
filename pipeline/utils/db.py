@@ -127,9 +127,16 @@ def _migrate_add_column(conn: sqlite3.Connection, table: str, column: str, colty
 
 
 def _connect(db_path: Optional[str] = None) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path or config.DB_PATH)
+    # main.py, dashboard.py and webhook_server.py are separate processes all
+    # writing this file. Without WAL a dashboard read blocks the loop's write,
+    # and a collision surfaces as "database is locked" -- which, mid-send,
+    # meant the email had already gone out but the lead never moved off
+    # 'designed', so the next cycle sent it again.
+    conn = sqlite3.connect(db_path or config.DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")   # readers no longer block the writer
+    conn.execute("PRAGMA busy_timeout = 30000")  # wait, don't raise, on contention
     return conn
 
 
@@ -178,10 +185,41 @@ def get_lead(lead_id: int) -> Optional[dict[str, Any]]:
         return _row_to_dict(row)
 
 
+# Shared by millions of unrelated people, so a domain match on one of these
+# tells you nothing about which business replied.
+_PUBLIC_EMAIL_DOMAINS = frozenset({
+    "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "hotmail.co.uk",
+    "live.com", "live.co.uk", "yahoo.com", "yahoo.co.uk", "icloud.com", "me.com",
+    "aol.com", "btinternet.com", "sky.com", "virginmedia.com", "protonmail.com",
+    "proton.me", "msn.com", "talktalk.net", "ntlworld.com",
+})
+
+
 def get_lead_by_email(email: str) -> Optional[dict[str, Any]]:
     with get_connection() as conn:
         row = conn.execute(
             "SELECT * FROM leads WHERE contact_email = ? ORDER BY id DESC LIMIT 1", (email,)
+        ).fetchone()
+        return _row_to_dict(row)
+
+
+def get_lead_by_email_domain(email: str) -> Optional[dict[str, Any]]:
+    """Fall-back lookup for a reply sent from a different mailbox at the same
+    business -- you mail info@example.com, a person answers from
+    jo@example.com. Matches only leads that were actually emailed, so an
+    unrelated stranger at a big free-mail domain can't attach to a lead.
+    """
+    domain = (email or "").rpartition("@")[2].lower().strip()
+    # Free-mail domains are shared by millions of unrelated people; a domain
+    # match there means nothing.
+    if not domain or domain in _PUBLIC_EMAIL_DOMAINS:
+        return None
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM leads WHERE lower(contact_email) LIKE ? "
+            "AND status IN ('emailed','replied','negotiating','payment_sent') "
+            "ORDER BY id DESC LIMIT 1",
+            (f"%@{domain}",),
         ).fetchone()
         return _row_to_dict(row)
 
@@ -223,7 +261,13 @@ def update_lead_status(lead_id: int, new_status: str, notes: str = "") -> None:
         )
 
 
-def mark_unsubscribed(lead_id: int, email: str) -> None:
+def mark_unsubscribed(lead_id: int, email: str, note: str = "unsubscribe link clicked") -> None:
+    """Suppress an address permanently and move its lead to 'unsubscribed'.
+
+    `note` records how the opt-out arrived -- a clicked footer link and a
+    reply saying "remove me" are both withdrawals of consent, and the state
+    history should say which one happened.
+    """
     with get_connection() as conn:
         conn.execute("UPDATE leads SET unsubscribed = 1 WHERE id = ?", (lead_id,))
         conn.execute(
@@ -232,8 +276,8 @@ def mark_unsubscribed(lead_id: int, email: str) -> None:
         )
         conn.execute(
             "INSERT INTO state_history (lead_id, from_state, to_state, notes) VALUES "
-            "(?, (SELECT status FROM leads WHERE id = ?), 'unsubscribed', 'unsubscribe link clicked')",
-            (lead_id, lead_id),
+            "(?, (SELECT status FROM leads WHERE id = ?), 'unsubscribed', ?)",
+            (lead_id, lead_id, note),
         )
         conn.execute("UPDATE leads SET status = 'unsubscribed' WHERE id = ?", (lead_id,))
 
