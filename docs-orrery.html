@@ -1,0 +1,486 @@
+<title>Outreach Orrery</title>
+<style>
+  :root{
+    --void:#0B0E2A; --pitch:#1A1A1A; --violet:#2E1A47;
+    --gold:#FFD700; --star:#F8F9FA; --teal:#1B6B6B; --ember:#D95A2B;
+    --ink:rgba(248,249,250,.86); --ink-dim:rgba(248,249,250,.52);
+    --ink-faint:rgba(248,249,250,.30);
+    --iron:rgba(248,249,250,.14);
+    --parch:#C9BFA4;
+    --display:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --r1:clamp(2.1rem,5.5vw,3.9rem);
+    --r2:clamp(1.25rem,2.6vw,1.75rem);
+    --r3:1.02rem;
+    --lab:.685rem;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--void); color:var(--ink);
+    font-family:var(--mono); font-size:var(--r3); line-height:1.62;
+    overflow-x:hidden;
+  }
+  #sky{position:fixed;inset:0;width:100%;height:100%;z-index:0;display:block}
+  .grain{
+    position:fixed;inset:0;z-index:1;pointer-events:none;opacity:.34;
+    mix-blend-mode:overlay;
+  }
+  .wrap{position:relative;z-index:2;max-width:1180px;margin:0 auto;padding:0 clamp(1rem,4vw,2.75rem) 6rem}
+
+  /* ── shared plate: engraved stone, torn edge, iron trim ── */
+  .plate{
+    position:relative;
+    background:
+      linear-gradient(158deg,rgba(46,26,71,.62),rgba(11,14,42,.88) 62%),
+      radial-gradient(120% 90% at 12% 0%,rgba(255,215,0,.055),transparent 58%);
+    border:1px solid var(--iron);
+    box-shadow:0 18px 44px -22px #000, inset 0 1px 0 rgba(248,249,250,.07);
+    padding:clamp(1.15rem,2.6vw,1.85rem);
+  }
+  .plate::after{
+    content:"";position:absolute;inset:0;pointer-events:none;
+    background:
+      linear-gradient(92deg,transparent 0 6%,rgba(217,90,43,.05) 6.4%,transparent 7%),
+      linear-gradient(271deg,transparent 0 4%,rgba(27,107,107,.06) 4.5%,transparent 5.2%);
+  }
+  .lab{
+    font-size:var(--lab);letter-spacing:.24em;text-transform:uppercase;
+    color:var(--ink-faint);display:block;margin-bottom:.55rem;
+  }
+
+  /* ── hero ── */
+  header{padding:clamp(4rem,11vh,7.5rem) 0 clamp(2rem,5vh,3.25rem)}
+  .eyebrow{
+    font-size:var(--lab);letter-spacing:.42em;text-transform:uppercase;
+    color:var(--gold);opacity:.8;margin:0 0 1.4rem;
+  }
+  h1{
+    font-family:var(--display);font-weight:400;
+    font-size:var(--r1);line-height:.98;letter-spacing:-.015em;
+    margin:0 0 1.1rem;text-wrap:balance;color:var(--star);
+    text-shadow:0 0 42px rgba(255,215,0,.22);
+  }
+  h1 em{font-style:italic;color:var(--gold);text-shadow:0 0 34px rgba(255,215,0,.5)}
+  .standfirst{max-width:60ch;color:var(--ink-dim);margin:0}
+
+  /* ── orb + vitals ── */
+  .crown{
+    display:grid;grid-template-columns:minmax(0,168px) 1fr;
+    gap:clamp(1.2rem,3.5vw,2.75rem);align-items:center;
+    margin:clamp(2rem,5vh,3.25rem) 0;
+  }
+  .orb{position:relative;aspect-ratio:1;width:100%}
+  .orb svg{width:100%;height:100%;overflow:visible}
+  .vitals{display:grid;grid-template-columns:repeat(auto-fit,minmax(122px,1fr));gap:.7rem}
+  .vital{
+    position:relative;padding:.85rem .9rem;
+    background:linear-gradient(163deg,rgba(46,26,71,.5),rgba(11,14,42,.8));
+    border:1px solid var(--iron);border-left:2px solid var(--gem,var(--gold));
+  }
+  .vital b{
+    display:block;font-family:var(--display);font-size:1.72rem;line-height:1;
+    color:var(--star);font-weight:400;font-variant-numeric:tabular-nums;
+    text-shadow:0 0 20px var(--gem-glow,rgba(255,215,0,.42));
+  }
+  .vital span{font-size:var(--lab);letter-spacing:.15em;text-transform:uppercase;color:var(--ink-faint)}
+
+  section{margin-top:clamp(3.25rem,8vh,5.5rem)}
+  h2{
+    font-family:var(--display);font-weight:400;font-size:var(--r2);
+    color:var(--star);margin:0 0 .35rem;letter-spacing:-.01em;
+  }
+  .sub{color:var(--ink-faint);margin:0 0 1.5rem;max-width:62ch;font-size:.9rem}
+
+  /* ── orrery ── */
+  .orrery-shell{overflow-x:auto;padding-bottom:.5rem}
+  .orrery{display:block;margin:0 auto;min-width:660px;max-width:860px;width:100%}
+  .edge{stroke:rgba(248,249,250,.13);stroke-width:.7;fill:none;transition:stroke .2s,stroke-width .2s}
+  .node{cursor:pointer}
+  .node circle{transition:r .22s cubic-bezier(.2,.9,.3,1.4),filter .22s}
+  .node text{
+    font-family:var(--mono);font-size:9.4px;fill:var(--ink-dim);
+    text-anchor:middle;pointer-events:none;transition:fill .2s;
+  }
+  .node:hover text,.node.on text{fill:var(--star)}
+  .node.on circle{filter:drop-shadow(0 0 9px currentColor)}
+  .edge.on{stroke:var(--gold);stroke-width:1.5;filter:drop-shadow(0 0 5px rgba(255,215,0,.65))}
+  .ring{fill:none;stroke:rgba(248,249,250,.10);stroke-dasharray:2 7}
+  .ringlab{font-family:var(--mono);font-size:8px;fill:rgba(248,249,250,.2);letter-spacing:.22em}
+  .readout{
+    margin-top:.9rem;min-height:3.1rem;font-size:.86rem;color:var(--ink-dim);
+    border-left:2px solid var(--teal);padding-left:.9rem;
+  }
+  .readout b{color:var(--gold);font-weight:400;font-family:var(--display);font-size:1.05rem}
+
+  /* ── star-path state machine ── */
+  .path-shell{overflow-x:auto}
+  .statepath{display:block;min-width:720px;width:100%;max-width:1000px;margin:0 auto}
+  .st-node rect{stroke-width:1}
+  .st-node text{font-family:var(--mono);font-size:10px;fill:var(--star);text-anchor:middle}
+  .st-edge{fill:none;stroke:rgba(248,249,250,.22);stroke-width:1.1;marker-end:url(#tip)}
+  .st-edge.warn{stroke:rgba(217,90,43,.55)}
+
+  /* ── quest log ── */
+  .quests{display:grid;gap:.8rem}
+  .quest{
+    display:grid;grid-template-columns:auto 1fr auto;gap:.9rem;align-items:start;
+    padding:.95rem 1.05rem;border:1px solid var(--iron);
+    background:linear-gradient(170deg,rgba(46,26,71,.4),rgba(11,14,42,.72));
+    border-left:3px solid var(--sev);
+  }
+  .rune{
+    width:1.55rem;height:1.55rem;flex:none;display:grid;place-items:center;
+    border:1px solid var(--sev);color:var(--sev);
+    font-size:.72rem;line-height:1;
+    box-shadow:0 0 13px -2px var(--sev);
+  }
+  .quest h3{margin:0 0 .2rem;font-family:var(--display);font-weight:400;font-size:1.04rem;color:var(--star)}
+  .quest p{margin:0;font-size:.845rem;color:var(--ink-dim)}
+  .quest .where{font-size:var(--lab);letter-spacing:.1em;color:var(--ink-faint);white-space:nowrap;padding-top:.28rem}
+  .sealed{opacity:.52}
+  .sealed h3{text-decoration:line-through;text-decoration-color:rgba(248,249,250,.3)}
+
+  /* ── bindings ── */
+  .bindings{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:.6rem}
+  .bind{
+    padding:.75rem .85rem;border:1px solid var(--iron);
+    background:linear-gradient(150deg,rgba(27,107,107,.14),rgba(11,14,42,.7));
+    font-size:.82rem;
+  }
+  .bind b{display:block;color:var(--star);font-weight:400;font-family:var(--display);font-size:1rem}
+  .bind span{font-size:var(--lab);letter-spacing:.13em;text-transform:uppercase;color:var(--ink-faint)}
+
+  .tallies{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:.7rem;margin-top:1rem}
+
+  footer{
+    margin-top:clamp(3.5rem,9vh,6rem);padding-top:1.5rem;
+    border-top:1px solid var(--iron);color:var(--ink-faint);font-size:.8rem;
+  }
+  @media (prefers-reduced-motion:reduce){
+    *{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
+  }
+  :focus-visible{outline:2px solid var(--gold);outline-offset:3px}
+</style>
+
+<canvas id="sky" aria-hidden="true"></canvas>
+<svg class="grain" aria-hidden="true"><filter id="g"><feTurbulence type="fractalNoise" baseFrequency="0.82" numOctaves="4"/></filter><rect width="100%" height="100%" filter="url(#g)" opacity="0.5"/></svg>
+
+<div class="wrap">
+<header>
+  <p class="eyebrow">website-designers · complete survey</p>
+  <h1>The pipeline, drawn as an <em>orrery</em></h1>
+  <p class="standfirst">Every module of the cold-email engine, placed by how deeply it sits in the dependency chain. Config burns at the centre; the entrypoints orbit furthest out. 4,612 lines of Python, nine niche templates, and thirteen stones — five now turned, eight still lying face down.</p>
+
+  <div class="crown">
+    <div class="orb">
+      <svg viewBox="0 0 100 100" role="img" aria-label="Pipeline core: sound but not yet sending">
+        <defs>
+          <radialGradient id="core">
+            <stop offset="0%" stop-color="#FFF6D0"/><stop offset="38%" stop-color="#FFD700"/>
+            <stop offset="72%" stop-color="#D95A2B"/><stop offset="100%" stop-color="#2E1A47"/>
+          </radialGradient>
+          <radialGradient id="halo">
+            <stop offset="55%" stop-color="rgba(255,215,0,0)"/><stop offset="82%" stop-color="rgba(255,215,0,.2)"/>
+            <stop offset="100%" stop-color="rgba(255,215,0,0)"/>
+          </radialGradient>
+        </defs>
+        <circle cx="50" cy="50" r="46" fill="url(#halo)">
+          <animate attributeName="r" values="42;47;42" dur="7s" repeatCount="indefinite"/>
+        </circle>
+        <circle cx="50" cy="50" r="27" fill="url(#core)">
+          <animate attributeName="r" values="26;28.4;26" dur="4.6s" repeatCount="indefinite"/>
+        </circle>
+        <circle cx="50" cy="50" r="33" fill="none" stroke="rgba(255,215,0,.28)" stroke-dasharray="1 6" stroke-width=".9">
+          <animateTransform attributeName="transform" type="rotate" from="0 50 50" to="360 50 50" dur="52s" repeatCount="indefinite"/>
+        </circle>
+        <circle cx="50" cy="50" r="40" fill="none" stroke="rgba(27,107,107,.34)" stroke-dasharray="10 5 2 5" stroke-width=".7">
+          <animateTransform attributeName="transform" type="rotate" from="360 50 50" to="0 50 50" dur="88s" repeatCount="indefinite"/>
+        </circle>
+      </svg>
+    </div>
+    <div class="vitals">
+      <div class="vital" style="--gem:#FFD700"><b>4,612</b><span>lines python</span></div>
+      <div class="vital" style="--gem:#1B6B6B;--gem-glow:rgba(27,107,107,.5)"><b>28</b><span>modules</span></div>
+      <div class="vital" style="--gem:#1B6B6B;--gem-glow:rgba(27,107,107,.5)"><b>9</b><span>niche templates</span></div>
+      <div class="vital" style="--gem:#FFD700"><b>44</b><span>tests passing</span></div>
+      <div class="vital" style="--gem:#D95A2B;--gem-glow:rgba(217,90,43,.5)"><b>8</b><span>stones unturned</span></div>
+      <div class="vital" style="--gem:#D95A2B;--gem-glow:rgba(217,90,43,.5)"><b>0</b><span>emails sent</span></div>
+    </div>
+  </div>
+</header>
+
+<section>
+  <span class="lab">I · the dependency orrery</span>
+  <h2>Everything orbits config</h2>
+  <p class="sub">Each ring is one step further from the core. Touch any body to light the chain it depends on — the gold threads are real <code>import</code> statements, read out of the source.</p>
+  <div class="plate">
+    <div class="orrery-shell">
+      <svg class="orrery" id="orrery" viewBox="0 0 700 700" role="img" aria-label="Radial dependency map of 22 Python modules"></svg>
+    </div>
+    <div class="readout" id="readout"><b>Hover a body.</b> Its imports light up along the gold threads.</div>
+  </div>
+</section>
+
+<section>
+  <span class="lab">II · the lead's passage</span>
+  <h2>Ten states, one narrow road to <em>won</em></h2>
+  <p class="sub">A lead enters as <code>new</code> and exits one of five ways. Four of the five are losses — and the two orange gates are where the pipeline discards leads before it ever speaks to them.</p>
+  <div class="plate">
+    <div class="path-shell">
+      <svg class="statepath" viewBox="0 0 940 292" role="img" aria-label="Lead status state machine, from new through to won or lost"></svg>
+    </div>
+  </div>
+</section>
+
+<section>
+  <span class="lab">III · the quest log</span>
+  <h2>Thirteen stones</h2>
+  <p class="sub">Everything found while surveying the repo. Five sealed this session; eight still open, ordered by what stops you soonest.</p>
+  <div class="quests" id="quests"></div>
+</section>
+
+<section>
+  <span class="lab">IV · outward bindings</span>
+  <h2>Where it reaches beyond itself</h2>
+  <p class="sub">Nine external services. Each one is a credential in <code>.env</code>, a failure mode, and a bill.</p>
+  <div class="plate">
+    <div class="bindings" id="bindings"></div>
+    <div class="tallies">
+      <div class="vital" style="--gem:#1B6B6B;--gem-glow:rgba(27,107,107,.5)"><b>6</b><span>db tables</span></div>
+      <div class="vital" style="--gem:#1B6B6B;--gem-glow:rgba(27,107,107,.5)"><b>6</b><span>http routes</span></div>
+      <div class="vital" style="--gem:#FFD700"><b>60s</b><span>cycle period</span></div>
+      <div class="vital" style="--gem:#D95A2B;--gem-glow:rgba(217,90,43,.5)"><b>50</b><span>daily send cap</span></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  Surveyed from the working tree at <code>a436868</code> — line counts, import edges, statuses, tables and routes read directly out of the source, not estimated. Sky rendered procedurally.
+</footer>
+</div>
+
+<script>
+/* ─────────── night sky: slow drift + swirling brushwork ─────────── */
+(()=>{
+  const c=document.getElementById('sky'),x=c.getContext('2d');
+  const calm=matchMedia('(prefers-reduced-motion:reduce)').matches;
+  let w,h,stars=[],swirls=[];
+  function seed(){
+    w=c.width=innerWidth*devicePixelRatio; h=c.height=innerHeight*devicePixelRatio;
+    c.style.width=innerWidth+'px'; c.style.height=innerHeight+'px';
+    stars=Array.from({length:Math.round(innerWidth*innerHeight/5200)},()=>({
+      x:Math.random()*w,y:Math.random()*h,r:(Math.random()*1.5+.25)*devicePixelRatio,
+      a:Math.random()*.7+.18,tw:Math.random()*.014+.003,p:Math.random()*7
+    }));
+    swirls=Array.from({length:7},(_, i)=>({
+      x:Math.random()*w,y:Math.random()*h,
+      r:(160+Math.random()*300)*devicePixelRatio,
+      hue:[ '11,14,42','46,26,71','27,107,107','217,90,43' ][i%4],
+      a:.055+Math.random()*.05, sp:.00006+Math.random()*.00013, ph:Math.random()*99
+    }));
+  }
+  seed(); addEventListener('resize',seed);
+  function frame(t){
+    x.fillStyle='#0B0E2A'; x.fillRect(0,0,w,h);
+    swirls.forEach(s=>{
+      const dx=Math.cos(t*s.sp+s.ph)*70*devicePixelRatio,
+            dy=Math.sin(t*s.sp*1.3+s.ph)*54*devicePixelRatio;
+      const g=x.createRadialGradient(s.x+dx,s.y+dy,0,s.x+dx,s.y+dy,s.r);
+      g.addColorStop(0,`rgba(${s.hue},${s.a})`); g.addColorStop(1,'rgba(11,14,42,0)');
+      x.fillStyle=g; x.fillRect(0,0,w,h);
+    });
+    stars.forEach(s=>{
+      const a=calm?s.a:s.a*(.62+.38*Math.sin(t*s.tw+s.p));
+      x.beginPath(); x.arc(s.x,s.y,s.r,0,6.2832);
+      x.fillStyle=`rgba(248,249,250,${a})`; x.fill();
+      if(s.r>1.15*devicePixelRatio){
+        x.beginPath(); x.arc(s.x,s.y,s.r*3.4,0,6.2832);
+        x.fillStyle=`rgba(255,215,0,${a*.09})`; x.fill();
+      }
+    });
+    if(!calm) requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+
+/* ─────────── the orrery: real import edges ─────────── */
+(()=>{
+  const RINGS=[
+    {r:0,   label:'core',        hue:'#FFD700', nodes:['config']},
+    {r:132, label:'utils',       hue:'#1B6B6B', nodes:['db','compliance','email_utils','tracker','tracer','github_api','vercel_api','stripe_utils','screenshot']},
+    {r:228, label:'agents',      hue:'#D95A2B', nodes:['lead_agent','design_agent','sales_agent']},
+    {r:308, label:'entrypoints', hue:'#F8F9FA', nodes:['main','dashboard','webhook_server','quick_run','scheduler','run']}
+  ];
+  const IMPORTS={
+    db:['config'], compliance:['config','db'], email_utils:['config','compliance'],
+    tracker:['config','db'], tracer:['config'], github_api:['config'],
+    vercel_api:['config'], stripe_utils:['config'], screenshot:[],
+    lead_agent:['db','tracer'],
+    design_agent:['config','db','github_api','screenshot','tracer','tracker','vercel_api'],
+    sales_agent:['config','compliance','db','email_utils','screenshot','tracer','tracker'],
+    main:['config','lead_agent','design_agent','sales_agent','db','github_api','stripe_utils','vercel_api'],
+    dashboard:['config','lead_agent','design_agent','sales_agent','db','tracer','scheduler'],
+    webhook_server:['config','compliance','db','screenshot','stripe_utils','tracker'],
+    quick_run:['config','lead_agent','design_agent','sales_agent','db'],
+    scheduler:[], run:[], config:[]
+  };
+  const LINES={config:149,db:374,compliance:128,email_utils:369,tracker:66,tracer:183,
+    github_api:108,vercel_api:176,stripe_utils:62,screenshot:127,lead_agent:246,
+    design_agent:378,sales_agent:571,main:264,dashboard:314,webhook_server:98,
+    quick_run:100,scheduler:201,run:65};
+  const ROLE={config:'validates every credential at startup',db:'SQLite schema and every query',
+    compliance:'unsubscribe tokens, footer, bounce detection',email_utils:'SMTP send / IMAP poll / SendGrid',
+    tracker:'signed click-tracking links',tracer:'trace → agent → tool spans',
+    github_api:'creates, pushes and transfers repos',vercel_api:'deploys the preview site',
+    stripe_utils:'checkout sessions and webhook verification',screenshot:'Playwright capture of the preview',
+    lead_agent:'CSV → researched lead, respects robots.txt',design_agent:'template → deployed preview',
+    sales_agent:'drafts, sends, and reads the replies',main:'the 60-second orchestrator loop + console',
+    dashboard:'Streamlit operator UI, start/stop control',webhook_server:'Flask: click, unsubscribe, Stripe',
+    quick_run:'one lead end to end, no rate limits',scheduler:'restarts main.py if it dies',
+    run:'entrypoint dispatcher'};
+
+  const svg=document.getElementById('orrery'),NS='http://www.w3.org/2000/svg',CX=350,CY=350;
+  const pos={}, el=(n,a)=>{const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);return e;};
+
+  RINGS.forEach((ring,ri)=>{
+    if(ring.r){
+      svg.appendChild(el('circle',{class:'ring',cx:CX,cy:CY,r:ring.r}));
+      const t=el('text',{class:'ringlab',x:CX+4,y:CY-ring.r-7});
+      t.textContent=ring.label.toUpperCase(); svg.appendChild(t);
+    }
+    ring.nodes.forEach((n,i)=>{
+      const ang=(i/ring.nodes.length)*Math.PI*2 - Math.PI/2 + (ri*0.28);
+      pos[n]={x:CX+Math.cos(ang)*ring.r, y:CY+Math.sin(ang)*ring.r, hue:ring.hue, ring:ring.label};
+    });
+  });
+
+  const edges=[];
+  for(const [from,deps] of Object.entries(IMPORTS))
+    deps.forEach(to=>{
+      if(!pos[from]||!pos[to])return;
+      const a=pos[from],b=pos[to];
+      const mx=(a.x+b.x)/2, my=(a.y+b.y)/2;
+      const k=0.82; // bow toward centre — arcs read as orbits, not a hairball
+      const p=el('path',{class:'edge',d:`M${a.x},${a.y} Q${CX+(mx-CX)*k},${CY+(my-CY)*k} ${b.x},${b.y}`});
+      p.dataset.from=from; svg.appendChild(p); edges.push(p);
+    });
+
+  const readout=document.getElementById('readout');
+  const nodes=[];
+  for(const [name,p] of Object.entries(pos)){
+    const g=el('g',{class:'node',tabindex:'0',role:'button','aria-label':name});
+    const rad=name==='config'?13:Math.max(4.6,Math.min(11,Math.sqrt(LINES[name]||60)/2.15));
+    const c=el('circle',{cx:p.x,cy:p.y,r:rad,fill:p.hue,opacity:.9});
+    c.style.color=p.hue;
+    const t=el('text',{x:p.x,y:p.y+rad+11}); t.textContent=name;
+    g.append(c,t); svg.appendChild(g); nodes.push({g,name});
+
+    const lightUp=()=>{
+      edges.forEach(e=>e.classList.toggle('on',e.dataset.from===name));
+      nodes.forEach(n=>n.g.classList.toggle('on',n.name===name));
+      const d=IMPORTS[name]||[];
+      readout.innerHTML=`<b>${name}.py</b> — ${ROLE[name]||''}. `+
+        `${LINES[name]||'—'} lines, ${p.ring} ring. `+
+        (d.length?`Imports ${d.length}: <code>${d.join(', ')}</code>.`:'Imports nothing internal — a leaf.');
+    };
+    g.addEventListener('mouseenter',lightUp); g.addEventListener('focus',lightUp);
+  }
+})();
+
+/* ─────────── star-path: the lead state machine ─────────── */
+(()=>{
+  const svg=document.querySelector('.statepath'),NS='http://www.w3.org/2000/svg';
+  const el=(n,a)=>{const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);return e;};
+  svg.appendChild((()=>{
+    const d=el('defs',{}); const m=el('marker',{id:'tip',viewBox:'0 0 8 8',refX:7,refY:4,markerWidth:6,markerHeight:6,orient:'auto'});
+    m.appendChild(el('path',{d:'M0,0 L8,4 L0,8 z',fill:'rgba(248,249,250,.4)'})); d.appendChild(m); return d;
+  })());
+
+  const S=[
+    {id:'new',        x:40,  y:118, t:'new',         c:'#F8F9FA'},
+    {id:'researched', x:180, y:118, t:'researched',  c:'#1B6B6B'},
+    {id:'designed',   x:320, y:118, t:'designed',    c:'#1B6B6B'},
+    {id:'emailed',    x:460, y:118, t:'emailed',     c:'#FFD700'},
+    {id:'replied',    x:600, y:60,  t:'replied',     c:'#FFD700'},
+    {id:'negotiating',x:600, y:118, t:'negotiating', c:'#FFD700'},
+    {id:'payment',    x:740, y:118, t:'payment_sent',c:'#FFD700'},
+    {id:'won',        x:872, y:118, t:'won',         c:'#FFD700'},
+    {id:'bounced',    x:600, y:178, t:'bounced',     c:'#D95A2B'},
+    {id:'unsub',      x:600, y:232, t:'unsubscribed',c:'#D95A2B'},
+    {id:'lost',       x:392, y:232, t:'lost',        c:'#D95A2B'}
+  ];
+  const E=[['new','researched'],['researched','designed'],['designed','emailed'],
+    ['emailed','replied'],['emailed','bounced'],['replied','negotiating'],
+    ['negotiating','payment'],['payment','won'],['emailed','unsub'],
+    ['emailed','lost']];
+  const W=[['new','lost'],['researched','lost']];   // the two discard gates
+
+  const P={}; S.forEach(s=>P[s.id]=s);
+  const draw=(pair,cls)=>{
+    const a=P[pair[0]],b=P[pair[1]];
+    const ax=a.x+ (a.t.length*6.4+18), ay=a.y+13, bx=b.x-4, by=b.y+13;
+    svg.appendChild(el('path',{class:cls,d:`M${ax},${ay} C${ax+34},${ay} ${bx-34},${by} ${bx},${by}`}));
+  };
+  W.forEach(p=>draw(p,'st-edge warn')); E.forEach(p=>draw(p,'st-edge'));
+
+  S.forEach(s=>{
+    const w=s.t.length*6.4+18, g=el('g',{class:'st-node'});
+    g.appendChild(el('rect',{x:s.x,y:s.y,width:w,height:26,rx:2,
+      fill:'rgba(11,14,42,.9)',stroke:s.c,opacity:.96}));
+    const t=el('text',{x:s.x+w/2,y:s.y+17}); t.textContent=s.t; t.setAttribute('fill',s.c);
+    g.appendChild(t); svg.appendChild(g);
+  });
+  const note=el('text',{x:40,y:272,fill:"rgba(217,90,43,.82)",'font-size':'10.5px','font-family':'ui-monospace,monospace'});
+  note.textContent='orange gates → discarded before contact:';
+  const note2=el('text',{x:40,y:286,fill:"rgba(217,90,43,.82)",'font-size':'10.5px','font-family':'ui-monospace,monospace'});
+  note2.textContent='no website found, or no email discovered';
+  svg.append(note,note2);
+})();
+
+/* ─────────── quest log ─────────── */
+(()=>{
+  const Q=[
+    {s:'open',sev:'#D95A2B',r:'!',h:'Sole traders cannot lawfully be cold-emailed',
+     w:'PECR reg 22',p:'Limited companies and LLPs need only an opt-out; sole traders and unincorporated partnerships need prior consent. Plumbers, landscapers and salons are largely sole traders. A Companies House lookup before send closes it — and raises lead quality, because incorporated firms can approve an invoice.'},
+    {s:'open',sev:'#D95A2B',r:'!',h:'Compliance layer implements the wrong country&rsquo;s law',
+     w:'compliance.py',p:'Header reads &ldquo;CAN-SPAM compliance helpers.&rdquo; That is US law. The machinery — unsubscribe tokens, footer, List-Unsubscribe header — is sound and needs re-aiming at PECR and UK GDPR, plus a legitimate-interests assessment on file.'},
+    {s:'open',sev:'#D95A2B',r:'!',h:'Preview pages are indexable',
+     w:'templates/*',p:'No noindex meta tag and no robots disallow. A public page carrying a real business&rsquo;s name can rank in search or be mistaken for their official site.'},
+    {s:'open',sev:'#D95A2B',r:'!',h:'The seven-day claim is unenforced',
+     w:'sales_agent.py:263',p:'Every email says the preview is live for 7 days &ldquo;after that it&rsquo;ll be repurposed.&rdquo; Nothing in the codebase expires anything. Enforce it or stop saying it.'},
+    {s:'open',sev:'#FFD700',r:'~',h:'One Vercel project and GitHub repo per lead',
+     w:'design_agent.py',p:'Built and deployed for every researched lead before anyone shows interest. At the 50/day cap that is 50 dead deployments a day. Serving previews as static pages from the existing Flask host removes both from the cold path.'},
+    {s:'open',sev:'#FFD700',r:'~',h:'No follow-up sequence',
+     w:'sales_agent.py',p:'Status reaches emailed and stops forever. Most cold-email replies come from follow-ups — this leaves the bulk of the return on the table after doing the most expensive work per lead.'},
+    {s:'open',sev:'#FFD700',r:'~',h:'No funnel measurement',
+     w:'dashboard.py',p:'Leads and traces are shown; reply rate, click rate and cost per reply are not. Every projection is a guess until this exists.'},
+    {s:'open',sev:'#1B6B6B',r:'·',h:'Leads arrive by hand',
+     w:'leads_inbox/',p:'The &ldquo;autonomous&rdquo; pipeline still needs hand-written CSVs of business_name, niche, location. The tedious part is the un-automated one.'},
+    {s:'done',sev:'#1B6B6B',r:'✓',h:'Send path crashed on every lead',
+     w:'sales_agent.py',p:'Eleven lines of caller code pasted into the validator: referenced an out-of-scope variable and recursed. Every send raised NameError before reaching the transport. Fixed and covered by tests.'},
+    {s:'done',sev:'#1B6B6B',r:'✓',h:'Auth-guard constants never defined',
+     w:'sales_agent.py',p:'The preview safety gate referenced three constants that existed nowhere. Defined; they now catch a Vercel deployment left behind protection.'},
+    {s:'done',sev:'#1B6B6B',r:'✓',h:'Opening line was false for every recipient',
+     w:'sales_agent.py',p:'&ldquo;People searching for you only find your Google listing&rdquo; — sent to businesses whose websites the pipeline had just scraped. Reframed as an unsolicited redesign.'},
+    {s:'done',sev:'#1B6B6B',r:'✓',h:'Testimonials were invented',
+     w:'design_agent.py',p:'An unattributed review published on a public page carrying the business&rsquo;s real name. Now passes through only genuinely scraped text; all nine templates drop the block when empty.'},
+    {s:'done',sev:'#1B6B6B',r:'✓',h:'Missing dependency broke a clean install',
+     w:'requirements.txt',p:'email_utils imports sendgrid unconditionally; it was absent from requirements. A fresh clone could not start the dashboard or the loop.'}
+  ];
+  document.getElementById('quests').innerHTML=Q.map(q=>`
+    <article class="quest${q.s==='done'?' sealed':''}" style="--sev:${q.sev}">
+      <span class="rune" aria-hidden="true">${q.r}</span>
+      <div><h3>${q.h}</h3><p>${q.p}</p></div>
+      <span class="where">${q.w}</span>
+    </article>`).join('');
+})();
+
+/* ─────────── external bindings ─────────── */
+(()=>{
+  const B=[['GitHub','preview repos'],['Vercel','deployment'],['Stripe','checkout + webhook'],
+    ['SMTP / IMAP','send and poll'],['SendGrid','alternate transport'],['Hugging Face','email drafting'],
+    ['DuckDuckGo','website discovery'],['Unsplash','hero imagery'],['VoltAgent','trace mirroring']];
+  document.getElementById('bindings').innerHTML=B.map(([n,r])=>
+    `<div class="bind"><b>${n}</b><span>${r}</span></div>`).join('');
+})();
+</script>
