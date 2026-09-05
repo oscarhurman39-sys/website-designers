@@ -192,6 +192,19 @@ EMAIL_MAX_PER_DAY: int = 50
 INBOX_POLL_SECONDS: int = 300
 MAIN_LOOP_SLEEP_SECONDS: int = 60
 
+# --- Preview expiry --------------------------------------------------------
+# Cold emails promise the preview "is live for 7 days -- after that it'll be
+# repurposed" (see agents/sales_agent.py). utils/teardown.py makes that true
+# by deleting the Vercel project + GitHub repo of previews older than
+# PREVIEW_TTL_DAYS whose lead never turned into a conversation. Keep this in
+# sync with the wording in the email copy if you change it.
+PREVIEW_TTL_DAYS: int = int(os.getenv("PREVIEW_TTL_DAYS", "7") or 7)
+# Set to false/0/no to keep the hourly teardown pass in main.py from running
+# (the one-shot `python pipeline/utils/teardown.py` CLI ignores this flag).
+PREVIEW_TEARDOWN_ENABLED: bool = (
+    os.getenv("PREVIEW_TEARDOWN_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+)
+
 
 def _load_or_create_secret_key() -> str:
     """Return SECRET_KEY from env, or a persisted generated one.
