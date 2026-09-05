@@ -262,7 +262,46 @@ keeps running and doesn't need to be re-invoked. Two ways to keep the
   sell/negotiate/close/handover flow itself is fully automated and needs
   no terminal.
 
+## Go-live checklist
+
+Work through these in order the first time you switch from dry runs to real
+sending. Each one is cheap; skipping them is how domains get burned.
+
+1. **Keep it running.** Windows: `.\install_autostart.ps1` once. Real
+   sending: the VPS steps in [`deploy/README.md`](deploy/README.md).
+2. **`ENABLE_LIVE_SEND=true`** in `.env` -- until then every send is a
+   logged dry run, whatever the rest of the config says.
+3. **Warm up.** Domain age is not mailbox reputation. Start at 5-10 emails a
+   day per mailbox for the first week, 15-20 the second, then the 25-ish
+   ceiling. `EMAIL_MAX_PER_DAY` is the hard cap; lower it for week one.
+4. **Watch the first replies by hand.** The Slack alerts and the dashboard
+   show every classification and negotiation move. The classifier and the
+   price band have only been exercised on dummy data until real prospects
+   answer.
+5. **Stripe live mode.** Swap `STRIPE_SECRET_KEY` for the live key and
+   create a live-mode webhook endpoint at `PUBLIC_BASE_URL/webhook/stripe`
+   (its signing secret goes in `STRIPE_WEBHOOK_SECRET`). Test keys never
+   charge anyone.
+6. **DMARC.** The domain starts at `p=none` (monitor only). After a month of
+   clean sending change the `_dmarc` TXT record at Porkbun to
+   `p=quarantine`, then `p=reject` once you trust it. Stricter DMARC lifts
+   inbox placement.
+7. **Prune test artefacts.** `python run.py cleanup-tests` removes the
+   "Test Business" leads plus their Vercel projects and GitHub repos.
+
 ## Deployment
+
+### Always-on, the short version
+
+- **Windows dev box:** run `.\install_autostart.ps1` once (PowerShell, repo
+  root). It registers a logon task that runs `start_all.bat`, which opens the
+  webhook server, the ngrok tunnel and the `scheduler.py` supervisor (which
+  restarts `main.py` if it crashes). The pipeline then comes back after every
+  reboot for as long as the PC is on.
+- **VPS (recommended for real sending):** everything needed is in
+  [`deploy/`](deploy/README.md): systemd units for the loop and a gunicorn-served
+  webhook server, a Caddyfile for `track.caseywebsites.com` with automatic TLS,
+  and step-by-step install notes. A ~£4/month box is plenty.
 
 ### A cheap VPS with tmux/screen
 

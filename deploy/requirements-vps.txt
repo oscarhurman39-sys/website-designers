@@ -1,0 +1,3 @@
+# Extra packages only needed on the Linux VPS (not on the Windows dev box).
+-r ../pipeline/requirements.txt
+gunicorn==23.0.0
