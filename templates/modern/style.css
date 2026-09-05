@@ -1,0 +1,13 @@
+/* templates/modern -- everything visual lives in Tailwind utility classes in
+   index.html; this file only carries what utilities can't express. */
+html { scroll-behavior: smooth; }
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fade-up { animation: fade-up .7s ease-out both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .fade-up { animation: none; }
+}

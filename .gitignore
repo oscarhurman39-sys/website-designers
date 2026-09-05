@@ -237,3 +237,6 @@ pipeline/screenshots/
 
 # Claude Code agent worktrees
 .claude/worktrees/
+
+# local template renders (pipeline/render_preview.py)
+pipeline/out/

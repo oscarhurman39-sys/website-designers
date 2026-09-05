@@ -177,31 +177,33 @@ streamlit run dashboard.py
 
 ## Templates
 
-`templates/` holds one subfolder per business niche, each with an
-`index.html` and a matching `style.css`. `design_agent.py` only builds a
-site for a lead if a subfolder matching its `niche` column exists -- add
-more niches by adding more subfolders.
+Every lead renders through **`templates/modern/`** by default: one photo-led,
+Tailwind (CDN, no build step) design, themed per niche from
+`NICHE_THEMES` in `pipeline/agents/design_agent.py`. A theme supplies the
+accent colours, a hand-picked hero and gallery photo, the tagline, an
+"about" paragraph, six services with one-line blurbs, and the section
+headings and calls to action (a cafe says "What we serve" and "Find us", a
+plumber says "What we do" and "Get a quote"). Adding a niche is adding one
+dict entry, not a folder.
 
-Two template styles currently coexist:
+The page is built from what is actually known about the business and hides
+anything that isn't: phone and call buttons, address and the embedded Google
+map, the Google rating (only once it has 10+ reviews), a testimonial (only
+one scraped from the lead's own site, never invented). There is no
+placeholder text anywhere. Leads sourced from Google Places arrive with
+phone, address, rating and review count already filled in.
 
-- **`landscaper`, `cafe`, `plumber`, `salon`, `electrician`** -- newer,
-  Tailwind CSS (via CDN, no build step) single-page designs. Placeholders:
-  `{{ business_name }}`, `{{ phone }}`, `{{ hero_headline }}`,
-  `{{ services_list }}` (falls back to a niche-appropriate default via
-  Jinja's `default()` filter if not supplied), `{{ pain_point_solution }}`,
-  `{{ testimonial }}`, `{{ location }}`, `{{ year }}`, and
-  `{{ preview_url }}` (a real, working link back to the site's own
-  click-tracked preview URL, shown at the bottom as a "share this preview"
-  link).
-- **`restaurant`, `gym`, `dentist`** -- original hand-rolled CSS designs
-  from the pipeline's first iteration. Placeholders: `{{ business_name }}`,
-  `{{ phone }}`, `{{ pain_point_solution }}`, `{{ testimonial }}`,
-  `{{ location }}`, `{{ hero_image_url }}`, `{{ year }}`.
+Check a change by eye without deploying anything:
 
-`design_agent.py`'s `build_context()` supplies the union of both
-placeholder sets to every render, so either style works regardless of
-which niche a lead matches -- unused keys are simply ignored by whichever
-template doesn't reference them.
+```bash
+python pipeline/render_preview.py            # all niches, sample data -> pipeline/out/*.png
+python pipeline/render_preview.py --lead 81  # a real lead from the DB
+```
+
+The older per-niche folders (`cafe`, `default`, `dentist`, ...) are kept and
+used when `DESIGN_TEMPLATE_STYLE=legacy`; they are text-only and the
+placeholders (`{{ business_name }}`, `{{ phone }}`, ...) are documented in
+the files themselves.
 
 ## Compliance
 

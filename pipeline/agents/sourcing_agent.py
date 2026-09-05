@@ -266,6 +266,9 @@ def _insert(candidate: Candidate) -> int:
         place_id=candidate.place_id,
         website_url=candidate.website_url or None,
         phone=candidate.phone or None,
+        address=candidate.address or None,
+        google_rating=candidate.rating,
+        google_reviews_count=candidate.review_count or None,
         notes=candidate.summary(),
     )
     return lead_id

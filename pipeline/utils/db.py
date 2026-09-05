@@ -128,6 +128,13 @@ def init_db(db_path: Optional[str] = None) -> None:
         # manual/CSV leads). Its index is created here rather than in _SCHEMA
         # because on a pre-existing DB the column only exists after the migration.
         _migrate_add_column(conn, "leads", "place_id", "TEXT")
+        # Structured business facts from Google Places (agents/sourcing_agent.py),
+        # rendered straight into the preview site by agents/design_agent.py:
+        # a real phone/address/rating on the page is what makes it look like
+        # *their* site rather than a template.
+        _migrate_add_column(conn, "leads", "address", "TEXT")
+        _migrate_add_column(conn, "leads", "google_rating", "REAL")
+        _migrate_add_column(conn, "leads", "google_reviews_count", "INTEGER")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_leads_place_id ON leads(place_id)")
         # Multi-mailbox sending (utils/mailboxes.py): the mailbox user that
         # first emailed this lead, so every later message in the thread leaves

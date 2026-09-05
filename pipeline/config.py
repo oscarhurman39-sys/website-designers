@@ -75,6 +75,10 @@ SENDING_DOMAIN: str = os.getenv("SENDING_DOMAIN", "")
 PHYSICAL_ADDRESS: str = os.getenv("PHYSICAL_ADDRESS", "")
 
 UNSPLASH_ACCESS_KEY: str = os.getenv("UNSPLASH_ACCESS_KEY", "")
+# "modern" (default) renders every niche through templates/modern, the
+# photo-led design driven by agents/design_agent.py's NICHE_THEMES. "legacy"
+# uses the old text-only per-niche folders.
+DESIGN_TEMPLATE_STYLE: str = (os.getenv("DESIGN_TEMPLATE_STYLE", "").strip().lower() or "modern")
 # `.strip() or default` (rather than getenv's own default) so an empty
 # `DB_PATH=` line in .env falls back too, not just a fully-absent key.
 DB_PATH: str = os.getenv("DB_PATH", "").strip() or str(Path(__file__).resolve().parent / "leads.db")
