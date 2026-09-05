@@ -1,0 +1,296 @@
+"""SourcingAgent: discovers new leads automatically via the Google Places
+API (New) Text Search, so the pipeline isn't limited to hand-typed leads
+and CSV drops.
+
+Why Places rather than a generic web search: the pipeline sells a rebuild
+of a *poor* website, and LeadAgent can only find a contact email by
+scraping a site that exists -- a business with no website is marked
+'lost' at send time. Places tells us up front which businesses are
+OPERATIONAL and have a websiteUri, so we never queue leads the researcher
+is guaranteed to throw away.
+
+Everything here is best-effort and must never take the main loop down:
+API/network failures are printed and skipped, and source_leads() always
+returns the number of leads it actually managed to insert.
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterator, Optional
+from urllib.parse import urlparse
+
+import requests
+
+import config
+from utils import db, tracer
+
+PLACES_TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
+# Field masks are mandatory on Places API (New) and also drive billing, so
+# ask only for what we store. `nextPageToken` has to be in the mask too or
+# the API never returns one and paging silently stops after page one.
+PLACES_FIELD_MASK = ",".join(
+    [
+        "places.id",
+        "places.displayName",
+        "places.formattedAddress",
+        "places.websiteUri",
+        "places.nationalPhoneNumber",
+        "places.businessStatus",
+        "places.types",
+        "places.rating",
+        "places.userRatingCount",
+        "nextPageToken",
+    ]
+)
+PAGE_SIZE = 20  # the API's per-page maximum
+MAX_PAGES_PER_QUERY = 3  # Text Search caps out at 60 results per query
+REQUEST_TIMEOUT = 15
+
+# Hosts that Google lists as a business's "website" but which are really a
+# social profile or directory entry. They aren't sites we can improve, and
+# LeadAgent can't scrape a contact email from them either, so a lead that
+# points at one is dead on arrival.
+PLATFORM_HOSTS: frozenset[str] = frozenset(
+    {"facebook.com", "instagram.com", "linktr.ee", "yell.com", "checkatrade.com", "google.com"}
+)
+
+# `niche` must name a folder here, otherwise DesignAgent has no template to
+# build the preview from. Checked at sourcing time so a typo in
+# SOURCING_NICHES shows up in the log rather than as broken previews.
+TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "templates"
+
+
+@dataclass
+class Candidate:
+    """A Places result that passed every filter and is ready to insert."""
+
+    business_name: str
+    niche: str
+    location: str
+    place_id: str
+    website_url: str
+    phone: str
+    address: str
+    rating: Optional[float]
+    review_count: int
+
+    def summary(self) -> str:
+        """Short JSON blob stored in leads.notes (not scraped_info, which
+        LeadAgent overwrites with homepage text) so the rating and review
+        count survive research and are visible on the dashboard."""
+        return json.dumps(
+            {
+                "source": "google_places",
+                "rating": self.rating,
+                "review_count": self.review_count,
+                "address": self.address,
+                "sourced_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        )
+
+    def describe(self) -> str:
+        rating = f"{self.rating} ({self.review_count} reviews)" if self.rating is not None else "unrated"
+        return (
+            f"{self.business_name} | {self.niche} | {self.location} | "
+            f"{self.website_url or '-'} | {self.phone or '-'} | {rating}"
+        )
+
+
+def _host_of(url: str) -> str:
+    host = (urlparse(url).hostname or "").lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def is_platform_host(url: str) -> bool:
+    """True if `url` lives on one of PLATFORM_HOSTS or any subdomain of one
+    (m.facebook.com, business.google.com, ...)."""
+    host = _host_of(url)
+    return any(host == platform or host.endswith("." + platform) for platform in PLATFORM_HOSTS)
+
+
+def _skip_reason(place: dict[str, Any]) -> Optional[str]:
+    """Why this raw Places result shouldn't become a lead, or None if it should."""
+    if place.get("businessStatus") != "OPERATIONAL":
+        return f"business status {place.get('businessStatus') or 'unknown'}"
+    if not place.get("id"):
+        return "no place id"
+    if not (place.get("displayName") or {}).get("text", "").strip():
+        return "no display name"
+    website = (place.get("websiteUri") or "").strip()
+    if not website and config.SOURCING_REQUIRE_WEBSITE:
+        return "no website"
+    if website and is_platform_host(website):
+        return f"website is a platform profile ({_host_of(website)})"
+    return None
+
+
+def _search_page(text_query: str, page_token: Optional[str] = None) -> dict[str, Any]:
+    """One Text Search request. Raises on transport errors or a non-200
+    reply, surfacing Google's own error message rather than the raw body."""
+    body: dict[str, Any] = {"textQuery": text_query, "pageSize": PAGE_SIZE}
+    if page_token:
+        body["pageToken"] = page_token
+    resp = requests.post(
+        PLACES_TEXT_SEARCH_URL,
+        json=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": config.GOOGLE_PLACES_API_KEY,
+            "X-Goog-FieldMask": PLACES_FIELD_MASK,
+        },
+        timeout=REQUEST_TIMEOUT,
+    )
+    if resp.status_code != 200:
+        try:
+            message = resp.json().get("error", {}).get("message", "")
+        except ValueError:
+            message = (resp.text or "")[:200]
+        raise RuntimeError(f"Places API HTTP {resp.status_code}: {message}")
+    return resp.json()
+
+
+def _iter_places(text_query: str) -> Iterator[dict[str, Any]]:
+    """Yield raw place dicts for `text_query`, following nextPageToken up to
+    MAX_PAGES_PER_QUERY pages."""
+    page_token: Optional[str] = None
+    for _ in range(MAX_PAGES_PER_QUERY):
+        data = _search_page(text_query, page_token)
+        yield from data.get("places", [])
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            return
+
+
+def _to_candidate(place: dict[str, Any], niche: str, location: str) -> Candidate:
+    return Candidate(
+        business_name=place["displayName"]["text"].strip(),
+        niche=niche,
+        location=location,
+        place_id=place["id"],
+        website_url=(place.get("websiteUri") or "").strip(),
+        phone=(place.get("nationalPhoneNumber") or "").strip(),
+        address=place.get("formattedAddress") or "",
+        rating=place.get("rating"),
+        review_count=int(place.get("userRatingCount") or 0),
+    )
+
+
+def _already_in_db(candidate: Candidate) -> bool:
+    """Dedupe on the Google place id first; fall back to a case-insensitive
+    name+location match so a lead someone typed in by hand (no place_id)
+    doesn't get a second copy."""
+    return db.place_id_exists(candidate.place_id) or db.lead_exists_by_name_and_location(
+        candidate.business_name, candidate.location
+    )
+
+
+def iter_candidates(limit: Optional[int] = None) -> Iterator[Candidate]:
+    """Lazily yield insert-ready candidates across every niche x location
+    query, stopping after `limit` (None = no limit).
+
+    Read-only: nothing is written here, which is what lets the CLI's
+    --dry-run share this exact code path with the real run. A failing
+    query is printed and skipped so one bad search doesn't waste the rest.
+    """
+    if limit is not None and limit <= 0:
+        return
+    yielded = 0
+    skipped: dict[str, int] = {}
+    seen_place_ids: set[str] = set()  # the same business shows up for neighbouring towns
+
+    for niche in config.SOURCING_NICHES:
+        if not (TEMPLATES_DIR / niche).is_dir():
+            print(f"[sourcing] WARNING: no templates/{niche}/ folder; DesignAgent will fall back for these leads")
+        for location in config.SOURCING_LOCATIONS:
+            query = f"{niche} in {location}"
+            try:
+                for place in _iter_places(query):
+                    reason = _skip_reason(place)
+                    if reason:
+                        skipped[reason] = skipped.get(reason, 0) + 1
+                        continue
+                    if place["id"] in seen_place_ids:
+                        continue
+                    seen_place_ids.add(place["id"])
+                    candidate = _to_candidate(place, niche, location)
+                    if _already_in_db(candidate):
+                        skipped["already in DB"] = skipped.get("already in DB", 0) + 1
+                        continue
+                    yield candidate
+                    yielded += 1
+                    if limit is not None and yielded >= limit:
+                        _print_skip_summary(skipped)
+                        return
+            except (requests.RequestException, RuntimeError, ValueError, KeyError) as exc:
+                print(f"[sourcing] Query {query!r} failed: {exc}")
+    _print_skip_summary(skipped)
+
+
+def _print_skip_summary(skipped: dict[str, int]) -> None:
+    if skipped:
+        detail = ", ".join(f"{reason}: {n}" for reason, n in sorted(skipped.items()))
+        print(f"[sourcing] Skipped -- {detail}")
+
+
+def remaining_today(limit: Optional[int] = None) -> int:
+    """How many more leads sourcing may insert right now: the daily cap
+    minus what's already been sourced today (counted from the DB, so a
+    restart mid-day can't blow through it), further bounded by `limit`."""
+    remaining = max(0, config.SOURCING_DAILY_LIMIT - db.count_sourced_leads_today())
+    if limit is not None:
+        remaining = min(remaining, max(0, limit))
+    return remaining
+
+
+def _insert(candidate: Candidate) -> int:
+    lead_id = db.insert_lead(candidate.business_name, candidate.niche, candidate.location, status="new")
+    db.update_lead_fields(
+        lead_id,
+        place_id=candidate.place_id,
+        website_url=candidate.website_url or None,
+        phone=candidate.phone or None,
+        notes=candidate.summary(),
+    )
+    return lead_id
+
+
+def source_leads(limit: Optional[int] = None) -> int:
+    """Discover and insert new 'new'-status leads. Returns how many were
+    inserted. Wrapped in a trace span like the other agents so sourcing
+    runs show up on the dashboard; the logic lives in _source_leads_impl."""
+    return tracer.run_traced(
+        agent_id="sourcing-agent",
+        agent_name="LeadSourcer",
+        tool_name="google_places_text_search",
+        input_data={
+            "limit": limit,
+            "niches": list(config.SOURCING_NICHES),
+            "locations": list(config.SOURCING_LOCATIONS),
+        },
+        fn=lambda: _source_leads_impl(limit),
+    )
+
+
+def _source_leads_impl(limit: Optional[int] = None) -> int:
+    if not config.GOOGLE_PLACES_API_KEY:
+        print("[sourcing] GOOGLE_PLACES_API_KEY is not set; skipping lead sourcing.")
+        return 0
+
+    budget = remaining_today(limit)
+    if budget == 0:
+        print(f"[sourcing] Daily sourcing limit ({config.SOURCING_DAILY_LIMIT}) already reached; nothing to do.")
+        return 0
+
+    inserted = 0
+    try:
+        for candidate in iter_candidates(budget):
+            lead_id = _insert(candidate)
+            inserted += 1
+            print(f"[sourcing] Added lead {lead_id}: {candidate.describe()}")
+    except Exception as exc:  # noqa: BLE001 - sourcing is optional; never take the loop down
+        print(f"[sourcing] Aborted after {inserted} insert(s): {exc}")
+    print(f"[sourcing] Inserted {inserted} new lead(s) (budget was {budget}).")
+    return inserted

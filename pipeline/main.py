@@ -4,7 +4,9 @@ Run with: `python main.py`  (from inside the `pipeline/` directory, with the
 virtualenv active and `.env` populated).
 
 Each iteration:
-  1. Ingests any new CSVs dropped into leads_inbox/ (LeadAgent).
+  1. Ingests any new CSVs dropped into leads_inbox/ (LeadAgent) and -- if
+     SOURCING_ENABLED, at most once an hour -- sources new leads from Google
+     Places (SourcingAgent).
   2. Runs LeadAgent research on 'new' leads.
   3. Runs DesignAgent on 'researched' leads.
   4. Sends at most one rate-limited cold email via SalesAgent on a 'designed' lead.
@@ -47,7 +49,7 @@ from pathlib import Path
 from typing import Optional
 
 import config
-from agents import design_agent, lead_agent, sales_agent
+from agents import design_agent, lead_agent, sales_agent, sourcing_agent
 from utils import db, github_api, teardown, vercel_api
 
 PIPELINE_DIR = Path(__file__).resolve().parent
@@ -56,6 +58,8 @@ LEADS_PROCESSED = PIPELINE_DIR / "leads_processed"
 PAUSE_FLAG = PIPELINE_DIR / ".paused"  # dashboard.py toggles this file to pause/resume
 
 _shutdown_event = threading.Event()
+# time.monotonic() of the last sourcing attempt (None = never in this process).
+_last_sourcing_at: float | None = None
 
 # In-memory per-lead backoff for failed automated handover attempts (e.g. the
 # customer sent a typo'd GitHub username, so the invite 404s). Without this,
@@ -170,8 +174,25 @@ def _finalize_won_leads() -> None:
         print(f"[main] Automated handover complete for lead {lead['id']}.")
 
 
+def _maybe_source_leads() -> None:
+    """Run SourcingAgent at most once per SOURCING_INTERVAL_SECONDS. The
+    timestamp is taken *before* the call so a failing API isn't retried on
+    every 60-second cycle; the agent itself never raises."""
+    global _last_sourcing_at
+    if not config.SOURCING_ENABLED:
+        return
+    now = time.monotonic()
+    if _last_sourcing_at is not None and now - _last_sourcing_at < config.SOURCING_INTERVAL_SECONDS:
+        return
+    _last_sourcing_at = now
+    inserted = sourcing_agent.source_leads()
+    if inserted:
+        print(f"[main] Sourced {inserted} new lead(s) from Google Places")
+
+
 def _run_cycle() -> None:
     _process_inbox_csvs()
+    _maybe_source_leads()
 
     for lead in db.list_leads_by_status("new"):
         lead_agent.research_lead(lead)

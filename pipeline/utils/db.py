@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS leads (
                     CHECK (status IN ({_STATUS_LIST_SQL})),
     unsubscribed    INTEGER NOT NULL DEFAULT 0,
     notes           TEXT,
+    place_id        TEXT,
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -110,7 +111,7 @@ CREATE INDEX IF NOT EXISTS idx_websites_lead ON websites(lead_id);
 
 def init_db(db_path: Optional[str] = None) -> None:
     """Create all tables/indexes if they don't already exist. Idempotent."""
-    with _connect(db_path) as conn:
+    with get_connection(db_path) as conn:
         conn.executescript(_SCHEMA)
         _migrate_add_column(conn, "websites", "screenshot_url", "TEXT")
         _migrate_add_column(conn, "websites", "screenshot_path", "TEXT")
@@ -123,6 +124,11 @@ def init_db(db_path: Optional[str] = None) -> None:
         _migrate_add_column(conn, "leads", "github_username", "TEXT")
         _migrate_add_column(conn, "leads", "checkout_url", "TEXT")
         _migrate_add_column(conn, "websites", "torn_down_at", "TEXT")
+        # Google place id for leads found by agents/sourcing_agent.py (NULL for
+        # manual/CSV leads). Its index is created here rather than in _SCHEMA
+        # because on a pre-existing DB the column only exists after the migration.
+        _migrate_add_column(conn, "leads", "place_id", "TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_leads_place_id ON leads(place_id)")
         conn.commit()
 
 
@@ -329,6 +335,41 @@ def is_unsubscribed(email: str) -> bool:
     with get_connection() as conn:
         row = conn.execute("SELECT 1 FROM unsubscribes WHERE email = ?", (email,)).fetchone()
         return row is not None
+
+
+def place_id_exists(place_id: str) -> bool:
+    """Dedupe key for sourced leads: has this Google place already been inserted?"""
+    if not place_id:
+        return False
+    with get_connection() as conn:
+        row = conn.execute("SELECT 1 FROM leads WHERE place_id = ? LIMIT 1", (place_id,)).fetchone()
+        return row is not None
+
+
+def lead_exists_by_name_and_location(business_name: str, location: str) -> bool:
+    """Case-insensitive fallback dedupe for leads that have no place_id
+    (typed in by hand or ingested from a CSV)."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM leads WHERE LOWER(TRIM(business_name)) = LOWER(TRIM(?)) "
+            "AND LOWER(TRIM(COALESCE(location, ''))) = LOWER(TRIM(?)) LIMIT 1",
+            (business_name, location),
+        ).fetchone()
+        return row is not None
+
+
+def count_sourced_leads_today() -> int:
+    """How many sourced (place_id-bearing) leads were inserted since 00:00
+    UTC today. Read from the DB rather than kept in memory so a restart
+    mid-day can't blow through SOURCING_DAILY_LIMIT. created_at is written
+    by SQLite's datetime('now'), which is UTC."""
+    day_start = datetime.now(timezone.utc).strftime("%Y-%m-%d 00:00:00")
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM leads WHERE place_id IS NOT NULL AND created_at >= ?",
+            (day_start,),
+        ).fetchone()
+        return int(row["n"])
 
 
 # --- Email threads -------------------------------------------------------------

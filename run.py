@@ -5,6 +5,7 @@
     python run.py dashboard            # streamlit run dashboard.py
     python run.py test-email <email>   # one-shot: pipeline/test_email.py
     python run.py cleanup-tests [--dry-run]  # delete test leads + their repos/projects
+    python run.py source [--limit N] [--dry-run]   # one-shot: pipeline/source_leads.py
 
 Each mode runs as its own subprocess, not imported in-process -- this is a
 thin dispatcher, not a reimplementation. That matters because `loop` reads
@@ -54,12 +55,19 @@ def run_cleanup_tests(extra_args: list[str]) -> int:
     )
 
 
+def run_source(extra_args: list[str]) -> int:
+    return subprocess.call(
+        [sys.executable, str(PIPELINE_DIR / "source_leads.py"), *extra_args], cwd=str(PIPELINE_DIR)
+    )
+
+
 _MODES = {
     "quick-test": run_quick_test,
     "loop": run_loop,
     "dashboard": run_dashboard,
     "test-email": run_test_email,
     "cleanup-tests": run_cleanup_tests,
+    "source": run_source,
 }
 
 

@@ -187,7 +187,11 @@ def _research_lead_impl(lead: dict) -> None:
     missing contact_email becomes fatal) is the correct place to mark a
     lead 'lost', not here."""
     lead_id = lead["id"]
-    website_url = find_business_website(lead["business_name"], lead["location"] or "")
+    # Sourced leads arrive with the website Google lists for them; only fall
+    # back to a DuckDuckGo search when we have nothing (manual/CSV leads).
+    website_url = (lead.get("website_url") or "").strip() or find_business_website(
+        lead["business_name"], lead["location"] or ""
+    )
 
     if not website_url:
         db.update_lead_status(lead_id, "researched", notes="No website found during research; proceeding with name/niche/location only")
