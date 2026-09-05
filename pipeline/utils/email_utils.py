@@ -66,6 +66,12 @@ class InboundEmail:
     body: str
     content_type: str
     date: str
+    # The mailbox (config.EmailAccount.user) this message was polled from.
+    # Distinct from `to_addr`: a prospect may reply to an alias or forward,
+    # but the mailbox it *landed in* is the one their thread lives in, which
+    # is what sales_agent.py pins the lead to. Defaults to "" so anything
+    # constructing InboundEmail by hand (tests) keeps working.
+    account_user: str = ""
 
 
 def _validate_email(email_addr: str) -> bool:
@@ -73,18 +79,23 @@ def _validate_email(email_addr: str) -> bool:
     return EMAIL_REGEX.match(email_addr) is not None
 
 
-def _log_dry_run(transport: str, to_addr: str, subject: str, body_with_footer: str) -> None:
+def _log_dry_run(
+    transport: str, to_addr: str, subject: str, body_with_footer: str, from_addr: str = ""
+) -> None:
     """Console + file record of an email a live run would have sent
     (config.ENABLE_LIVE_SEND is not true). Appended to pipeline/dry_run.log
     so a full dry-run pass leaves a durable record, not just console
     scrollback -- placed after every other guard (unsubscribe check,
     compliance footer, message construction) so a dry run still exercises
-    everything a real send would, short of the actual network call."""
+    everything a real send would, short of the actual network call.
+    `from_addr` names the mailbox the live send would have used, so a
+    multi-mailbox dry run shows the rotation/stickiness actually working."""
     bar = "=" * 66
     entry = (
         f"\n{bar}\nDRY RUN -- email NOT sent (transport: {transport})\n"
         f"Time: {datetime.utcnow().isoformat()}Z\n"
-        f"To: {to_addr}\nSubject: {subject}\n{'-' * 66}\n{body_with_footer}\n{bar}\n"
+        + (f"From: {from_addr}\n" if from_addr else "")
+        + f"To: {to_addr}\nSubject: {subject}\n{'-' * 66}\n{body_with_footer}\n{bar}\n"
     )
     print(entry)
     with open(_DRY_RUN_LOG_PATH, "a", encoding="utf-8") as f:
@@ -99,6 +110,7 @@ def send_email(
     body_html: Optional[str] = None,
     inline_image_path: Optional[str] = None,
     inline_image_cid: str = "preview",
+    account: Optional[config.EmailAccount] = None,
 ) -> str:
     """Send a compliant cold email via SMTP. Returns the generated Message-ID.
 
@@ -114,8 +126,16 @@ def send_email(
     of this writing except sales_agent.py's cold-email send) get back the
     exact same `multipart/alternative`-only structure as before -- this
     parameter is purely additive.
+
+    `account` is the mailbox to send from: it supplies the From header, the
+    SMTP host/login and the envelope sender. None means account 0 (the
+    primary EMAIL_USER mailbox), so existing callers are unchanged. Which
+    mailbox a given lead gets is decided by utils/mailboxes.py, not here.
     """
     from utils import db  # local import to avoid a circular import at module load time
+
+    if account is None:
+        account = config.EMAIL_ACCOUNTS[0]
 
     if db.is_unsubscribed(to_addr):
         raise RuntimeError(f"Refusing to send: {to_addr} is unsubscribed.")
@@ -144,7 +164,7 @@ def send_email(
         msg = content
 
     msg["Subject"] = subject
-    msg["From"] = formataddr((config.SENDER_NAME, config.EMAIL_USER))
+    msg["From"] = formataddr((account.display_name, account.user))
     msg["To"] = to_addr
     msg["Date"] = formatdate(localtime=True)
     message_id = make_msgid(domain=config.SENDING_DOMAIN or None)
@@ -153,13 +173,13 @@ def send_email(
     msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
 
     if not config.ENABLE_LIVE_SEND:
-        _log_dry_run("SMTP", to_addr, subject, text_with_footer)
+        _log_dry_run("SMTP", to_addr, subject, text_with_footer, from_addr=account.user)
         return message_id
 
-    with smtplib.SMTP(config.EMAIL_HOST, config.EMAIL_PORT, timeout=30) as server:
+    with smtplib.SMTP(account.smtp_host, account.smtp_port, timeout=30) as server:
         server.starttls()
-        server.login(config.EMAIL_USER, config.EMAIL_PASSWORD)
-        server.sendmail(config.EMAIL_USER, [to_addr], msg.as_string())
+        server.login(account.user, account.password)
+        server.sendmail(account.user, [to_addr], msg.as_string())
 
     return message_id
 
@@ -374,14 +394,35 @@ def _extract_body(msg: email.message.Message) -> tuple[str, str]:
 
 
 def fetch_unseen_emails() -> list[InboundEmail]:
-    """Poll the IMAP inbox for unseen messages and return them as InboundEmail.
+    """Poll EVERY configured mailbox (config.EMAIL_ACCOUNTS) for unseen
+    messages and return the union, each tagged with the mailbox it arrived
+    in (`InboundEmail.account_user`) so the caller can keep the lead's
+    thread in that mailbox.
+
+    One mailbox failing (revoked app password, IMAP outage) must not hide
+    replies sitting in the others, so a failure is printed and that mailbox
+    skipped rather than raised -- its unseen messages are still unseen on
+    the next poll, so nothing is lost. With a single configured mailbox this
+    is the same "poll failed, 0 processed" outcome as before.
+    """
+    results: list[InboundEmail] = []
+    for account in config.EMAIL_ACCOUNTS:
+        try:
+            results.extend(_fetch_unseen_for_account(account))
+        except Exception as exc:  # noqa: BLE001 - one bad mailbox must not block the rest
+            print(f"[email_utils] IMAP poll failed for {account.user}: {exc}")
+    return results
+
+
+def _fetch_unseen_for_account(account: config.EmailAccount) -> list[InboundEmail]:
+    """Poll one mailbox's INBOX for unseen messages.
 
     Messages are marked \\Seen as a side effect of fetching RFC822 (standard
     IMAP behavior), so each message is only returned once across polls.
     """
     results: list[InboundEmail] = []
-    with imaplib.IMAP4_SSL(config.EMAIL_IMAP_HOST) as imap:
-        imap.login(config.EMAIL_USER, config.EMAIL_PASSWORD)
+    with imaplib.IMAP4_SSL(account.imap_host) as imap:
+        imap.login(account.user, account.password)
         imap.select("INBOX")
         status, data = imap.search(None, "UNSEEN")
         if status != "OK":
@@ -406,6 +447,7 @@ def fetch_unseen_emails() -> list[InboundEmail]:
                     body=body,
                     content_type=content_type,
                     date=_decode(msg.get("Date")) or datetime.utcnow().isoformat(),
+                    account_user=account.user,
                 )
             )
     return results

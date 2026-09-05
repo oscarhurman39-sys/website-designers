@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import secrets
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -183,7 +184,15 @@ TRACES_PATH: str = os.getenv("TRACES_PATH", "").strip() or str(Path(__file__).re
 EMAIL_MIN_DELAY_SECONDS: int = 120
 EMAIL_MAX_DELAY_SECONDS: int = 300
 EMAIL_MAX_PER_HOUR: int = 20
-EMAIL_MAX_PER_DAY: int = 50
+# Global daily cap across EVERY sending mailbox. Env-overridable (default
+# unchanged at 50) because a multi-mailbox setup needs it raised above what
+# one mailbox alone should send -- see EMAIL_ACCOUNTS below.
+EMAIL_MAX_PER_DAY: int = _int_env("EMAIL_MAX_PER_DAY", default=50)
+# Per-mailbox daily cap. ~25/day is the realistic deliverability ceiling for
+# one cold-outreach mailbox, so volume comes from more mailboxes each under
+# this cap, not from raising it. Defaults to EMAIL_MAX_PER_DAY so a
+# single-mailbox setup is capped exactly as before.
+EMAIL_MAX_PER_DAY_PER_ACCOUNT: int = _int_env("EMAIL_MAX_PER_DAY_PER_ACCOUNT", default=EMAIL_MAX_PER_DAY)
 # NOTE: A dedicated IP/domain warm-up tool (e.g. Instantly, Mailwarm, or a
 # manual warm-up schedule) is strongly recommended for the first 2-4 weeks of
 # a new sending domain's life. This pipeline only staggers *send timing* and
@@ -191,6 +200,98 @@ EMAIL_MAX_PER_DAY: int = 50
 # for you. Do not point this at a brand-new domain on day one.
 INBOX_POLL_SECONDS: int = 300
 MAIN_LOOP_SLEEP_SECONDS: int = 60
+
+# --- Sending mailboxes -------------------------------------------------------
+# Deliverability tops out around 25 cold emails/day per mailbox, so real
+# volume means several mailboxes (ideally on several domains), not one busy
+# one. EMAIL_USER/EMAIL_PASSWORD is ALWAYS account 0; EMAIL_ACCOUNTS adds the
+# rest. utils/mailboxes.py spreads new leads across them and pins each lead
+# to the mailbox that first emailed it, so a thread never changes From
+# address mid-conversation and replies always land in the inbox that sent.
+
+
+@dataclass(frozen=True)
+class EmailAccount:
+    """One SMTP/IMAP mailbox the pipeline may send from and poll replies in."""
+
+    user: str
+    password: str
+    smtp_host: str
+    smtp_port: int
+    imap_host: str
+    display_name: str
+
+
+def parse_email_accounts(raw: str, primary: EmailAccount) -> list[EmailAccount]:
+    """Parse the EMAIL_ACCOUNTS env value into `[primary, *extras]`.
+
+    Entries are ';'-separated, each `user:password` or
+    `user:password:smtp_host:imap_host`. Blank hosts in the 4-field form fall
+    back to the primary's (i.e. EMAIL_HOST / EMAIL_IMAP_HOST); port and
+    display name are always the primary's. A password may contain ':' ONLY
+    in the 4-field form: the two hosts are split off from the right, so
+    everything between the user and them is the password. A 2-field entry
+    with a stray ':' is ambiguous and rejected rather than guessed at -- a
+    wrong split here would mean a failed login on every send and poll. An
+    entry naming the primary user again is dropped so one mailbox can't
+    appear twice in the rotation.
+    """
+    accounts = [primary]
+    seen = {primary.user.strip().lower()}
+    for index, entry in enumerate(raw.split(";")):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if ":" not in entry:
+            raise ValueError(
+                f"EMAIL_ACCOUNTS entry {index + 1} ({entry!r}) has no ':'; expected "
+                "user:password or user:password:smtp_host:imap_host"
+            )
+        user, rest = entry.split(":", 1)
+        user = user.strip()
+        colons = rest.count(":")
+        if colons == 0:
+            password, smtp_host, imap_host = rest, "", ""
+        elif colons >= 2:
+            password, smtp_host, imap_host = rest.rsplit(":", 2)
+        else:
+            raise ValueError(
+                f"EMAIL_ACCOUNTS entry {index + 1} ({user}) has three fields; use "
+                "user:password or user:password:smtp_host:imap_host (a password "
+                "containing ':' needs the 4-field form)"
+            )
+        if not user or not password:
+            raise ValueError(f"EMAIL_ACCOUNTS entry {index + 1} has an empty user or password")
+        if user.lower() in seen:
+            continue
+        seen.add(user.lower())
+        accounts.append(
+            EmailAccount(
+                user=user,
+                password=password,
+                smtp_host=smtp_host.strip() or primary.smtp_host,
+                smtp_port=primary.smtp_port,
+                imap_host=imap_host.strip() or primary.imap_host,
+                display_name=primary.display_name,
+            )
+        )
+    return accounts
+
+
+_PRIMARY_EMAIL_ACCOUNT = EmailAccount(
+    user=EMAIL_USER,
+    password=EMAIL_PASSWORD,
+    smtp_host=EMAIL_HOST,
+    smtp_port=EMAIL_PORT,
+    imap_host=EMAIL_IMAP_HOST,
+    display_name=SENDER_NAME,
+)
+# Account 0 is always the primary mailbox, so an existing single-mailbox .env
+# keeps working with no changes. A malformed EMAIL_ACCOUNTS raises here, at
+# import, in keeping with fail-loudly-at-startup rather than at first send.
+EMAIL_ACCOUNTS: list[EmailAccount] = parse_email_accounts(
+    os.getenv("EMAIL_ACCOUNTS", ""), _PRIMARY_EMAIL_ACCOUNT
+)
 
 
 def _load_or_create_secret_key() -> str:

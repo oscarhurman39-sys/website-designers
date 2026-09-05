@@ -121,6 +121,10 @@ def init_db(db_path: Optional[str] = None) -> None:
         _migrate_add_column(conn, "leads", "quoted_price_usd", "INTEGER")
         _migrate_add_column(conn, "leads", "github_username", "TEXT")
         _migrate_add_column(conn, "leads", "checkout_url", "TEXT")
+        # Multi-mailbox sending (utils/mailboxes.py): the mailbox user that
+        # first emailed this lead, so every later message in the thread leaves
+        # from the same address and replies land in the same inbox.
+        _migrate_add_column(conn, "leads", "sender_account", "TEXT")
         conn.commit()
 
 
@@ -375,6 +379,22 @@ def emails_sent_last_hour() -> int:
 
 def emails_sent_today() -> int:
     return count_outbound_emails_since(datetime.now(timezone.utc) - timedelta(days=1))
+
+
+def emails_sent_today_by_account(user: str) -> int:
+    """Outbound emails sent from one mailbox in the last 24h -- the
+    per-mailbox counterpart of emails_sent_today(), over the same rolling
+    window so config.EMAIL_MAX_PER_DAY and EMAIL_MAX_PER_DAY_PER_ACCOUNT are
+    measured the same way. Case-insensitive because an operator may spell
+    the same mailbox differently in EMAIL_USER and EMAIL_ACCOUNTS."""
+    since = datetime.now(timezone.utc) - timedelta(days=1)
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM email_threads "
+            "WHERE direction = 'outbound' AND from_addr = ? COLLATE NOCASE AND timestamp >= ?",
+            (user, since.strftime("%Y-%m-%d %H:%M:%S")),
+        ).fetchone()
+        return int(row["n"])
 
 
 def message_id_seen(message_id: str) -> bool:
