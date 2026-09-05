@@ -77,7 +77,9 @@ Required `.env` variables: `GITHUB_TOKEN`, `VERCEL_TOKEN`, `EMAIL_HOST`,
 startup and fails loudly, listing everything missing, if any are unset.
 
 `VERCEL_TEAM_ID`, `SLACK_BOT_TOKEN`, `UNSPLASH_ACCESS_KEY`,
-`VOLTAGENT_PUBLIC_KEY`, `VOLTAGENT_SECRET_KEY` are optional.
+`VOLTAGENT_PUBLIC_KEY`, `VOLTAGENT_SECRET_KEY` are optional, as are
+`EMAIL_ACCOUNTS` / `EMAIL_MAX_PER_DAY` / `EMAIL_MAX_PER_DAY_PER_ACCOUNT`
+(see "Multiple sending mailboxes" below).
 
 ## Running it
 
@@ -257,6 +259,46 @@ ramp, and reputation monitoring. The pipeline's `EMAIL_MAX_PER_HOUR=20` /
 `EMAIL_MAX_PER_DAY=50` caps (`pipeline/config.py`) stop the *pipeline*
 from sending too fast; they don't substitute for actually warming up a
 new domain first.
+
+## Multiple sending mailboxes
+
+A single mailbox is good for roughly 25 cold emails a day before inbox
+placement starts to slide, whatever the pipeline's caps allow. Sending
+more means more mailboxes -- ideally spread over a few domains, so one
+domain's reputation dip doesn't take the whole pipeline down with it.
+
+`EMAIL_USER` / `EMAIL_PASSWORD` is always mailbox 0. Add the rest in
+`.env` as `EMAIL_ACCOUNTS`, `;`-separated:
+
+```
+EMAIL_ACCOUNTS=casey@domain-two.com:app-pw;casey@domain-three.com:app-pw:smtp.zoho.eu:imap.zoho.eu
+EMAIL_MAX_PER_DAY_PER_ACCOUNT=25
+EMAIL_MAX_PER_DAY=75
+```
+
+Each entry is `user:password` (SMTP/IMAP hosts inherited from `EMAIL_HOST`
+/ `EMAIL_IMAP_HOST`) or `user:password:smtp_host:imap_host`. A password
+that contains `:` needs the four-field form. `EMAIL_MAX_PER_DAY_PER_ACCOUNT`
+caps each mailbox; `EMAIL_MAX_PER_DAY` stays the global total across all of
+them. With `EMAIL_ACCOUNTS` unset nothing changes: one mailbox, same caps.
+
+How it behaves (`pipeline/utils/mailboxes.py`):
+
+- A new lead's cold email goes out from the mailbox with the fewest sends
+  in the last 24h that is still under its per-mailbox cap (ties rotate).
+  When every mailbox is at cap, cold sending pauses until one frees up.
+- Every later email to that lead -- negotiation replies, the payment link,
+  the goodbye, the handover -- leaves from the *same* mailbox (stored in
+  `leads.sender_account`), so the thread stays in one inbox and the From
+  address never changes mid-conversation.
+- Reply polling covers every mailbox; a mailbox whose login fails is
+  reported and skipped rather than blocking the others.
+
+The cheap way to add mailboxes is a Zoho Mail Lite mailbox on each extra
+domain (about $1/user/month): register the domain, set up SPF/DKIM/DMARC as
+in `WARMUP.md`, create an app password, add the mailbox to `EMAIL_ACCOUNTS`.
+Warm each new mailbox up like a new domain -- rotation spreads the load, it
+doesn't build reputation.
 
 ## Testing
 

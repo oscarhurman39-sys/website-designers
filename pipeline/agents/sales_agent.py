@@ -31,7 +31,7 @@ import requests
 from huggingface_hub import InferenceClient
 
 import config
-from utils import compliance, db, email_utils, screenshot, stripe_utils, tracer, tracker
+from utils import compliance, db, email_utils, mailboxes, screenshot, stripe_utils, tracer, tracker
 # Shared with DesignAgent's post-deploy check so both sides agree on what an
 # "auth wall" looks like; the timeout is separate because this check runs on
 # the send path, right before an email goes out.
@@ -341,6 +341,8 @@ def _can_send_now() -> bool:
         return False
     if db.emails_sent_today() >= config.EMAIL_MAX_PER_DAY:
         return False
+    if not mailboxes.any_account_under_cap():
+        return False  # every mailbox at its own daily cap (EMAIL_MAX_PER_DAY_PER_ACCOUNT)
     return True
 
 
@@ -352,9 +354,14 @@ def _send_via_configured_transport(
     body_html: Optional[str] = None,
     inline_image_path: Optional[str] = None,
     inline_image_cid: Optional[str] = None,
+    account: Optional[config.EmailAccount] = None,
 ) -> str:
     """Send email via configured transport: SendGrid if SENDGRID_API_KEY is set,
     otherwise fall back to SMTP via send_email.
+
+    `account` is the mailbox to send from (see _sender_for). It only applies
+    to the SMTP path: SendGrid always sends from SENDGRID_FROM_EMAIL, so
+    mailbox rotation is an SMTP-only feature.
 
     Returns the message_id of the sent email.
     """
@@ -377,7 +384,32 @@ def _send_via_configured_transport(
             body_html=body_html,
             inline_image_path=inline_image_path,
             inline_image_cid=inline_image_cid,
+            account=account,
         )
+
+
+def _sender_for(lead: dict, cold: bool = False) -> Optional[config.EmailAccount]:
+    """The mailbox this lead's thread lives in (utils/mailboxes.py).
+
+    A cold email gets None when every mailbox is at its daily cap and must
+    skip. A reply to an existing conversation falls back to the primary
+    mailbox instead: the reply paths are only reachable for leads we've
+    already emailed, and a goodbye, payment link or handover must never be
+    dropped over a *cold*-send cap."""
+    account = mailboxes.account_for_lead(lead)
+    if account is None and not cold:
+        account = config.EMAIL_ACCOUNTS[0]
+    return account
+
+
+def _pin_sender(lead: dict, account: config.EmailAccount) -> None:
+    """Persist the mailbox after a successful send so every later email to
+    this lead leaves from the same address. Written after (not before) the
+    send so a failed first attempt leaves the lead free to use whichever
+    mailbox has room next cycle."""
+    if (lead.get("sender_account") or "") != account.user:
+        db.update_lead_fields(lead["id"], sender_account=account.user)
+        lead["sender_account"] = account.user
 
 
 def send_cold_email(lead: dict) -> bool:
@@ -426,6 +458,13 @@ def _send_cold_email_impl(lead: dict) -> bool:
     body_html = _build_html_body(lead["business_name"], preview_link, city) if cached_screenshot else None
     inline_image_path = str(cached_screenshot) if cached_screenshot else None
 
+    # Chosen last, right before the send, so the per-mailbox cap is checked
+    # against the freshest counts. None = every mailbox is at cap: leave the
+    # lead 'designed' for a later cycle, as when the global cap is hit.
+    account = _sender_for(lead, cold=True)
+    if account is None:
+        return False
+
     message_id = _send_via_configured_transport(
         to_addr=email_addr,
         subject=subject,
@@ -434,16 +473,18 @@ def _send_cold_email_impl(lead: dict) -> bool:
         body_html=body_html,
         inline_image_path=inline_image_path,
         inline_image_cid=_SCREENSHOT_CID,
+        account=account,
     )
     db.insert_email_thread(
         lead_id=lead["id"],
         direction="outbound",
         subject=subject,
         body=body_with_link,
-        from_addr=config.EMAIL_USER,
+        from_addr=account.user,
         to_addr=email_addr,
         message_id=message_id,
     )
+    _pin_sender(lead, account)
     db.update_lead_status(lead["id"], "emailed", notes="Cold email sent")
 
     _next_send_allowed_at = datetime.now(timezone.utc) + timedelta(
@@ -675,18 +716,21 @@ def _send_thread_reply(lead: dict, body: str, classification: str = _NEGOTIATION
     if not email_addr or db.is_unsubscribed(email_addr):
         return False
     subject = _reply_subject(lead)
+    account = _sender_for(lead)
     try:
         message_id = _send_via_configured_transport(
             to_addr=email_addr, subject=subject, body_text=body, lead_id=lead["id"],
+            account=account,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"[sales_agent] Failed to send negotiation reply for lead {lead['id']}: {exc}")
         return False
     db.insert_email_thread(
         lead_id=lead["id"], direction="outbound", subject=subject, body=body,
-        from_addr=config.EMAIL_USER, to_addr=email_addr, message_id=message_id,
+        from_addr=account.user, to_addr=email_addr, message_id=message_id,
         classification=classification,
     )
+    _pin_sender(lead, account)
     return True
 
 
@@ -953,17 +997,20 @@ def send_github_username_request(lead: dict) -> bool:
         "is under your control.\n\n"
         f"{_SENDER_NAME}"
     )
+    account = _sender_for(lead)
     try:
         message_id = _send_via_configured_transport(
             to_addr=email_addr, subject=subject, body_text=body, lead_id=lead["id"],
+            account=account,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"[sales_agent] Failed to send GitHub-username request for lead {lead['id']}: {exc}")
         return False
     db.insert_email_thread(
         lead_id=lead["id"], direction="outbound", subject=subject, body=body,
-        from_addr=config.EMAIL_USER, to_addr=email_addr, message_id=message_id,
+        from_addr=account.user, to_addr=email_addr, message_id=message_id,
     )
+    _pin_sender(lead, account)
     return True
 
 
@@ -990,17 +1037,20 @@ def send_handover_confirmation(lead: dict, repo_full_name: str) -> bool:
         "here with what you need.\n\n"
         f"{_SENDER_NAME}"
     )
+    account = _sender_for(lead)
     try:
         message_id = _send_via_configured_transport(
             to_addr=email_addr, subject=subject, body_text=body, lead_id=lead["id"],
+            account=account,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"[sales_agent] Failed to send handover confirmation for lead {lead['id']}: {exc}")
         return False
     db.insert_email_thread(
         lead_id=lead["id"], direction="outbound", subject=subject, body=body,
-        from_addr=config.EMAIL_USER, to_addr=email_addr, message_id=message_id,
+        from_addr=account.user, to_addr=email_addr, message_id=message_id,
     )
+    _pin_sender(lead, account)
     return True
 
 
@@ -1026,17 +1076,20 @@ def _send_goodbye(lead: dict) -> None:
         f"Hi, totally understood -- I won't reach out again about this. "
         f"Wishing {lead['business_name']} all the best."
     )
+    account = _sender_for(lead)
     try:
         message_id = _send_via_configured_transport(
             to_addr=email_addr,
             subject=subject,
             body_text=body,
             lead_id=lead["id"],
+            account=account,
         )
         db.insert_email_thread(
             lead_id=lead["id"], direction="outbound", subject=subject, body=body,
-            from_addr=config.EMAIL_USER, to_addr=email_addr, message_id=message_id,
+            from_addr=account.user, to_addr=email_addr, message_id=message_id,
         )
+        _pin_sender(lead, account)
     except RuntimeError:
         pass  # already unsubscribed between the check above and now; nothing to do
 
@@ -1159,6 +1212,15 @@ def check_inbox() -> int:
         lead = db.get_lead_by_email(msg.from_addr)
         if lead is None:
             continue  # reply from an address we have no lead for; nothing to act on
+        if not lead.get("sender_account") and getattr(msg, "account_user", ""):
+            # The prospect replied to the address we emailed them from, so the
+            # mailbox this landed in is where their thread lives. Pins leads
+            # emailed before sender_account existed, so our reply goes back
+            # out from the same address they wrote to. Never overrides an
+            # existing pin: a reply landing elsewhere doesn't move the thread.
+            arrived_in = mailboxes.account_by_user(msg.account_user)
+            if arrived_in is not None:
+                _pin_sender(lead, arrived_in)
         try:
             _handle_inbound(lead, msg)
         except Exception as exc:  # noqa: BLE001
