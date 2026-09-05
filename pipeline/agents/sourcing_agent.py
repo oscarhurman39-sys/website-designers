@@ -49,6 +49,12 @@ PAGE_SIZE = 20  # the API's per-page maximum
 MAX_PAGES_PER_QUERY = 3  # Text Search caps out at 60 results per query
 REQUEST_TIMEOUT = 15
 
+
+class PlacesAuthError(RuntimeError):
+    """The API key is invalid, or Places API (New) is disabled/unbilled on its
+    project. Distinguished from transient failures so one run stops after the
+    first such response rather than repeating it for every niche x location."""
+
 # Hosts that Google lists as a business's "website" but which are really a
 # social profile or directory entry. They aren't sites we can improve, and
 # LeadAgent can't scrape a contact email from them either, so a lead that
@@ -148,6 +154,10 @@ def _search_page(text_query: str, page_token: Optional[str] = None) -> dict[str,
             message = resp.json().get("error", {}).get("message", "")
         except ValueError:
             message = (resp.text or "")[:200]
+        if resp.status_code in (401, 403):
+            # Key/project problem: every remaining query will fail the same
+            # way, so abort the whole run instead of logging 40 identical lines.
+            raise PlacesAuthError(f"Places API HTTP {resp.status_code}: {message}")
         raise RuntimeError(f"Places API HTTP {resp.status_code}: {message}")
     return resp.json()
 
@@ -224,6 +234,10 @@ def iter_candidates(limit: Optional[int] = None) -> Iterator[Candidate]:
                     if limit is not None and yielded >= limit:
                         _print_skip_summary(skipped)
                         return
+            except PlacesAuthError as exc:
+                print(f"[sourcing] Aborting run -- {exc}")
+                _print_skip_summary(skipped)
+                return
             except (requests.RequestException, RuntimeError, ValueError, KeyError) as exc:
                 print(f"[sourcing] Query {query!r} failed: {exc}")
     _print_skip_summary(skipped)
