@@ -25,11 +25,19 @@ import random
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import urlparse
 
+import requests
 from huggingface_hub import InferenceClient
 
 import config
 from utils import compliance, db, email_utils, screenshot, stripe_utils, tracer, tracker
+# Shared with DesignAgent's post-deploy check so both sides agree on what an
+# "auth wall" looks like; the timeout is separate because this check runs on
+# the send path, right before an email goes out.
+from agents.design_agent import _AUTH_PAGE_MARKERS, _AUTH_URL_PARTS  # noqa: E402
+
+_PREVIEW_VALIDATION_TIMEOUT_SECONDS = 15
 
 try:
     from slack_sdk import WebClient
@@ -265,6 +273,32 @@ def _closing_paragraphs(preview_link: str) -> list[str]:
     ]
 
 
+def _validate_preview_link_for_send(preview_link: str) -> str:
+    """Return a public preview URL or raise before any cold email is sent."""
+    parsed = urlparse(preview_link)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise RuntimeError(f"Preview URL is missing or invalid: {preview_link!r}")
+
+    if any(part in parsed.path.lower() for part in _AUTH_URL_PARTS):
+        raise RuntimeError(f"Preview URL points to an authentication path: {preview_link}")
+
+    try:
+        resp = requests.get(preview_link, allow_redirects=True, timeout=_PREVIEW_VALIDATION_TIMEOUT_SECONDS)
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Preview URL is not publicly accessible: {preview_link}") from exc
+
+    final_url = resp.url or preview_link
+    final_path = urlparse(final_url).path.lower()
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Preview URL returned HTTP {resp.status_code}: {preview_link}")
+    if any(part in final_path for part in _AUTH_URL_PARTS):
+        raise RuntimeError(f"Preview URL redirects to an authentication path: {final_url}")
+    if any(marker in resp.text.lower() for marker in _AUTH_PAGE_MARKERS):
+        raise RuntimeError(f"Preview URL shows an authentication page: {preview_link}")
+
+    return preview_link
+
+
 def _plain_text_body(business_name: str, preview_link: str, city: str) -> str:
     return "\n\n".join([
         _intro_line(business_name),
@@ -286,9 +320,15 @@ def _build_html_body(business_name: str, preview_link: str, city: str) -> str:
         "</a></p>"
     )
     checklist_html = _checklist_html(city)
-    closing_html = "".join(
+    preview_button_html = (
+        f'<a href="{escaped_link}" style="display:inline-block;padding:14px 28px;'
+        'background:#2563eb;color:white;border-radius:8px;text-decoration:none;'
+        'font-size:16px;font-weight:bold;margin:16px 0">View Your Free Website &rarr;</a>'
+    )
+    closing_paragraphs = _closing_paragraphs(preview_link)
+    closing_html = preview_button_html + "".join(
         f"<p>{html_module.escape(para).replace(chr(10), '<br>')}</p>"
-        for para in _closing_paragraphs(preview_link)
+        for para in closing_paragraphs[1:]
     )
     return intro_html + image_html + checklist_html + closing_html
 
@@ -363,12 +403,17 @@ def _send_cold_email_impl(lead: dict) -> bool:
         return False
 
     subject = f"I built a website for {lead['business_name']}"
-    # Link straight to the actual Vercel preview (from the websites table)
-    # rather than the click-tracked localhost:5000/click redirect, so the
-    # link in the email is the real, shareable site URL. Falls back to the
-    # tracked link only if no website record/preview_url exists yet.
     website = db.get_website_by_lead(lead["id"])
-    preview_link = website["preview_url"] if website and website.get("preview_url") else tracker.create_click_link(lead["id"])
+    preview_link = website["preview_url"] if website and website.get("preview_url") else ""
+    try:
+        preview_link = _validate_preview_link_for_send(preview_link)
+    except RuntimeError as exc:
+        db.update_lead_status(
+            lead["id"],
+            "researched",
+            notes=f"Email blocked: preview URL is not publicly sendable ({exc})",
+        )
+        return False
     city = lead.get("location") or "your area"
     body_with_link = _plain_text_body(lead["business_name"], preview_link, city)
 

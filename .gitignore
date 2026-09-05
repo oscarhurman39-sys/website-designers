@@ -234,3 +234,6 @@ pipeline/.scheduler.pid
 pipeline/scheduler.log
 pipeline/screenshots/
 
+
+# Claude Code agent worktrees
+.claude/worktrees/
