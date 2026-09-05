@@ -13,7 +13,7 @@ but **only one file here is actually from that upstream repo**:
 | `03-infrastructure/github-manager.md` | Custom-authored for this project. |
 | `03-infrastructure/vercel-deployer.md` | Custom-authored for this project. |
 | `04-quality-security/stripe-checkout.md` | Custom-authored for this project. |
-| `09-meta-orchestration/human-takeover.md` | Custom-authored for this project. |
+| `09-meta-orchestration/autonomy-guardrails.md` | Custom-authored for this project (formerly `human-takeover.md`; renamed when the manual takeover flow was replaced by code-enforced guardrails). |
 | `10-research-analysis/lead-researcher.md` | Custom-authored for this project. |
 
 ## Why only one file is "real"
@@ -22,11 +22,11 @@ The upstream repo's category names and file lists were checked directly
 against the live repository before writing anything here. It has
 `02-language-specialists` (not `02-email-outreach`), and none of
 `cold-email-drafter.md`, `email-compliance.md`, `github-manager.md`,
-`vercel-deployer.md`, `stripe-checkout.md`, `human-takeover.md`, or
+`vercel-deployer.md`, `stripe-checkout.md`, `autonomy-guardrails.md`, or
 `lead-researcher.md` exist there -- those roles are specific to this
 pipeline's domain (cold email compliance, GitHub/Vercel/Stripe hand-off,
-human-in-the-loop negotiation gating), not generic enough to be in a
-general-purpose collection. Rather than fabricate content and attribute it
+code-enforced autonomous-negotiation guardrails), not generic enough to be
+in a general-purpose collection. Rather than fabricate content and attribute it
 to VoltAgent, the seven files above were written fresh for this project,
 in the same frontmatter/style convention as the one real file, and each
 says so explicitly in a footer note.

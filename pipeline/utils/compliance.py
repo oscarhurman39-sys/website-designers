@@ -68,7 +68,11 @@ def process_unsubscribe(token: str) -> Optional[dict]:
 def list_unsubscribe_header(lead_id: int) -> str:
     """Value for the RFC 8058 `List-Unsubscribe` header (one-click + mailto fallback)."""
     link = create_unsubscribe_link(lead_id)
-    return f"<{link}>, <mailto:{config.ADMIN_EMAIL}?subject=unsubscribe>"
+    # mailto goes to the mailbox check_inbox() polls, so a bare "unsubscribe"
+    # reply is classified as negative and suppressed automatically instead of
+    # landing in the admin's personal inbox.
+    mailbox = config.EMAIL_USER or config.ADMIN_EMAIL
+    return f"<{link}>, <mailto:{mailbox}?subject=unsubscribe>"
 
 
 def _require_valid_physical_address() -> None:

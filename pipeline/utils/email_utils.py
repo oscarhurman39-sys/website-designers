@@ -25,7 +25,7 @@ from email.header import decode_header
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.utils import formatdate, make_msgid, parseaddr
+from email.utils import formataddr, formatdate, make_msgid, parseaddr
 from pathlib import Path
 from typing import Optional
 import base64
@@ -144,7 +144,7 @@ def send_email(
         msg = content
 
     msg["Subject"] = subject
-    msg["From"] = f"{config.SENDING_DOMAIN} <{config.EMAIL_USER}>"
+    msg["From"] = formataddr((config.SENDER_NAME, config.EMAIL_USER))
     msg["To"] = to_addr
     msg["Date"] = formatdate(localtime=True)
     message_id = make_msgid(domain=config.SENDING_DOMAIN or None)
@@ -250,9 +250,7 @@ def send_email_sendgrid(
     }
 
     # RFC 8058-compliant List-Unsubscribe header: HTTP URL + mailto fallback.
-    unsubscribe_url = compliance.create_unsubscribe_link(lead_id)
-    admin_email = config.ADMIN_EMAIL
-    mail.extra_headers["List-Unsubscribe"] = f"<{unsubscribe_url}>, <mailto:{admin_email}?subject=unsubscribe>"
+    mail.extra_headers["List-Unsubscribe"] = compliance.list_unsubscribe_header(lead_id)
 
     # Enable open and click tracking
     mail.mail_settings = MailSettings()
@@ -382,7 +380,7 @@ def fetch_unseen_emails() -> list[InboundEmail]:
     IMAP behavior), so each message is only returned once across polls.
     """
     results: list[InboundEmail] = []
-    with imaplib.IMAP4_SSL(config.EMAIL_HOST) as imap:
+    with imaplib.IMAP4_SSL(config.EMAIL_IMAP_HOST) as imap:
         imap.login(config.EMAIL_USER, config.EMAIL_PASSWORD)
         imap.select("INBOX")
         status, data = imap.search(None, "UNSEEN")

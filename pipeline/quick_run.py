@@ -3,8 +3,8 @@
 Takes the oldest lead with status 'new' and runs it through LeadAgent ->
 DesignAgent -> SalesAgent, once, printing every step so you can see exactly
 what happened. This is for manual testing/demoing -- for the real always-on
-orchestrator (60s cadence, rate-limited sending, inbox polling, human-in-
-the-loop console), use `main.py` instead.
+orchestrator (60s cadence, rate-limited sending, inbox polling, autonomous
+negotiation + handover), use `main.py` instead.
 
 Run with (either works -- Python puts this script's own directory on
 sys.path regardless of your current working directory, which is how the

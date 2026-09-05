@@ -1,8 +1,10 @@
 """Stripe Checkout session creation and webhook signature verification.
 
-Payment is only ever triggered by an explicit human action (typing
-`payment ready <lead_id>` in the main.py console, see agents/sales_agent.py),
-never automatically by the pipeline itself.
+Checkout sessions are created automatically by the autonomous negotiation
+agent (agents/sales_agent.py) when it closes a deal. The amount is always
+clamped in code to the configured negotiation band
+[config.NEGOTIATION_FLOOR_USD, config.NEGOTIATION_CEILING_USD] before a
+session is created -- LLM output never reaches this module unclamped.
 """
 from __future__ import annotations
 

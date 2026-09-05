@@ -1,11 +1,22 @@
-"""SalesAgent: drafts and sends cold emails, then polls the inbox and
-classifies replies. This module owns every automated outbound send in the
-system -- nothing else calls email_utils.send_email() for a cold email.
+"""SalesAgent: drafts and sends cold emails, polls the inbox, classifies
+replies, and autonomously negotiates and closes deals. This module owns every
+automated outbound send in the system -- nothing else calls
+email_utils.send_email() for a cold email.
 
-Human-in-the-loop: a 'positive' reply pauses automation for that lead (it
-moves to status 'replied'/'negotiating', which is never selected by the
-automatic sending queries) and raises a console + Slack alert. main.py's
-stdin command thread handles the actual "takeover" / "payment ready" flow.
+Autonomy model: a 'positive' reply routes straight into the LLM negotiation
+agent -- there is no manual takeover step. The model only ever *proposes* a
+move (CLOSE / COUNTER / REPLY) and a price; code enforces the hard rules:
+
+  - Every price is clamped to [NEGOTIATION_FLOOR, NEGOTIATION_CEILING]
+    before it reaches an email or a Stripe Checkout session (_clamp_price).
+  - The model's body text is rejected if it contains any number, price, or
+    link (_model_body_is_safe) -- every figure a prospect reads was computed
+    by code, so a confused or prompt-injected model cannot misquote.
+  - After MAX_NEGOTIATION_ROUNDS autonomous replies the agent stops replying
+    and alerts a human instead, which also breaks autoresponder loops.
+
+Console/Slack alerts remain, but as notifications only -- nothing waits for a
+human to type anything.
 """
 from __future__ import annotations
 
@@ -18,7 +29,7 @@ from typing import Optional
 from huggingface_hub import InferenceClient
 
 import config
-from utils import compliance, db, email_utils, screenshot, tracer, tracker
+from utils import compliance, db, email_utils, screenshot, stripe_utils, tracer, tracker
 
 try:
     from slack_sdk import WebClient
@@ -28,13 +39,6 @@ except ImportError:  # slack-sdk is a soft dependency; alerts still print to con
     SlackApiError = Exception  # type: ignore[assignment,misc]
 
 HF_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
-
-# In-memory set of lead ids currently under manual human takeover. A lead
-# enters this set when the operator types "takeover" at the console
-# (see main.py) and is intentionally process-local / non-persistent: a
-# restart requires the operator to re-confirm takeover, which is the safer
-# default for a human-in-the-loop system.
-_TAKEOVER_LEAD_IDS: set[int] = set()
 
 # Throttles the *next* automatic cold-email send. Reset on process restart,
 # which means a restart can send one email slightly earlier than the
@@ -53,53 +57,64 @@ _POSITIVE_PATTERNS = (
 )
 _OOO_PATTERNS = (
     r"\bout of (the )?office\b", r"\bauto(-| )?reply\b", r"\bautomatic reply\b",
-    r"\bon vacation\b", r"\bcurrently away\b", r"\b\bOOO\b",
+    # classify_reply lowercases the text before matching, so this acronym must
+    # be lowercase here -- an uppercase "OOO" pattern could never match.
+    r"\bon vacation\b", r"\bcurrently away\b", r"\booo\b",
 )
+
+# Outbound thread rows written by the negotiation agent carry this
+# classification so _negotiation_rounds() can count them from the DB --
+# the round cap must survive restarts, unlike in-memory state.
+_NEGOTIATION_CLASSIFICATION = "negotiation"
 
 
 # --- Console / Slack alerting -------------------------------------------------
+# All alerts are notifications only: automation never waits on a human.
 
-def _console_alert(lead: dict) -> None:
-    banner = "!" * 70
-    print(f"\n{banner}\nLEAD REPLIED POSITIVELY: {lead['business_name']} <{lead['contact_email']}>"
-          f"\nLead ID: {lead['id']}  |  Type 'takeover {lead['id']}' to begin manual negotiation.\n{banner}\n")
-
-
-def _slack_alert(lead: dict) -> None:
+def _slack_notify(text: str) -> None:
     if not config.SLACK_BOT_TOKEN or WebClient is None:
         return
     try:
         client = WebClient(token=config.SLACK_BOT_TOKEN)
-        client.chat_postMessage(
-            channel=config.SLACK_ALERT_CHANNEL,
-            text=(
-                f":rotating_light: *LEAD REPLIED POSITIVELY*\n"
-                f"*{lead['business_name']}* <{lead['contact_email']}> (lead id {lead['id']})\n"
-                f"Type `takeover {lead['id']}` in the pipeline console to begin manual negotiation."
-            ),
-        )
+        client.chat_postMessage(channel=config.SLACK_ALERT_CHANNEL, text=text)
     except SlackApiError as exc:
         print(f"[sales_agent] Slack alert failed: {exc}")
 
 
 def alert_positive_reply(lead: dict) -> None:
-    _console_alert(lead)
-    _slack_alert(lead)
+    banner = "!" * 70
+    print(f"\n{banner}\nLEAD REPLIED POSITIVELY: {lead['business_name']} <{lead['contact_email']}>"
+          f"\nLead ID: {lead['id']}  |  Autonomous negotiation engaged (band "
+          f"{config.CURRENCY_SYMBOL}{config.NEGOTIATION_FLOOR:,}-"
+          f"{config.CURRENCY_SYMBOL}{config.NEGOTIATION_CEILING:,}).\n{banner}\n")
+    _slack_notify(
+        f":rotating_light: *LEAD REPLIED POSITIVELY*\n"
+        f"*{lead['business_name']}* <{lead['contact_email']}> (lead id {lead['id']})\n"
+        f"Autonomous negotiation engaged (band {config.CURRENCY_SYMBOL}{config.NEGOTIATION_FLOOR:,}"
+        f"-{config.CURRENCY_SYMBOL}{config.NEGOTIATION_CEILING:,}). "
+        "No action needed -- watch the thread in the dashboard."
+    )
 
 
-# --- Human takeover state ------------------------------------------------------
+def alert_deal_closed(lead: dict, price: int, checkout_url: str) -> None:
+    banner = "$" * 70
+    print(f"\n{banner}\nDEAL CLOSED AUTONOMOUSLY: {lead['business_name']} (lead {lead['id']}) "
+          f"at {price} -- checkout link sent.\n{banner}\n")
+    _slack_notify(
+        f":moneybag: *DEAL CLOSED AUTONOMOUSLY*\n"
+        f"*{lead['business_name']}* (lead id {lead['id']}) agreed at *{price}*.\n"
+        f"Checkout link sent: {checkout_url}"
+    )
 
-def begin_takeover(lead_id: int) -> None:
-    _TAKEOVER_LEAD_IDS.add(lead_id)
-    db.update_lead_status(lead_id, "negotiating", notes="Human took over negotiation")
 
-
-def is_under_takeover(lead_id: int) -> bool:
-    return lead_id in _TAKEOVER_LEAD_IDS
-
-
-def end_takeover(lead_id: int) -> None:
-    _TAKEOVER_LEAD_IDS.discard(lead_id)
+def alert_needs_human(lead: dict, reason: str) -> None:
+    banner = "?" * 70
+    print(f"\n{banner}\nNEEDS HUMAN ATTENTION: {lead['business_name']} (lead {lead['id']})\n"
+          f"{reason}\n{banner}\n")
+    _slack_notify(
+        f":warning: *NEEDS HUMAN ATTENTION*\n"
+        f"*{lead['business_name']}* (lead id {lead['id']}): {reason}"
+    )
 
 
 # --- Email drafting (Hugging Face) --------------------------------------------
@@ -187,7 +202,7 @@ def draft_cold_email(lead: dict) -> tuple[str, str]:
 # --- Sending (rate-limited) ----------------------------------------------------
 
 _SCREENSHOT_CID = "preview"
-_SENDER_NAME = "Casey"
+_SENDER_NAME = config.SENDER_NAME
 
 
 def _intro_line(business_name: str) -> str:
@@ -244,7 +259,8 @@ def _closing_paragraphs(preview_link: str) -> list[str]:
         f"View the live preview: {preview_link}",
         "This preview is live for 7 days -- after that it'll be repurposed. No pressure, just didn't want you to miss it.",
         "If you'd like to own it, reply YES. I'll connect your domain, swap in your own photos, and make any changes you want.",
-        f"Standard package: £2,000. This completed draft: £{config.WEBSITE_OFFER_PRICE:,}.",
+        f"Standard package: {config.CURRENCY_SYMBOL}{config.STANDARD_PACKAGE_PRICE:,}. "
+        f"This completed draft: {config.CURRENCY_SYMBOL}{config.WEBSITE_OFFER_PRICE:,}.",
         _SENDER_NAME,
     ]
 
@@ -299,7 +315,7 @@ def _send_via_configured_transport(
 ) -> str:
     """Send email via configured transport: SendGrid if SENDGRID_API_KEY is set,
     otherwise fall back to SMTP via send_email.
-    
+
     Returns the message_id of the sent email.
     """
     if config.SENDGRID_API_KEY:
@@ -397,8 +413,6 @@ def send_next_pending() -> Optional[int]:
     if not _can_send_now():
         return None
     for lead in db.list_leads_by_status("designed"):
-        if is_under_takeover(lead["id"]):
-            continue
         if send_cold_email(lead):
             return lead["id"]
     return None
@@ -419,17 +433,550 @@ def classify_reply(subject: str, body: str) -> str:
     if any(re.search(p, text) for p in _POSITIVE_PATTERNS):
         return "positive"
     # Ambiguous replies default to 'positive' so a real human reply is never
-    # silently dropped -- worst case a human reviews a lukewarm reply.
+    # silently dropped -- worst case the negotiation agent answers a lukewarm
+    # reply politely (and the round cap keeps that bounded).
     return "positive"
+
+
+# --- Autonomous negotiation ----------------------------------------------------
+#
+# The LLM decides the *move*; the code decides the *money*. Model output is a
+# (decision, price, body) triple, where the price is clamped and the body is
+# discarded unless it is free of numbers and links. All prices a prospect
+# reads, and the amount of every Stripe session, come from _clamp_price().
+
+def _price_band() -> tuple[int, int]:
+    return config.NEGOTIATION_FLOOR, config.NEGOTIATION_CEILING
+
+
+def _clamp_price(price: Optional[int], fallback: int) -> int:
+    """Hard code-side enforcement of the negotiation band. The LLM only ever
+    proposes a number; whatever reaches an email or Stripe goes through here."""
+    floor, ceiling = _price_band()
+    if price is None or price <= 0:
+        price = fallback
+    return max(floor, min(ceiling, price))
+
+
+def _standing_price(lead: dict) -> int:
+    """The lead's current quoted price: the last code-clamped quote we made
+    (persisted on the lead row), else the price we already advertised.
+
+    Before the first negotiation round nothing is persisted, so the opening
+    standing quote is the price the cold email actually quoted
+    (config.WEBSITE_OFFER_PRICE) -- clamped into the band -- NOT the band
+    ceiling. Starting from the ceiling would let a discounted offer
+    (WEBSITE_OFFER_PRICE < the band ceiling) silently re-quote the prospect
+    higher than the number they were emailed."""
+    floor, ceiling = _price_band()
+    quoted = lead.get("quoted_price_usd")
+    if isinstance(quoted, int) and quoted > 0:
+        return max(floor, min(ceiling, quoted))
+    return max(floor, min(ceiling, config.WEBSITE_OFFER_PRICE))
+
+
+def _negotiation_rounds(lead_id: int) -> int:
+    """How many autonomous negotiation emails we've already sent this lead.
+    Counted from the DB (classification='negotiation') so the round cap
+    survives restarts."""
+    return sum(
+        1 for t in db.get_email_threads(lead_id)
+        if t["direction"] == "outbound" and t["classification"] == _NEGOTIATION_CLASSIFICATION
+    )
+
+
+def _render_thread(lead_id: int, limit: int = 8, max_chars: int = 400) -> str:
+    """Compact plain-text transcript of the recent thread for the prompt."""
+    lines = []
+    for t in db.get_email_threads(lead_id)[-limit:]:
+        who = "ME" if t["direction"] == "outbound" else "PROSPECT"
+        body = (t["body"] or "").strip()
+        if len(body) > max_chars:
+            body = body[:max_chars] + " [...]"
+        lines.append(f"[{who}] {body}")
+    return "\n\n".join(lines)
+
+
+def _build_negotiation_prompt(
+    lead: dict, inbound_body: str, standing: int, link_outstanding: bool, rounds_left: int
+) -> str:
+    floor, ceiling = _price_band()
+    link_note = (
+        "A payment link has already been sent to them."
+        if link_outstanding else
+        "No payment link has been sent yet."
+    )
+    return (
+        "<s>[INST] You are Casey, a freelance web designer closing a deal by email. "
+        "The prospect already received a finished preview website for their business "
+        "and replied. Decide the next negotiation move.\n\n"
+        "Facts:\n"
+        f"- Business: {lead['business_name']}\n"
+        f"- Current quoted price: {standing}\n"
+        f"- You may agree to any whole number between {floor} and {ceiling}. "
+        f"Never go below {floor}. Never reveal that a minimum exists.\n"
+        f"- {link_note}\n"
+        f"- Automated replies remaining before a human must step in: {rounds_left}\n\n"
+        "Conversation so far:\n"
+        f"{_render_thread(lead['id'])}\n\n"
+        "Their new reply:\n"
+        f'"""{inbound_body.strip()[:1500]}"""\n\n'
+        "Rules for your move:\n"
+        "- CLOSE only if they clearly agree to buy. PRICE = the agreed number "
+        "(their named number if it is within your allowed range, otherwise the current quote).\n"
+        f"- COUNTER to move the price, e.g. meet a lower ask part-way -- but never below {floor}. "
+        "PRICE = your new number.\n"
+        "- REPLY to answer questions or objections without changing the price. PRICE: NONE.\n"
+        "- BODY: under 110 words, plain and friendly, no hype. Do NOT write any prices, "
+        "numbers, links, or a signature in BODY -- those are appended separately.\n\n"
+        "Respond in EXACTLY this format, nothing else:\n"
+        "DECISION: <CLOSE|COUNTER|REPLY>\n"
+        "PRICE: <whole number or NONE>\n"
+        "BODY:\n"
+        "<your message text> [/INST]"
+    )
+
+
+# PRICE must contain at least one digit -- `(\d[\d,]*)` rather than `([\d,]+)`
+# so a degenerate 'PRICE: ,' can't match and hand int() an empty string.
+_DECISION_RE = re.compile(
+    r"DECISION:\s*(CLOSE|COUNTER|REPLY)\s*?\n\s*PRICE:\s*(?:[£$]?\s*(\d[\d,]*)|NONE)\s*?\n\s*BODY:\s*\n?(.*)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# Number words that could carry a price without any digit ("five hundred").
+_NUMBER_WORDS = (
+    "zero one two three four five six seven eight nine ten eleven twelve "
+    "thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty "
+    "thirty forty fifty sixty seventy eighty ninety hundred thousand million "
+    "dozen half quarter free gratis"
+).split()
+_NUMBER_WORD_RE = re.compile(r"\b(" + "|".join(_NUMBER_WORDS) + r")\b", re.IGNORECASE)
+# Bare-domain link with no scheme/www ("paypal.me/x", "bit.ly/x", "evil.com").
+_BARE_DOMAIN_RE = re.compile(r"\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.[a-z]{2,}\b", re.IGNORECASE)
+
+
+def _model_body_is_safe(body: str) -> bool:
+    """Whitelist-tight gate on LLM-authored prose. The model body is only ever
+    a friendly opening lede -- every price, number, and link a prospect reads
+    is appended by code -- so a body has no legitimate need for any of them.
+    We therefore reject a body containing ANY digit, currency symbol, number
+    word, email/URL, or bare domain. This is deliberately over-strict: a
+    rejected body just falls back to a deterministic template (the caller
+    nulls it), whereas a hallucinated or prompt-injected price/phishing link
+    slipping through would reach the prospect. Guards the money path against
+    injection via the prospect's own reply text (which is fed to the model)."""
+    if not body or len(body) > 1200:
+        return False
+    if re.search(r"\d", body):  # any digit at all
+        return False
+    if re.search(r"[£$€@]", body):  # currency symbols or email '@'
+        return False
+    if re.search(r"https?://|www\.", body, re.IGNORECASE):
+        return False
+    if _BARE_DOMAIN_RE.search(body):  # scheme-less links: paypal.me/x, bit.ly/x
+        return False
+    if _NUMBER_WORD_RE.search(body):  # spelled-out amounts: "five hundred", "free"
+        return False
+    return True
+
+
+def _negotiation_decision(
+    lead: dict, inbound_body: str, standing: int, link_outstanding: bool, rounds_left: int
+) -> tuple[str, Optional[int], Optional[str]]:
+    """Ask the LLM for (decision, proposed_price, body). Any HF/parse failure
+    degrades to a deterministic ('COUNTER', standing, None) -- restate the
+    standing offer rather than going silent or improvising."""
+    fallback = ("REPLY", None, None) if link_outstanding else ("COUNTER", standing, None)
+    try:
+        raw = _hf_client().text_generation(
+            _build_negotiation_prompt(lead, inbound_body, standing, link_outstanding, rounds_left),
+            max_new_tokens=350,
+            temperature=0.3,
+            do_sample=True,
+        )
+    except Exception as exc:  # noqa: BLE001 - negotiation must degrade, never crash the loop
+        print(f"[sales_agent] HF negotiation call failed, using deterministic fallback: {exc}")
+        return fallback
+    match = _DECISION_RE.search(raw)
+    if not match:
+        print(f"[sales_agent] Unparseable negotiation output, using deterministic fallback: {raw[:200]!r}")
+        return fallback
+    decision = match.group(1).upper()
+    price = None
+    if match.group(2):
+        try:
+            price = int(match.group(2).replace(",", ""))
+        except ValueError:
+            # Defensive: the regex requires a leading digit, so this should be
+            # unreachable, but a malformed capture must degrade, never crash
+            # the inbox loop -- fall back to the standing quote via _clamp_price.
+            price = None
+    body = match.group(3).strip()
+    if not _model_body_is_safe(body):
+        body = None  # keep the decision, replace the prose with a safe template
+    return decision, price, body
+
+
+def _reply_subject(lead: dict) -> str:
+    return f"Re: I built a website for {lead['business_name']}"
+
+
+def _send_thread_reply(lead: dict, body: str, classification: str = _NEGOTIATION_CLASSIFICATION) -> bool:
+    """Send one mid-thread reply and log it. Returns False (never raises) if
+    the address is unusable/unsubscribed -- a dead thread must not kill the
+    inbox-processing loop."""
+    email_addr = lead.get("contact_email") or ""
+    if not email_addr or db.is_unsubscribed(email_addr):
+        return False
+    subject = _reply_subject(lead)
+    try:
+        message_id = _send_via_configured_transport(
+            to_addr=email_addr, subject=subject, body_text=body, lead_id=lead["id"],
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[sales_agent] Failed to send negotiation reply for lead {lead['id']}: {exc}")
+        return False
+    db.insert_email_thread(
+        lead_id=lead["id"], direction="outbound", subject=subject, body=body,
+        from_addr=config.EMAIL_USER, to_addr=email_addr, message_id=message_id,
+        classification=classification,
+    )
+    return True
+
+
+# Placeholder returned instead of a real Stripe session during a dry run.
+_DRY_RUN_CHECKOUT_URL = f"{config.PUBLIC_BASE_URL}/payment-success?dry_run=1"
+
+
+def _create_checkout_link(lead: dict, price: int) -> Optional[str]:
+    """Create (and persist) a Stripe Checkout session at a code-clamped price.
+    Returns None (and alerts) on failure -- an unsendable link must degrade to
+    a polite holding reply, not a crash.
+
+    Honors the ENABLE_LIVE_SEND dry-run valve: creating a Checkout session is a
+    live, payable external side effect, so a dry run must NOT create one. In dry
+    run we log and return a harmless placeholder URL so the flow still exercises
+    end to end without minting a real payment link."""
+    floor, ceiling = _price_band()
+    price = max(floor, min(ceiling, price))  # belt-and-braces: clamp again at the money boundary
+    if not config.ENABLE_LIVE_SEND:
+        print(f"[sales_agent] DRY RUN -- not creating a live Stripe session for lead {lead['id']} at {price}.")
+        return _DRY_RUN_CHECKOUT_URL
+    try:
+        url = stripe_utils.create_checkout_session(
+            lead_id=lead["id"],
+            business_name=lead["business_name"],
+            customer_email=lead["contact_email"],
+            amount=price,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[sales_agent] Stripe checkout creation failed for lead {lead['id']}: {exc}")
+        alert_needs_human(lead, f"Stripe checkout creation failed at price {price}: {exc}")
+        return None
+    # Persist so a later question-reply re-sends THIS link, never a second one.
+    db.update_lead_fields(lead["id"], checkout_url=url)
+    return url
+
+
+def _compose_close_body(lead: dict, price: int, model_body: Optional[str], checkout_url: str) -> str:
+    lede = model_body or (
+        f"Brilliant -- let's get {lead['business_name']} live. "
+        "Really glad you want to go ahead with it."
+    )
+    return "\n\n".join([
+        lede,
+        f"I've locked in the completed site for you at {config.CURRENCY_SYMBOL}{price:,}.",
+        f"Secure checkout link: {checkout_url}",
+        "Once payment goes through, I'll start the handover right away -- I'll email you "
+        "for your GitHub username so the site's code lands in your hands, connect your "
+        "domain, and make any changes you want.",
+        _SENDER_NAME,
+    ])
+
+
+def _compose_counter_body(lead: dict, price: int, model_body: Optional[str]) -> str:
+    lede = model_body or (
+        "Thanks for getting back to me -- happy to work with you on this."
+    )
+    return "\n\n".join([
+        lede,
+        f"Here's what I can do: the completed site, everything included, "
+        f"for {config.CURRENCY_SYMBOL}{price:,}.",
+        "If that works, just reply YES and I'll send over a secure payment link.",
+        _SENDER_NAME,
+    ])
+
+
+def _compose_reply_body(lead: dict, model_body: Optional[str], checkout_url: Optional[str]) -> str:
+    lede = model_body or (
+        "Thanks for the note -- happy to answer anything else, and no pressure on timing."
+    )
+    parts = [lede]
+    if checkout_url:
+        parts.append(f"In case the earlier link got buried, here it is again: {checkout_url}")
+    parts.append(_SENDER_NAME)
+    return "\n\n".join(parts)
+
+
+def _run_negotiation_round(lead: dict, inbound_body: str, github_captured: bool = False) -> None:
+    """One autonomous negotiation turn: LLM proposes a move, code clamps the
+    price, composes the outbound email, fires Stripe on a close, and
+    advances the lead's status. Exactly one outbound email per inbound
+    message, and none at all once the round cap is hit.
+
+    `inbound_body` is the prospect's latest message text -- passed as a plain
+    string (not an InboundEmail) so a startup catch-up can replay the last
+    logged inbound reply through the identical path (see
+    catch_up_pending_negotiations). `github_captured` says whether this same
+    message just supplied a GitHub username, so a race into 'won' can route to
+    the handover handler without re-alerting on the routine handoff."""
+    lead = db.get_lead(lead["id"]) or lead  # refresh status/quoted price
+    if lead["status"] == "won":
+        # Stripe's webhook (a separate process) confirmed payment between the
+        # inbox poll and now -- this is a paid customer, not a negotiation.
+        _handle_won_reply(lead, github_captured)
+        return
+    rounds = _negotiation_rounds(lead["id"])
+    if rounds >= config.MAX_NEGOTIATION_ROUNDS:
+        alert_needs_human(
+            lead,
+            f"Negotiation round cap ({config.MAX_NEGOTIATION_ROUNDS}) reached -- not auto-replying. "
+            "Latest inbound message is logged in the thread; reply manually from your mail client.",
+        )
+        return
+
+    standing = _standing_price(lead)
+    rounds_left = config.MAX_NEGOTIATION_ROUNDS - rounds
+    decision, proposed, model_body = _negotiation_decision(
+        lead, inbound_body, standing, lead["status"] == "payment_sent", rounds_left
+    )
+    # The LLM call above can take several seconds; re-read the lead so no branch
+    # acts on a status the webhook process changed meanwhile. If payment landed
+    # during the call, this is now a paid customer -- hand off, don't negotiate.
+    lead = db.get_lead(lead["id"]) or lead
+    if lead["status"] == "won":
+        _handle_won_reply(lead, github_captured)
+        return
+    link_outstanding = lead["status"] == "payment_sent"
+    # Band clamp, then cap at the standing quote: a price already offered to
+    # this lead can never rise, so a hallucinated "CLOSE 5000" after we
+    # quoted 600 closes at 600, not at the band ceiling.
+    price = min(_clamp_price(proposed, standing), standing)
+
+    # All status writes below are guarded against 'won': the webhook process
+    # can confirm payment at any instant (even mid-LLM-call), and a slower
+    # negotiation write must never demote a paid lead -- that would strand
+    # the automated handover, which only picks up 'won' leads.
+    if decision == "CLOSE":
+        # If a link is already outstanding (a prior CLOSE this negotiation),
+        # re-send THAT one at its original price rather than minting a second
+        # payable session -- and hold the quoted price steady so a repeat close
+        # can't silently re-price the same deal.
+        if link_outstanding and lead.get("checkout_url"):
+            checkout_url = lead["checkout_url"]
+            price = _standing_price(lead)
+        else:
+            checkout_url = _create_checkout_link(lead, price)
+        if checkout_url is None:
+            # Deal is agreed but the link couldn't be created: hold politely,
+            # stay in 'negotiating' so the next inbound (or a human) retries.
+            _send_thread_reply(lead, "\n\n".join([
+                "Great -- let's do it. I'll send over the secure payment link shortly.",
+                _SENDER_NAME,
+            ]))
+            db.update_lead_status_unless(
+                lead["id"], "negotiating",
+                notes=f"Close agreed at {price} but Stripe link creation failed",
+                unless_current=("won",),
+            )
+            return
+        body = _compose_close_body(lead, price, model_body, checkout_url)
+        if _send_thread_reply(lead, body):
+            db.update_lead_fields(lead["id"], quoted_price_usd=price)
+            if db.update_lead_status_unless(
+                lead["id"], "payment_sent",
+                notes=f"Deal closed autonomously at {price}; checkout link sent",
+                unless_current=("won",),
+            ):
+                alert_deal_closed(lead, price, checkout_url)
+            else:
+                # Payment landed in the sub-second between the re-read above and
+                # this write. The just-sent link is live and payable, so warn a
+                # human to make sure the customer isn't charged twice.
+                alert_needs_human(
+                    lead,
+                    "Payment confirmed just as a close email went out -- the customer now has a "
+                    "second live checkout link. Confirm they aren't double-charged and, if "
+                    "needed, expire the extra Stripe session.",
+                )
+    elif decision == "COUNTER":
+        body = _compose_counter_body(lead, price, model_body)
+        if _send_thread_reply(lead, body):
+            db.update_lead_fields(lead["id"], quoted_price_usd=price)
+            if not db.update_lead_status_unless(
+                lead["id"], "negotiating", notes=f"Auto-counter at {price}",
+                unless_current=("negotiating", "won"),
+            ):
+                db.log_state_history(lead["id"], lead["status"], lead["status"],
+                                     notes=f"Auto-counter at {price}")
+    else:  # REPLY
+        # Re-send the SAME checkout link we already created (persisted on the
+        # lead), never a fresh Stripe session -- minting a new one per question
+        # would leave several live, payable links and risk a double charge.
+        checkout_url = (lead.get("checkout_url") or None) if link_outstanding else None
+        body = _compose_reply_body(lead, model_body, checkout_url)
+        if _send_thread_reply(lead, body):
+            db.log_state_history(lead["id"], lead["status"], lead["status"],
+                                 notes="Auto-reply (no price change)")
+
+
+# --- Post-payment handover emails ----------------------------------------------
+
+_GITHUB_ASK_SUBJECT_PREFIX = "Handing over your new website"
+
+_GITHUB_USERNAME_PATTERNS = (
+    re.compile(r"github\.com/([A-Za-z\d](?:[A-Za-z\d-]{0,37}[A-Za-z\d])?)", re.IGNORECASE),
+    re.compile(
+        r"github(?:\s+user(?:name)?)?\s*(?:is|[:\-])\s*@?([A-Za-z\d](?:[A-Za-z\d-]{0,37}[A-Za-z\d])?)",
+        re.IGNORECASE,
+    ),
+)
+
+
+# Placeholder/example slugs that must never be accepted as a real username --
+# chiefly the example our own ask email uses, which a quoted reply echoes
+# back. Inviting one of these as an *admin* collaborator would hand repo
+# control to an unrelated third party, so we reject them and escalate.
+_GITHUB_USERNAME_DENYLIST = frozenset({
+    "yourname", "your-name", "username", "user", "example", "name", "login",
+    "handle", "account", "settings", "notifications", "orgs", "sponsors",
+})
+
+
+def extract_github_username(text: str) -> Optional[str]:
+    """Conservatively pull a GitHub username out of free text: either a
+    github.com/<user> link or an explicit 'github username: x' phrasing.
+    Placeholder/example slugs (including the one our own ask email shows,
+    which a quoted reply echoes back) are rejected. Anything fuzzier gets
+    escalated to a human instead of guessed at."""
+    for pattern in _GITHUB_USERNAME_PATTERNS:
+        match = pattern.search(text or "")
+        if match:
+            candidate = match.group(1)
+            if candidate.lower() in _GITHUB_USERNAME_DENYLIST:
+                continue
+            return candidate
+    return None
+
+
+def _maybe_capture_github_username(lead: dict, body: str) -> bool:
+    """Store a GitHub username parsed from this reply, if we don't already have
+    one. Returns True only when this call captured a new username -- callers use
+    that to tell the expected handover handoff apart from other post-payment
+    replies that need a human."""
+    if lead.get("github_username"):
+        return False
+    username = extract_github_username(body)
+    if username:
+        db.update_lead_fields(lead["id"], github_username=username)
+        print(f"[sales_agent] Captured GitHub username {username!r} for lead {lead['id']}")
+        return True
+    return False
+
+
+def send_github_username_request(lead: dict) -> bool:
+    """Ask a paid ('won') lead for their GitHub username so the repo invite
+    can be sent. Idempotent: checks the thread log and sends at most once."""
+    for t in db.get_email_threads(lead["id"]):
+        if t["direction"] == "outbound" and (t["subject"] or "").startswith(_GITHUB_ASK_SUBJECT_PREFIX):
+            return False
+    email_addr = lead.get("contact_email") or ""
+    if not email_addr:
+        return False
+    subject = f"{_GITHUB_ASK_SUBJECT_PREFIX} -- one quick thing"
+    # NOTE: deliberately no "github.com/<example>" URL and no example slug in
+    # this copy. The inbound parser scans replies for a github.com/<user> link
+    # or "github username: x"; a mail client quoting this email back would
+    # otherwise feed our own example straight into that parser. Keep it plain.
+    body = (
+        f"Payment received -- thank you! {lead['business_name']}'s new site is yours.\n\n"
+        "To hand over the site's code I just need your GitHub username -- the name you "
+        "sign in with (you can create a free account at github.com if you don't have "
+        "one yet). Reply with just that username and I'll send the invite right away.\n\n"
+        "I'll also invite this email address to the hosting project so the live site "
+        "is under your control.\n\n"
+        f"{_SENDER_NAME}"
+    )
+    try:
+        message_id = _send_via_configured_transport(
+            to_addr=email_addr, subject=subject, body_text=body, lead_id=lead["id"],
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[sales_agent] Failed to send GitHub-username request for lead {lead['id']}: {exc}")
+        return False
+    db.insert_email_thread(
+        lead_id=lead["id"], direction="outbound", subject=subject, body=body,
+        from_addr=config.EMAIL_USER, to_addr=email_addr, message_id=message_id,
+    )
+    return True
+
+
+_HANDOVER_CONFIRM_SUBJECT_PREFIX = "Your website handover is underway"
+
+
+def send_handover_confirmation(lead: dict, repo_full_name: str) -> bool:
+    """Confirmation sent right after the automated GitHub/Vercel invites fire.
+    Idempotent: sends at most once, so a restart between marking the site
+    transferred and this send can't email the customer a duplicate."""
+    for t in db.get_email_threads(lead["id"]):
+        if t["direction"] == "outbound" and (t["subject"] or "").startswith(_HANDOVER_CONFIRM_SUBJECT_PREFIX):
+            return False
+    email_addr = lead.get("contact_email") or ""
+    if not email_addr:
+        return False
+    subject = f"{_HANDOVER_CONFIRM_SUBJECT_PREFIX} -- {lead['business_name']}"
+    body = (
+        f"All done on my side. You've been invited to the site's code repository "
+        f"({repo_full_name}) on GitHub -- accept the invite from your GitHub "
+        "notifications and it's yours. An invite to the hosting project was sent to "
+        "this email address too.\n\n"
+        "Next up: connecting your domain and any changes you'd like -- just reply "
+        "here with what you need.\n\n"
+        f"{_SENDER_NAME}"
+    )
+    try:
+        message_id = _send_via_configured_transport(
+            to_addr=email_addr, subject=subject, body_text=body, lead_id=lead["id"],
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[sales_agent] Failed to send handover confirmation for lead {lead['id']}: {exc}")
+        return False
+    db.insert_email_thread(
+        lead_id=lead["id"], direction="outbound", subject=subject, body=body,
+        from_addr=config.EMAIL_USER, to_addr=email_addr, message_id=message_id,
+    )
+    return True
+
+
+# --- Inbound handling -----------------------------------------------------------
+
+_GOODBYE_SUBJECT = "No problem"
 
 
 def _send_goodbye(lead: dict) -> None:
     """Automatic, polite acknowledgment sent when a lead declines -- required
-    so 'stop emailing me' always gets a confirmation, not silence."""
+    so 'stop emailing me' always gets a confirmation, not silence. Sent at
+    most once per lead: the negative-branch status guard already prevents
+    re-entry for an already-'lost' lead, and this thread-log check is a
+    belt-and-braces stop against ever trading goodbyes with an autoresponder."""
     email_addr = lead.get("contact_email") or ""
     if not email_addr or db.is_unsubscribed(email_addr):
         return
-    subject = "No problem"
+    for t in db.get_email_threads(lead["id"]):
+        if t["direction"] == "outbound" and t["subject"] == _GOODBYE_SUBJECT:
+            return  # already said goodbye once; never again
+    subject = _GOODBYE_SUBJECT
     body = (
         f"Hi, totally understood -- I won't reach out again about this. "
         f"Wishing {lead['business_name']} all the best."
@@ -447,6 +994,31 @@ def _send_goodbye(lead: dict) -> None:
         )
     except RuntimeError:
         pass  # already unsubscribed between the check above and now; nothing to do
+
+
+def _handle_won_reply(lead: dict, github_captured: bool = False) -> None:
+    """A paid customer replied. The one message automation handles by itself is
+    the reply that supplies the GitHub username we asked for (`github_captured`
+    True) -- main.py's handover pass acts on it next cycle, so no human action
+    is needed. EVERY other post-payment reply is support, which is a human's
+    job, so it is escalated -- never silently dropped."""
+    lead = db.get_lead(lead["id"]) or lead
+    website = db.get_website_by_lead(lead["id"])
+    already_transferred = bool(website and website.get("transferred"))
+
+    if github_captured and not already_transferred:
+        return  # routine handoff; the handover pass takes it from here
+
+    if already_transferred:
+        reason = ("Paid, handed-over customer replied -- post-handover support is a human's job; "
+                  "read the thread and reply personally.")
+    elif lead.get("github_username"):
+        reason = ("Paid customer replied again while their handover is in progress (GitHub username "
+                  "already on file) -- read the thread and reply if it needs an answer.")
+    else:
+        reason = ("Paid customer replied but gave no usable GitHub username -- read the thread and "
+                  "reply manually (or set their github_username so the automated handover can run).")
+    alert_needs_human(lead, reason)
 
 
 def _handle_inbound(lead: dict, msg) -> None:  # msg: email_utils.InboundEmail
@@ -470,7 +1042,9 @@ def _handle_inbound_impl(lead: dict, msg) -> None:  # msg: email_utils.InboundEm
             from_addr=msg.from_addr, to_addr=msg.to_addr, message_id=msg.message_id,
             classification=classification,
         )
-        db.update_lead_status(lead["id"], "bounced", notes="Bounce/DSN detected")
+        # Guarded so a stray DSN can't demote a paid lead out of the handover queue.
+        db.update_lead_status_unless(lead["id"], "bounced", notes="Bounce/DSN detected",
+                                     unless_current=("won", "payment_sent"))
         return
 
     classification = classify_reply(msg.subject, msg.body)
@@ -479,16 +1053,50 @@ def _handle_inbound_impl(lead: dict, msg) -> None:  # msg: email_utils.InboundEm
         from_addr=msg.from_addr, to_addr=msg.to_addr, message_id=msg.message_id,
         classification=classification,
     )
+    github_captured = _maybe_capture_github_username(lead, msg.body)
 
     if classification == "negative":
-        db.update_lead_status(lead["id"], "lost", notes="Replied negative")
-        _send_goodbye(lead)
+        # A first-time decline (active lead) gets exactly one goodbye and is
+        # suppressed; a repeat negative from an already-terminal lead does
+        # nothing (this is what stops two autoresponders trading goodbyes
+        # forever, outside the negotiation round cap). A paid lead is never
+        # demoted -- 'stop' from a customer is support, not a lost sale.
+        if db.update_lead_status_unless(
+            lead["id"], "lost", notes="Replied negative",
+            unless_current=("won", "lost", "unsubscribed", "bounced"),
+        ):
+            _send_goodbye(lead)  # sent before suppression so the ack itself goes out
+            db.suppress_email(lead.get("contact_email") or "")  # CAN-SPAM: honor the opt-out
+        else:
+            current = (db.get_lead(lead["id"]) or lead)["status"]
+            if current == "won":
+                db.log_state_history(lead["id"], "won", "won", notes="Negative reply post-payment")
+                alert_needs_human(lead, "Paid customer sent a negative reply -- handle personally.")
+            # else already lost/unsubscribed/bounced: no repeat goodbye, no churn.
     elif classification == "out_of_office":
         db.log_state_history(lead["id"], lead["status"], lead["status"], notes="Out-of-office auto-reply")
     elif classification == "positive":
-        if lead["status"] not in ("negotiating", "won", "payment_sent"):
-            db.update_lead_status(lead["id"], "replied", notes="Replied positive")
-        alert_positive_reply(lead)
+        if lead["status"] == "won":
+            _handle_won_reply(lead, github_captured)
+            return
+        # Never resurrect a terminal lead (declined / bounced / opted-out) into
+        # an automated sales conversation off an ambiguous or automated reply --
+        # escalate so a human decides, rather than emailing a fresh price to
+        # someone who already said no (or can't be emailed at all).
+        if lead["status"] in ("lost", "bounced", "unsubscribed"):
+            alert_needs_human(
+                lead,
+                f"A '{lead['status']}' lead sent a positive-looking reply -- not auto-negotiating; "
+                "review the thread and re-engage manually if appropriate.",
+            )
+            return
+        if db.update_lead_status_unless(
+            lead["id"], "negotiating",
+            notes="Replied positive; autonomous negotiation engaged",
+            unless_current=("negotiating", "payment_sent", "won", "lost", "bounced", "unsubscribed"),
+        ):
+            alert_positive_reply(lead)
+        _run_negotiation_round(lead, msg.body, github_captured)
 
 
 def check_inbox() -> int:
@@ -506,6 +1114,64 @@ def check_inbox() -> int:
         lead = db.get_lead_by_email(msg.from_addr)
         if lead is None:
             continue  # reply from an address we have no lead for; nothing to act on
-        _handle_inbound(lead, msg)
+        try:
+            _handle_inbound(lead, msg)
+        except Exception as exc:  # noqa: BLE001
+            # One malformed message (or a downstream hiccup handling it) must
+            # never abort the rest of the batch. The inbound row was already
+            # logged inside _handle_inbound_impl, so message_id_seen would skip
+            # this message next poll -- alert a human so it isn't silently lost.
+            print(f"[sales_agent] Failed to handle reply from {msg.from_addr} for lead {lead['id']}: {exc}")
+            alert_needs_human(
+                lead,
+                f"Error handling an inbound reply ({exc}); the message is logged in the "
+                "thread but was not auto-answered. Review and reply manually.",
+            )
+            continue
         processed += 1
     return processed
+
+
+def catch_up_pending_negotiations() -> int:
+    """One-time migration bridge, run once at startup (main.py).
+
+    Under the old human-in-the-loop system a positive reply parked the lead
+    at status 'replied' and waited for an operator to type 'takeover'. The
+    autonomous system never uses 'replied' -- no code sets it and no query
+    selects it -- so any lead sitting there when this version is deployed
+    would be stranded: the prospect already replied and is waiting on us, but
+    nothing is reply-driven for them anymore.
+
+    This sweeps every legacy 'replied' lead into the negotiation flow by
+    replaying their last logged inbound message through the normal
+    negotiation round (moving them to 'negotiating' first). Idempotent: a
+    processed lead leaves 'replied', so a second run is a no-op. Returns the
+    count handled.
+
+    Leads at 'negotiating' are intentionally NOT swept -- that status now also
+    means active auto-negotiation, so it can't be distinguished from a
+    legacy human-owned conversation by status alone; those resume naturally
+    when the prospect next replies (check_inbox), bounded by the round cap.
+    """
+    handled = 0
+    for lead in db.list_leads_by_status("replied"):
+        threads = db.get_email_threads(lead["id"])
+        last_inbound = next(
+            (t for t in reversed(threads) if t["direction"] == "inbound"), None
+        )
+        inbound_body = (last_inbound["body"] if last_inbound else "") or ""
+        if db.update_lead_status_unless(
+            lead["id"], "negotiating",
+            notes="Startup catch-up: legacy 'replied' lead routed into autonomous negotiation",
+            unless_current=("won", "payment_sent", "lost", "unsubscribed", "bounced"),
+        ):
+            alert_positive_reply(lead)
+        try:
+            _run_negotiation_round(db.get_lead(lead["id"]) or lead, inbound_body)
+            handled += 1
+        except Exception as exc:  # noqa: BLE001 - one bad lead must not abort the sweep
+            print(f"[sales_agent] Catch-up failed for lead {lead['id']}: {exc}")
+            alert_needs_human(lead, f"Startup negotiation catch-up failed ({exc}); reply manually.")
+    if handled:
+        print(f"[sales_agent] Startup catch-up engaged autonomous negotiation for {handled} legacy lead(s).")
+    return handled

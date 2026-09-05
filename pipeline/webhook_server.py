@@ -38,6 +38,18 @@ def create_app() -> Flask:
         lead = compliance.process_unsubscribe(token)
         if lead is None:
             return "<h1>Invalid or expired unsubscribe link.</h1>", 404
+        # `lead` holds the status from *before* suppression. A paid lead
+        # ('won'/'payment_sent') keeps its status (see db.mark_unsubscribed) so
+        # its handover isn't lost, but a human must know their comms are now
+        # suppressed -- the automated handover confirmation email can't reach them.
+        if lead.get("status") in ("won", "payment_sent"):
+            from agents import sales_agent  # local import: heavy module, keep startup light
+            sales_agent.alert_needs_human(
+                lead,
+                "A PAID lead just unsubscribed. Their status is preserved so the handover "
+                "still runs, but automated emails to them are now suppressed -- complete the "
+                "handover (GitHub/Vercel invite, domain) and follow up personally.",
+            )
         return (
             "<h1>You've been unsubscribed.</h1>"
             f"<p>{lead['business_name']} will not receive any further emails from us. Sorry for the bother.</p>",
@@ -80,8 +92,8 @@ def create_app() -> Flask:
                     banner = "*" * 70
                     print(
                         f"\n{banner}\nPAYMENT RECEIVED: {lead['business_name']} (lead {lead_id})\n"
-                        f"Run 'transfer {lead_id}' in the pipeline console to hand over the "
-                        f"GitHub repo and Vercel project.\n{banner}\n"
+                        f"Automated handover will run on the pipeline's next cycle (GitHub +\n"
+                        f"Vercel invites). 'transfer {lead_id}' remains available as a manual override.\n{banner}\n"
                     )
         return "", 200
 

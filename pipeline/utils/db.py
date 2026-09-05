@@ -113,6 +113,14 @@ def init_db(db_path: Optional[str] = None) -> None:
         conn.executescript(_SCHEMA)
         _migrate_add_column(conn, "websites", "screenshot_url", "TEXT")
         _migrate_add_column(conn, "websites", "screenshot_path", "TEXT")
+        # Autonomous negotiation (agents/sales_agent.py): the last code-clamped
+        # price quoted to the lead, the GitHub username parsed from their
+        # post-payment reply for the automated repo handover (main.py), and the
+        # open Stripe Checkout URL (persisted so a follow-up reply re-sends the
+        # SAME link instead of minting a second payable session).
+        _migrate_add_column(conn, "leads", "quoted_price_usd", "INTEGER")
+        _migrate_add_column(conn, "leads", "github_username", "TEXT")
+        _migrate_add_column(conn, "leads", "checkout_url", "TEXT")
         conn.commit()
 
 
@@ -223,19 +231,96 @@ def update_lead_status(lead_id: int, new_status: str, notes: str = "") -> None:
         )
 
 
-def mark_unsubscribed(lead_id: int, email: str) -> None:
+def update_lead_status_unless(
+    lead_id: int, new_status: str, notes: str = "", unless_current: tuple[str, ...] = ()
+) -> bool:
+    """Like update_lead_status, but a no-op returning False if the lead's
+    *current* status is in `unless_current`. Check and write happen in one
+    guarded UPDATE, so a concurrent writer in another process (e.g.
+    webhook_server.py marking a lead 'won' the moment Stripe confirms
+    payment) can never be overwritten by a slower negotiation-loop write."""
+    if new_status not in ALLOWED_STATUSES:
+        raise ValueError(f"Invalid status '{new_status}'. Must be one of {ALLOWED_STATUSES}")
+    if not unless_current:
+        # `status NOT IN ()` is a SQLite syntax error, not a tautology; with
+        # nothing to guard against this is just an unconditional update.
+        old = get_lead(lead_id)
+        if old is None:
+            return False
+        update_lead_status(lead_id, new_status, notes)
+        return True
     with get_connection() as conn:
+        row = conn.execute("SELECT status FROM leads WHERE id = ?", (lead_id,)).fetchone()
+        if row is None:
+            return False
+        old_status = row["status"]
+        placeholders = ",".join("?" for _ in unless_current)
+        cur = conn.execute(
+            f"UPDATE leads SET status = ? WHERE id = ? AND status NOT IN ({placeholders})",
+            (new_status, lead_id, *unless_current),
+        )
+        if cur.rowcount == 0:
+            return False
+        conn.execute(
+            "INSERT INTO state_history (lead_id, from_state, to_state, notes) VALUES (?, ?, ?, ?)",
+            (lead_id, old_status, new_status, notes),
+        )
+        return True
+
+
+def mark_unsubscribed(lead_id: int, email: str, notes: str = "unsubscribe link clicked") -> Optional[str]:
+    """Suppress `email` and flag the lead unsubscribed. Returns the lead's
+    status *before* this call (or None if the lead is gone).
+
+    Suppression (the unsubscribes-table insert and the `unsubscribed` flag) is
+    unconditional -- an opt-out must always block future sends. The *status*
+    write, however, is guarded: a paid lead ('won'/'payment_sent') is never
+    demoted to 'unsubscribed', because that would drop it out of the handover
+    queue (main.py's _finalize_won_leads selects only 'won') and silently
+    strand a customer who paid. Callers should alert a human when the returned
+    prior status is a paid one."""
+    with get_connection() as conn:
+        row = conn.execute("SELECT status FROM leads WHERE id = ?", (lead_id,)).fetchone()
+        prior_status = row["status"] if row else None
         conn.execute("UPDATE leads SET unsubscribed = 1 WHERE id = ?", (lead_id,))
         conn.execute(
             "INSERT OR REPLACE INTO unsubscribes (email, timestamp) VALUES (?, datetime('now'))",
             (email,),
         )
+        # Preserve a paid lead's status so its handover isn't lost; only the
+        # suppression above applies to it.
+        if prior_status not in ("won", "payment_sent"):
+            conn.execute(
+                "INSERT INTO state_history (lead_id, from_state, to_state, notes) VALUES (?, ?, 'unsubscribed', ?)",
+                (lead_id, prior_status, notes),
+            )
+            conn.execute("UPDATE leads SET status = 'unsubscribed' WHERE id = ?", (lead_id,))
+        else:
+            conn.execute(
+                "INSERT INTO state_history (lead_id, from_state, to_state, notes) VALUES (?, ?, ?, ?)",
+                (lead_id, prior_status, prior_status,
+                 f"Unsubscribe recorded (suppressed) but status kept ({prior_status}) to preserve handover"),
+            )
+        return prior_status
+
+
+def suppress_email(email: str) -> None:
+    """Record an email-level opt-out WITHOUT changing any lead's status.
+
+    Used when a prospect replies to opt out (e.g. 'stop emailing me'): the
+    reply sets the lead to 'lost' for reporting, but the suppression must also
+    be written to the unsubscribes table so the same address can never be
+    cold-emailed again -- including if the business is later re-ingested from a
+    fresh CSV as a brand-new lead row. Idempotent and status-agnostic (unlike
+    mark_unsubscribed, which also drives the 'unsubscribed' status)."""
+    if not email:
+        return
+    with get_connection() as conn:
         conn.execute(
-            "INSERT INTO state_history (lead_id, from_state, to_state, notes) VALUES "
-            "(?, (SELECT status FROM leads WHERE id = ?), 'unsubscribed', 'unsubscribe link clicked')",
-            (lead_id, lead_id),
+            "INSERT OR REPLACE INTO unsubscribes (email, timestamp) VALUES (?, datetime('now'))",
+            (email,),
         )
-        conn.execute("UPDATE leads SET status = 'unsubscribed' WHERE id = ?", (lead_id,))
+        conn.execute("UPDATE leads SET unsubscribed = 1 WHERE contact_email = ?", (email,))
 
 
 def is_unsubscribed(email: str) -> bool:

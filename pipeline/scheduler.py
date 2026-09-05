@@ -23,15 +23,13 @@ Two modes:
         it detached in the background and exit. Designed to be invoked
         every few minutes by cron -- see crontab.example.
 
-IMPORTANT LIMITATION: main.py reads operator commands (`takeover`,
-`payment ready`, `transfer`, `pause`/`resume`) from stdin. A main.py
-started via `--check` mode has no attached terminal, so those commands are
-not usable against that instance -- you would need to attach a real
-terminal (tmux/screen) to run them, which is exactly what the README's
-"Deployment" section recommends as the primary way to run this pipeline.
-Treat `--check`/cron as a fallback that keeps automation (research,
-design, sending, inbox polling) alive if the process crashes, not as a
-substitute for an interactive session when you need to act on a lead.
+NOTE: main.py reads optional operator commands (`transfer`, `status`,
+`pause`/`resume`) from stdin. A main.py started via `--check` mode has no
+attached terminal, so those commands are not usable against that instance
+-- attach a real terminal (tmux/screen) when you want one, which is what
+the README's "Deployment" section recommends as the primary way to run
+this pipeline. The sell/negotiate/close/handover flow itself is fully
+automated and does not need a terminal.
 """
 from __future__ import annotations
 

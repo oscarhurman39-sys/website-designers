@@ -50,6 +50,11 @@ VERCEL_BYPASS_TOKEN: str = os.getenv("VERCEL_BYPASS_TOKEN", "")
 
 EMAIL_HOST: str = os.getenv("EMAIL_HOST", "")
 EMAIL_PORT: int = int(os.getenv("EMAIL_PORT", "587") or 587)
+# IMAP host for reply polling. Most providers use a different hostname for
+# IMAP than for SMTP (Zoho: imap.zoho.com vs smtp.zoho.com; Google:
+# imap.gmail.com vs smtp.gmail.com), so this is separate. Falls back to
+# EMAIL_HOST when blank for providers that serve both on one hostname.
+EMAIL_IMAP_HOST: str = os.getenv("EMAIL_IMAP_HOST", "").strip() or EMAIL_HOST
 EMAIL_USER: str = os.getenv("EMAIL_USER", "")
 EMAIL_PASSWORD: str = os.getenv("EMAIL_PASSWORD", "")
 
@@ -62,6 +67,9 @@ SLACK_BOT_TOKEN: str = os.getenv("SLACK_BOT_TOKEN", "")
 SLACK_ALERT_CHANNEL: str = os.getenv("SLACK_ALERT_CHANNEL", "#leads")
 
 ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "")
+# Human name shown in the From header and used as the email sign-off.
+# Prospects reply to a person, not a domain, so this should be a first name.
+SENDER_NAME: str = os.getenv("SENDER_NAME", "").strip() or "Casey"
 SENDING_DOMAIN: str = os.getenv("SENDING_DOMAIN", "")
 PHYSICAL_ADDRESS: str = os.getenv("PHYSICAL_ADDRESS", "")
 
@@ -70,13 +78,84 @@ UNSPLASH_ACCESS_KEY: str = os.getenv("UNSPLASH_ACCESS_KEY", "")
 # `DB_PATH=` line in .env falls back too, not just a fully-absent key.
 DB_PATH: str = os.getenv("DB_PATH", "").strip() or str(Path(__file__).resolve().parent / "leads.db")
 PUBLIC_BASE_URL: str = (os.getenv("PUBLIC_BASE_URL", "").strip() or "http://localhost:5000").rstrip("/")
-WEBSITE_PRICE_USD: int = int(os.getenv("WEBSITE_PRICE_USD", "750") or 750)
-# Discounted price quoted in cold emails for the pre-built draft (see
-# sales_agent.py's offer copy). Separate from WEBSITE_PRICE_USD, which is
-# the amount actually charged via Stripe checkout once a lead says yes.
-WEBSITE_OFFER_PRICE: int = int(os.getenv("WEBSITE_OFFER_PRICE", "750") or 750)
+# --- Currency ----------------------------------------------------------------
+# ONE source of truth for the money. Every price a prospect reads and every
+# Stripe session amount derives from this, so the email copy and the actual
+# charge can never disagree (they used to: the copy said GBP while Stripe
+# charged USD, silently under-collecting ~21% on every autonomous close).
+# Switching to USD for international leads is a one-line .env change.
+#
+# Restricted to two-decimal currencies on purpose: utils/stripe_utils.py bills
+# `price * 100` minor units, which is correct for these and WRONG by 100x for
+# zero-decimal currencies like JPY. validate() rejects anything not listed here
+# rather than letting that reach a real card.
+_CURRENCY_SYMBOLS = {
+    "gbp": "£",
+    "usd": "$",
+    "eur": "€",
+    "aud": "A$",
+    "cad": "C$",
+    "nzd": "NZ$",
+}
+CURRENCY: str = (os.getenv("CURRENCY", "").strip().lower() or "gbp")
+CURRENCY_SYMBOL: str = _CURRENCY_SYMBOLS.get(CURRENCY, "")
 
-# --- SendGrid configuration (optional) ----------------------------------------
+
+def _int_env(*names: str, default: int) -> int:
+    """First non-zero value among `names`, else `default`.
+
+    Accepts the legacy `*_USD` spellings so an existing .env written before the
+    currency became configurable keeps working unchanged.
+    """
+    for name in names:
+        try:
+            value = int(os.getenv(name, "0") or 0)
+        except ValueError:
+            continue
+        if value:
+            return value
+    return default
+
+
+# Amount charged via Stripe checkout once a lead says yes, in CURRENCY units.
+WEBSITE_PRICE: int = _int_env("WEBSITE_PRICE", "WEBSITE_PRICE_USD", default=750)
+# Discounted price quoted in cold emails for the pre-built draft (see
+# sales_agent.py's offer copy). Separate from WEBSITE_PRICE.
+WEBSITE_OFFER_PRICE: int = _int_env("WEBSITE_OFFER_PRICE", default=750)
+# The higher "standard package" figure the cold email anchors against before
+# quoting the discounted draft price. Config, not a magic number in the copy,
+# so it moves with the currency.
+STANDARD_PACKAGE_PRICE: int = _int_env("STANDARD_PACKAGE_PRICE", default=2000)
+
+# --- Autonomous negotiation band (see agents/sales_agent.py) -----------------
+# The LLM negotiation agent may quote any whole-number price inside
+# [NEGOTIATION_FLOOR, NEGOTIATION_CEILING], in CURRENCY units. The band is
+# enforced in code -- every price is clamped before it reaches an email or a
+# Stripe session -- so a confused or prompt-injected model can never discount
+# below the floor. Defaults: ceiling = the advertised offer price
+# (WEBSITE_OFFER_PRICE -- the number the cold email actually quotes),
+# floor = 80% of it. The ceiling is deliberately the *offer* price, not
+# WEBSITE_PRICE: negotiation is about the pre-built draft the email offered, so
+# quoting above that price would be a bait-and-switch on the prospect.
+NEGOTIATION_CEILING: int = _int_env(
+    "NEGOTIATION_CEILING", "NEGOTIATION_CEILING_USD", default=WEBSITE_OFFER_PRICE
+)
+NEGOTIATION_FLOOR: int = _int_env(
+    "NEGOTIATION_FLOOR", "NEGOTIATION_FLOOR_USD",
+    default=max(1, (NEGOTIATION_CEILING * 80) // 100),
+)
+# After this many autonomous replies in one negotiation the agent stops
+# replying and alerts a human instead -- a runaway back-and-forth (including
+# two autoresponders emailing each other) must degrade to an alert, never an
+# infinite email loop.
+MAX_NEGOTIATION_ROUNDS: int = int(os.getenv("MAX_NEGOTIATION_ROUNDS", "6") or 6)
+
+# --- SendGrid configuration (optional; ON THE BACK BURNER) --------------------
+# SendGrid retired its free tier in 2025 and its terms prohibit cold outreach,
+# so the pipeline sends over plain SMTP from the Zoho mailbox on the secondary
+# domain instead. The SendGrid path in utils/email_utils.py is kept intact in
+# case a transactional use (e.g. payment receipts) ever justifies it. Leave
+# SENDGRID_API_KEY blank in .env and this branch is never taken.
 SENDGRID_API_KEY: str = os.getenv("SENDGRID_API_KEY", "")
 SENDGRID_FROM_EMAIL: str = os.getenv("SENDGRID_FROM_EMAIL", "")
 
@@ -182,6 +261,32 @@ def validate() -> None:
             "Missing required environment variable(s): "
             + ", ".join(missing)
             + f"\nCopy .env.example to .env ({_ENV_PATH}) and fill them in."
+        )
+    # An unsupported currency must never reach Stripe: stripe_utils bills
+    # `price * 100` minor units, so a zero-decimal currency (JPY) would charge
+    # 100x the agreed amount. Fail at startup instead.
+    if CURRENCY not in _CURRENCY_SYMBOLS:
+        raise RuntimeError(
+            f"CURRENCY={CURRENCY!r} is not supported. Use one of: "
+            + ", ".join(sorted(_CURRENCY_SYMBOLS))
+            + ". (Zero-decimal currencies like JPY are excluded deliberately -- "
+            "the Stripe amount is computed as price * 100.)"
+        )
+    # A non-positive band would defeat the price clamp: a negative override
+    # (e.g. NEGOTIATION_FLOOR=-500) is truthy, so it bypasses the derived
+    # default and, since _clamp_price uses max(floor, ...), lets a lowball
+    # price through below any sane minimum. Reject it at startup.
+    if NEGOTIATION_FLOOR <= 0 or NEGOTIATION_CEILING <= 0:
+        raise RuntimeError(
+            f"Negotiation band must be positive, got floor={NEGOTIATION_FLOOR}, "
+            f"ceiling={NEGOTIATION_CEILING}. Fix NEGOTIATION_FLOOR / "
+            "NEGOTIATION_CEILING in .env."
+        )
+    if NEGOTIATION_FLOOR > NEGOTIATION_CEILING:
+        raise RuntimeError(
+            f"NEGOTIATION_FLOOR ({NEGOTIATION_FLOOR}) exceeds "
+            f"NEGOTIATION_CEILING ({NEGOTIATION_CEILING}); fix the "
+            "negotiation band in .env before running the autonomous sales agent."
         )
 
 

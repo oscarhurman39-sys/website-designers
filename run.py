@@ -7,9 +7,10 @@
 
 Each mode runs as its own subprocess, not imported in-process -- this is a
 thin dispatcher, not a reimplementation. That matters because `loop` reads
-operator commands from stdin (takeover/payment/transfer) and `dashboard`
-is a streamlit server process; both need to run exactly as if invoked
-directly, not nested inside another Python process's event/import state.
+optional operator commands from stdin (transfer/status/pause/resume) and
+`dashboard` is a streamlit server process; both need to run exactly as if
+invoked directly, not nested inside another Python process's event/import
+state.
 """
 from __future__ import annotations
 

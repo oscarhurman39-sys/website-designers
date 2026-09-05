@@ -1,12 +1,19 @@
 # website-designers -- Cold Email Web Design Sales Pipeline
 
 An autonomous pipeline that finds local businesses, builds them a free
-website preview, sends a personalized cold email, monitors replies, and
-hands off payment/transfer to a human once a lead is ready to buy.
+website preview, sends a personalized cold email, monitors replies, then
+negotiates, takes payment, and hands over the finished site -- end to end,
+with no human in the loop for the happy path.
 
-Every automated step has a human-in-the-loop safeguard: positive replies
-pause outreach for that lead and alert an operator; payment and repo/site
-transfer are only ever triggered by an explicit console command.
+Safety comes from code-enforced guardrails, not a human gate: negotiated
+prices are clamped to a configured band and can never rise above what was
+quoted; the LLM only proposes moves while code computes every price, link,
+and Stripe amount; a per-lead round cap stops runaway back-and-forth and
+alerts a human. Payment (Stripe) fires automatically on a close, and the
+GitHub/Vercel handover fires automatically once payment clears. A human is
+alerted -- never blocked -- for the exceptions (round cap hit, paid-customer
+support, failed invite); the manual `transfer` command remains as an
+override and is the only path that removes your own repo access.
 
 ## Quick Start
 
@@ -96,13 +103,16 @@ cd pipeline
 python main.py
 ```
 
-While `main.py` is running, type commands at its console:
+Negotiation, payment, and handover are fully automated: a positive reply
+routes into the LLM negotiation agent (price-clamped in code to
+`NEGOTIATION_FLOOR`..`NEGOTIATION_CEILING`, in `CURRENCY`), a close automatically
+creates + emails the Stripe Checkout link, and once Stripe's webhook marks
+the lead paid the loop sends the GitHub/Vercel invites itself. The console
+commands that remain are optional conveniences:
 
 | Command | Effect |
 |---|---|
-| `takeover <lead_id>` | Pause automation for a lead, hand negotiation to a human |
-| `payment ready <lead_id>` | Create + email a Stripe Checkout link |
-| `transfer <lead_id>` | Invite the client to the GitHub repo and Vercel project (requires `VERCEL_TEAM_ID`), optionally remove your own GitHub access |
+| `transfer <lead_id>` | Manual handover override (e.g. the client never sent a usable GitHub username), and the only way to remove your own GitHub access |
 | `status` | Print a lead-count-by-status summary |
 | `pause` / `resume` | Pause/resume the automated loop |
 | `help` | List commands |
@@ -187,8 +197,8 @@ pipeline operation.
 
 This repo ships project-scoped [Claude Code subagent](https://docs.claude.com/en/docs/claude-code)
 persona files under `.claude/agents/`, one per pipeline concern
-(cold-email drafting, compliance, GitHub/Vercel infra, Stripe, human
-takeover, lead research). Only
+(cold-email drafting, compliance, GitHub/Vercel infra, Stripe, autonomy
+guardrails, lead research). Only
 `.claude/agents/01-core-development/backend-developer.md` is reproduced
 verbatim from the real
 [VoltAgent/awesome-claude-code-subagents](https://github.com/VoltAgent/awesome-claude-code-subagents)
@@ -196,7 +206,7 @@ collection, under the MIT License, Copyright (c) 2025 VoltAgent (full
 text in `.claude/agents/LICENSE-voltagent-subagents`). The rest are
 custom-authored for this project in the same style/frontmatter
 convention -- the roles this pipeline needed (e.g. `stripe-checkout`,
-`human-takeover`) don't have upstream analogs in that collection. See
+`autonomy-guardrails`) don't have upstream analogs in that collection. See
 `.claude/agents/README.md` for the full per-file provenance breakdown.
 
 ## Domain warm-up
@@ -246,10 +256,11 @@ keeps running and doesn't need to be re-invoked. Two ways to keep the
   few minutes by cron -- it starts `main.py` in the background only if
   it isn't already running (PID-file guarded), acting as a crash-recovery
   net rather than a scheduled re-run. **Limitation:** `main.py` started
-  this way has no attached terminal, so the human-in-the-loop console
-  commands (`takeover`, `payment ready`, `transfer`) aren't usable against
-  it -- attach a real terminal session (tmux/screen) when you need to run
-  one of those.
+  this way has no attached terminal, so the optional console commands
+  (`transfer`, `status`, `pause`/`resume`) aren't usable against it --
+  attach a real terminal session (tmux/screen) when you need one. The
+  sell/negotiate/close/handover flow itself is fully automated and needs
+  no terminal.
 
 ## Deployment
 
@@ -259,8 +270,8 @@ The simplest way to run this pipeline continuously is a small VPS
 (Hetzner CX22, DigitalOcean's cheapest droplet, etc. -- this pipeline is
 lightweight; the smallest tier is plenty) kept alive with `tmux` or
 `screen`, which lets you disconnect your SSH session while `main.py` keeps
-running *and* stay able to reconnect and type operator commands
-(`takeover`, `payment ready`, `transfer`) later.
+running *and* stay able to reconnect and type the optional operator
+commands (`transfer`, `status`, `pause`/`resume`) later.
 
 ```bash
 # On the VPS, after cloning the repo and completing Setup above:
@@ -272,7 +283,7 @@ source ../venv/bin/activate
 python main.py
 # Ctrl-B then D to detach -- main.py keeps running.
 
-# Reconnect later (e.g. to type "takeover 12" when a lead replies):
+# Reconnect later (e.g. to check "status" or run a manual "transfer"):
 tmux attach -t pipeline
 ```
 
@@ -309,6 +320,8 @@ Then:
    add an endpoint pointing at `https://abcd1234.ngrok-free.app/webhook/stripe`
    listening for `checkout.session.completed`, and copy its signing
    secret into `STRIPE_WEBHOOK_SECRET` in `.env`.
+   Shortcut: `start_public.bat` in the repo root launches `webhook_server.py`
+   and the ngrok tunnel on the account's free static dev domain in two windows.
 3. ngrok's free tier issues a new random URL every time it restarts --
    update both places above whenever that happens. A paid ngrok plan (or
    moving to a real domain once you're past development) gives you a
