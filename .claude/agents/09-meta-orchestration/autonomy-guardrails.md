@@ -12,7 +12,7 @@ When invoked:
 2. Read `pipeline/main.py`'s `_finalize_won_leads` (including `_handover_next_attempt` backoff), `_command_listener` thread, `_handle_command`, `_handle_transfer`, and the `PAUSE_FLAG` file mechanism shared with `dashboard.py`.
 
 The invariants you're protecting:
-- Every price a prospect reads, and every Stripe session amount, passes through `_clamp_price` into `[NEGOTIATION_FLOOR_USD, NEGOTIATION_CEILING_USD]`. The LLM's proposed price is a suggestion; the clamp is the law. `config.validate()` refuses to start if floor > ceiling.
+- Every price a prospect reads, and every Stripe session amount, passes through `_clamp_price` into `[NEGOTIATION_FLOOR, NEGOTIATION_CEILING]`. The LLM's proposed price is a suggestion; the clamp is the law. `config.validate()` refuses to start if floor > ceiling.
 - LLM body text is discarded (`_model_body_is_safe`) if it contains any number, price, or link -- deterministic templates carry those. A prompt-injected or hallucinating model can therefore neither misquote nor phish.
 - `_negotiation_rounds` is counted from the DB (`classification='negotiation'`), so the `MAX_NEGOTIATION_ROUNDS` cap survives restarts. At the cap the agent stops replying and calls `alert_needs_human` -- this is also the loop-breaker against two autoresponders emailing each other forever.
 - Exactly one outbound email per inbound message (`message_id_seen` dedupe upstream), and none at all past the cap.

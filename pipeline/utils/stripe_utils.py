@@ -3,8 +3,13 @@
 Checkout sessions are created automatically by the autonomous negotiation
 agent (agents/sales_agent.py) when it closes a deal. The amount is always
 clamped in code to the configured negotiation band
-[config.NEGOTIATION_FLOOR_USD, config.NEGOTIATION_CEILING_USD] before a
-session is created -- LLM output never reaches this module unclamped.
+[config.NEGOTIATION_FLOOR, config.NEGOTIATION_CEILING] before a session is
+created -- LLM output never reaches this module unclamped.
+
+The currency is config.CURRENCY (default GBP), the same value the email copy
+renders its prices with, so the amount charged always matches the amount the
+prospect agreed to. config.validate() restricts CURRENCY to two-decimal
+currencies because the amount below is computed as `price * 100`.
 """
 from __future__ import annotations
 
@@ -21,11 +26,12 @@ def create_checkout_session(
     lead_id: int,
     business_name: str,
     customer_email: str,
-    amount_usd: Optional[int] = None,
+    amount: Optional[int] = None,
 ) -> str:
     """Create a Stripe Checkout Session for the fixed website price and
-    return its hosted checkout URL. Amount defaults to config.WEBSITE_PRICE_USD."""
-    amount_cents = (amount_usd if amount_usd is not None else config.WEBSITE_PRICE_USD) * 100
+    return its hosted checkout URL. Amount is in config.CURRENCY units and
+    defaults to config.WEBSITE_PRICE."""
+    amount_minor = (amount if amount is not None else config.WEBSITE_PRICE) * 100
     session = stripe.checkout.Session.create(
         mode="payment",
         payment_method_types=["card"],
@@ -33,8 +39,8 @@ def create_checkout_session(
         line_items=[
             {
                 "price_data": {
-                    "currency": "usd",
-                    "unit_amount": amount_cents,
+                    "currency": config.CURRENCY,
+                    "unit_amount": amount_minor,
                     "product_data": {
                         "name": f"Custom website design -- {business_name}",
                         "description": "One-time payment for a completed, custom-built business website.",

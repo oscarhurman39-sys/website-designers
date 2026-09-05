@@ -302,8 +302,9 @@ def main() -> None:
     config.validate()
     db.init_db()
     print(f"[main] Pipeline starting. DB: {config.DB_PATH}")
-    print(f"[main] Autonomous negotiation band: {config.NEGOTIATION_FLOOR_USD}"
-          f"-{config.NEGOTIATION_CEILING_USD} (max {config.MAX_NEGOTIATION_ROUNDS} auto-replies/lead)")
+    print(f"[main] Autonomous negotiation band: {config.CURRENCY_SYMBOL}{config.NEGOTIATION_FLOOR:,}"
+          f"-{config.CURRENCY_SYMBOL}{config.NEGOTIATION_CEILING:,} ({config.CURRENCY.upper()}, "
+          f"max {config.MAX_NEGOTIATION_ROUNDS} auto-replies/lead)")
     print("[main] Type 'help' for the operator command list.")
 
     # One-time bridge: pick up leads left in the legacy 'replied' status by the
