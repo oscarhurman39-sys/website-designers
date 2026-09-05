@@ -207,6 +207,22 @@ SOURCING_ENABLED: bool = _env_bool("SOURCING_ENABLED", False)
 # Businesses with no website are useless to this pipeline (LeadAgent can't
 # find an email to send to), so they're filtered out unless this is false.
 SOURCING_REQUIRE_WEBSITE: bool = _env_bool("SOURCING_REQUIRE_WEBSITE", True)
+
+# Home-patch exclusion: skip businesses within this many miles of the point
+# below (lat,lng). Default is Oxted, Surrey -- close enough to home that a
+# cold email to someone you know is embarrassing. Blank centre or 0 = off.
+def _parse_latlng(raw: str):
+    parts = [p.strip() for p in (raw or "").split(",")]
+    if len(parts) != 2:
+        return None
+    try:
+        return (float(parts[0]), float(parts[1]))
+    except ValueError:
+        return None
+
+
+SOURCING_EXCLUDE_CENTER = _parse_latlng(os.getenv("SOURCING_EXCLUDE_CENTER", "51.2572,0.0040"))
+SOURCING_EXCLUDE_RADIUS_MILES: float = float(os.getenv("SOURCING_EXCLUDE_RADIUS_MILES", "6") or 6)
 SOURCING_DAILY_LIMIT: int = int(os.getenv("SOURCING_DAILY_LIMIT", "30") or 30)
 # Comma-separated; each entry must match a template folder under templates/.
 SOURCING_NICHES: list[str] = [

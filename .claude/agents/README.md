@@ -10,6 +10,7 @@ but **only one file here is actually from that upstream repo**:
 | `01-core-development/backend-developer.md` | Verbatim from VoltAgent/awesome-claude-code-subagents, MIT License, Copyright (c) 2025 VoltAgent. See `LICENSE-voltagent-subagents` in this directory. |
 | `02-email-outreach/cold-email-drafter.md` | Custom-authored for this project. |
 | `02-email-outreach/email-compliance.md` | Custom-authored for this project. |
+| `02-email-outreach/client-assets.md` | Custom-authored for this project (prospect photos/logo: offer, inbound attachments, in-place rebuild). |
 | `03-infrastructure/github-manager.md` | Custom-authored for this project. |
 | `03-infrastructure/vercel-deployer.md` | Custom-authored for this project. |
 | `04-quality-security/stripe-checkout.md` | Custom-authored for this project. |

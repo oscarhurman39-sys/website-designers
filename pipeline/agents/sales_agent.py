@@ -31,7 +31,7 @@ import requests
 from huggingface_hub import InferenceClient
 
 import config
-from utils import compliance, db, email_utils, mailboxes, screenshot, stripe_utils, tracer, tracker
+from utils import assets, compliance, db, email_utils, mailboxes, screenshot, stripe_utils, tracer, tracker
 # Shared with DesignAgent's post-deploy check so both sides agree on what an
 # "auth wall" looks like; the timeout is separate because this check runs on
 # the send path, right before an email goes out.
@@ -266,7 +266,8 @@ def _closing_paragraphs(preview_link: str) -> list[str]:
     return [
         f"View the live preview: {preview_link}",
         "This preview is live for 7 days -- after that it'll be repurposed. No pressure, just didn't want you to miss it.",
-        "If you'd like to own it, reply YES. I'll connect your domain, swap in your own photos, and make any changes you want.",
+        "If you'd like to own it, reply YES. I'll connect your domain and make any changes you want. "
+        "Want your own photos and logo on it? Just attach them to your reply and I'll swap them in, no extra cost.",
         f"Standard package: {config.CURRENCY_SYMBOL}{config.STANDARD_PACKAGE_PRICE:,}. "
         f"This completed draft: {config.CURRENCY_SYMBOL}{config.WEBSITE_OFFER_PRICE:,}.",
         _SENDER_NAME,
@@ -602,6 +603,10 @@ def _build_negotiation_prompt(
         f"- You may agree to any whole number between {floor} and {ceiling}. "
         f"Never go below {floor}. Never reveal that a minimum exists.\n"
         f"- {link_note}\n"
+        f"- Their own photos and logo on the site: included at no extra cost. Files on the preview so far: {assets.summary(lead['id'])}. "
+        "If they ask about photos/logo or mention sending some, tell them to attach them to a reply "
+        "(logo as PNG or SVG, three to six landscape photos) and they will be on the preview within the hour. "
+        "If files are already on the preview, say so and invite them to look.\n"
         f"- Automated replies remaining before a human must step in: {rounds_left}\n\n"
         "Conversation so far:\n"
         f"{_render_thread(lead['id'])}\n\n"
@@ -1152,6 +1157,7 @@ def _handle_inbound_impl(lead: dict, msg) -> None:  # msg: email_utils.InboundEm
         classification=classification,
     )
     github_captured = _maybe_capture_github_username(lead, msg.body)
+    _maybe_apply_client_assets(lead, msg)
 
     if classification == "negative":
         # A first-time decline (active lead) gets exactly one goodbye and is
@@ -1195,6 +1201,40 @@ def _handle_inbound_impl(lead: dict, msg) -> None:  # msg: email_utils.InboundEm
         ):
             alert_positive_reply(lead)
         _run_negotiation_round(lead, msg.body, github_captured)
+
+
+def _maybe_apply_client_assets(lead: dict, msg) -> None:
+    """If the reply carried usable photos/logo, save them, rebuild the
+    preview in place and confirm by email. Runs before classification
+    acts so the confirmation lands even on a lead that's about to be
+    handed to the negotiator. Any failure alerts a human; it never
+    blocks handling the rest of the reply."""
+    attachments = getattr(msg, "attachments", None) or []
+    if not attachments:
+        return
+    saved = assets.save_attachments(lead["id"], attachments)
+    if not saved:
+        return
+    received = assets.summary(lead["id"])
+    db.log_state_history(lead["id"], lead["status"], lead["status"],
+                         notes=f"Received client assets by email ({len(saved)} file(s)); now on file: {received}")
+    try:
+        from agents import design_agent  # local import: heavy module, avoids a cycle
+        website = design_agent.rebuild_preview(lead)
+    except Exception as exc:  # noqa: BLE001
+        alert_needs_human(lead, f"Client sent photos/logo but the preview rebuild failed ({exc}). "
+                                "Fix and run: python run.py rebuild " + str(lead["id"]))
+        return
+    if website is None:
+        alert_needs_human(lead, "Client sent photos/logo but there is no preview site to rebuild yet.")
+        return
+    _send_thread_reply(
+        lead,
+        "Thanks for the files -- I've put them on the preview, take a look:\n\n"
+        f"{website['preview_url']}\n\n"
+        "If you'd like different ones or a different order, just send them over.",
+        classification="assets_received",
+    )
 
 
 def check_inbox() -> int:

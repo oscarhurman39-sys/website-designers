@@ -4,6 +4,8 @@ from __future__ import annotations
 import time
 from typing import Optional
 
+import base64
+
 import requests
 
 import config
@@ -38,11 +40,19 @@ def _sanitize_project_name(name: str) -> str:
 
 
 @_vercel_retry
-def deploy_files(project_name: str, files: dict[str, str]) -> dict:
+def _file_entry(path: str, content) -> dict:
+    """Vercel's inline-files API takes text as-is and binaries base64
+    encoded with an explicit `encoding` flag (client photos/logos)."""
+    if isinstance(content, (bytes, bytearray)):
+        return {"file": path, "data": base64.b64encode(bytes(content)).decode("ascii"), "encoding": "base64"}
+    return {"file": path, "data": content}
+
+
+def deploy_files(project_name: str, files: dict) -> dict:
     project_name = _sanitize_project_name(project_name)
     payload = {
         "name": project_name,
-        "files": [{"file": path, "data": content} for path, content in files.items()],
+        "files": [_file_entry(path, content) for path, content in files.items()],
         "projectSettings": {"framework": None},
         "target": "production",
     }

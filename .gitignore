@@ -240,3 +240,6 @@ pipeline/screenshots/
 
 # local template renders (pipeline/render_preview.py)
 pipeline/out/
+
+# client photos/logos received by email (utils/assets.py)
+pipeline/assets/

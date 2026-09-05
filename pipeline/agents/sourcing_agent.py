@@ -16,6 +16,7 @@ returns the number of leads it actually managed to insert.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,6 +43,7 @@ PLACES_FIELD_MASK = ",".join(
         "places.types",
         "places.rating",
         "places.userRatingCount",
+        "places.location",
         "nextPageToken",
     ]
 )
@@ -82,6 +84,8 @@ class Candidate:
     address: str
     rating: Optional[float]
     review_count: int
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
     def summary(self) -> str:
         """Short JSON blob stored in leads.notes (not scraped_info, which
@@ -174,6 +178,28 @@ def _iter_places(text_query: str) -> Iterator[dict[str, Any]]:
             return
 
 
+def _miles_between(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in miles (haversine)."""
+    r = 3958.8
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))
+
+
+def _within_exclusion_zone(candidate: "Candidate") -> bool:
+    """True if the business sits inside SOURCING_EXCLUDE_RADIUS_MILES of
+    SOURCING_EXCLUDE_CENTER (your home patch, where you'd rather not cold
+    email people you might bump into). A candidate with no coordinates is
+    NOT excluded -- the search location itself is already far enough away."""
+    if not config.SOURCING_EXCLUDE_CENTER or config.SOURCING_EXCLUDE_RADIUS_MILES <= 0:
+        return False
+    if candidate.latitude is None or candidate.longitude is None:
+        return False
+    lat, lon = config.SOURCING_EXCLUDE_CENTER
+    return _miles_between(lat, lon, candidate.latitude, candidate.longitude) < config.SOURCING_EXCLUDE_RADIUS_MILES
+
+
 def _to_candidate(place: dict[str, Any], niche: str, location: str) -> Candidate:
     return Candidate(
         business_name=place["displayName"]["text"].strip(),
@@ -185,6 +211,8 @@ def _to_candidate(place: dict[str, Any], niche: str, location: str) -> Candidate
         address=place.get("formattedAddress") or "",
         rating=place.get("rating"),
         review_count=int(place.get("userRatingCount") or 0),
+        latitude=(place.get("location") or {}).get("latitude"),
+        longitude=(place.get("location") or {}).get("longitude"),
     )
 
 
@@ -226,6 +254,10 @@ def iter_candidates(limit: Optional[int] = None) -> Iterator[Candidate]:
                         continue
                     seen_place_ids.add(place["id"])
                     candidate = _to_candidate(place, niche, location)
+                    if _within_exclusion_zone(candidate):
+                        key = f"within {config.SOURCING_EXCLUDE_RADIUS_MILES:g} miles of home"
+                        skipped[key] = skipped.get(key, 0) + 1
+                        continue
                     if _already_in_db(candidate):
                         skipped["already in DB"] = skipped.get("already in DB", 0) + 1
                         continue

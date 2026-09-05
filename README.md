@@ -51,7 +51,7 @@ website-designers/
 │   └── requirements.txt
 ├── templates/                   # one subfolder per niche (index.html + style.css)
 ├── dashboard.py                 # Streamlit monitoring UI
-├── run.py                       # entrypoint: quick-test / loop / dashboard / test-email / cleanup-tests / source
+├── run.py                       # entrypoint: quick-test / loop / dashboard / test-email / cleanup-tests / source / rebuild
 ├── test_lead.csv                # 3 sample leads for a first test run
 ├── .claude/agents/               # Claude Code subagent personas (see below)
 ├── .env.example
@@ -104,6 +104,11 @@ leads) and capped at `SOURCING_DAILY_LIMIT` per day. Listings whose
 checkatrade.com / google.com profile are skipped: there's no site to
 improve and no email to scrape.
 
+
+Businesses within `SOURCING_EXCLUDE_RADIUS_MILES` (default 6) of
+`SOURCING_EXCLUDE_CENTER` (default Oxted) are skipped, so nobody on your
+own doorstep gets a cold email while the pitch is still being refined; the
+default `SOURCING_LOCATIONS` are all further out than that.
 ```bash
 python run.py source --dry-run      # print what would be inserted, write nothing
 python run.py source --limit 10     # insert up to 10 leads now
@@ -199,6 +204,15 @@ Check a change by eye without deploying anything:
 python pipeline/render_preview.py            # all niches, sample data -> pipeline/out/*.png
 python pipeline/render_preview.py --lead 81  # a real lead from the DB
 ```
+
+**Client photos and logo.** Every cold email offers to swap in the prospect's
+own photos and logo at no extra cost. Images attached to any reply are saved
+to `pipeline/assets/<lead_id>/` (normalised: logo as PNG/SVG, photos to
+1600 px JPEG, up to six), the preview is rebuilt in place at the same URL
+with the logo in the nav and their photos in the hero and gallery, and a
+confirmation reply goes out. Files that arrive another way go in the same
+folder, then `python run.py rebuild <lead_id>`. How to handle the
+conversation itself is in [`docs/PHOTOS_AND_LOGO_PLAYBOOK.md`](docs/PHOTOS_AND_LOGO_PLAYBOOK.md).
 
 The older per-niche folders (`cafe`, `default`, `dentist`, ...) are kept and
 used when `DESIGN_TEMPLATE_STYLE=legacy`; they are text-only and the

@@ -15,7 +15,7 @@ import requests
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 import config
-from utils import db, github_api, screenshot, tracer, tracker, vercel_api
+from utils import assets, db, github_api, screenshot, tracer, tracker, vercel_api
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 TEMPLATE_FILES = ("index.html", "style.css")
@@ -368,6 +368,13 @@ def build_context(lead: dict) -> dict:
     address = facts["address"] or None
     rating = google_rating_badge(lead)
     name = lead["business_name"]
+    # Client-supplied images (utils/assets.py) beat stock photos wherever
+    # they exist: their own shopfront in the hero is what sells the site.
+    logo_path = assets.logo(lead["id"])
+    own_photos = [f"assets/{p.name}" for p in assets.photos(lead["id"])]
+    stock_gallery = [_unsplash(pid, 900, 700) for pid in theme.get("gallery", [])]
+    hero_image = own_photos[0] if own_photos else get_hero_image_url(niche)
+    gallery = (own_photos[1:3] + stock_gallery)[:2] if own_photos else stock_gallery
     return {
         # --- modern template ---------------------------------------------
         "business_name": name,
@@ -386,8 +393,10 @@ def build_context(lead: dict) -> dict:
         "google_reviews_count": facts["reviews"] if rating else None,
         "google_reviews_url": f"https://www.google.com/maps/search/{quote_plus(name + ' ' + city)}" if rating else None,
         "hero_tagline": hero_tagline(lead),
-        "hero_image_url": get_hero_image_url(niche),
-        "gallery_images": [_unsplash(pid, 900, 700) for pid in theme.get("gallery", [])],
+        "hero_image_url": hero_image,
+        "gallery_images": gallery,
+        "logo_url": f"assets/{logo_path.name}" if logo_path else None,
+        "own_photos": own_photos,
         "about": theme["about"].format(name=name, city=city),
         "service_items": [{"name": n, "blurb": b} for n, b in theme["services"]],
         "services_heading": theme.get("services_heading", "What we do"),
@@ -450,6 +459,37 @@ def render_template_files(niche: str, context: dict) -> dict[str, str]:
         template = env.get_template(filename)
         rendered[filename] = template.render(**context)
     return rendered
+
+
+def build_site_files(lead: dict) -> dict:
+    """Rendered template files plus any client assets, as one dict ready
+    for github_api.push_files / vercel_api.deploy_files (text and bytes)."""
+    files: dict = render_template_files(lead["niche"], build_context(lead))
+    files.update(assets.site_files(lead["id"]))
+    return files
+
+
+def rebuild_preview(lead: dict) -> Optional[dict]:
+    """Re-render and redeploy an EXISTING preview in place (same repo, same
+    Vercel project, same URL) -- used after a prospect sends photos/logo or
+    the template changes. Never touches lead status: a 'negotiating' lead
+    stays negotiating. Returns the refreshed website row, or None if the
+    lead has no website yet (use process_lead for a first build)."""
+    website = db.get_website_by_lead(lead["id"])
+    if website is None or not website.get("repo_full_name"):
+        return None
+    files = build_site_files(lead)
+    project_raw_name = github_api.make_repo_name(lead["business_name"], lead["id"])
+    github_api.push_files(github_api.get_repo(website["repo_full_name"]), files, commit_message="Rebuild preview")
+    deployment = vercel_api.deploy_files(project_raw_name, files)
+    preview_url = _validate_deployment_url(deployment)
+    screenshot.invalidate(lead["id"])
+    screenshot_url, screenshot_path = _capture_and_publish_screenshot(lead["id"], preview_url)
+    if screenshot_url:
+        db.update_website_screenshot_url(lead["id"], screenshot_url)
+    db.log_state_history(lead["id"], lead["status"], lead["status"],
+                         notes=f"Preview rebuilt with client assets ({assets.summary(lead['id'])}): {preview_url}")
+    return db.get_website_by_lead(lead["id"])
 
 
 def _capture_and_publish_screenshot(lead_id: int, preview_url: str) -> tuple[str, str]:
@@ -533,8 +573,7 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
         )
         return None
 
-    context = build_context(lead)
-    files = render_template_files(niche, context)
+    files = build_site_files(lead)
 
     _repo, repo_url, repo_full_name = github_api.create_repo_with_files(
         lead["business_name"], lead["id"], files

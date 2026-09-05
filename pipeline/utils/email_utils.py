@@ -19,7 +19,7 @@ import logging
 import re
 import smtplib
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from email.header import decode_header
 from email.mime.image import MIMEImage
@@ -72,6 +72,9 @@ class InboundEmail:
     # is what sales_agent.py pins the lead to. Defaults to "" so anything
     # constructing InboundEmail by hand (tests) keeps working.
     account_user: str = ""
+    # Image attachments (photos / logo a prospect sent back). Parsed here
+    # so sales_agent can hand them straight to utils/assets.py.
+    attachments: list = field(default_factory=list)
 
 
 def _validate_email(email_addr: str) -> bool:
@@ -372,6 +375,35 @@ def _decode(value: Optional[str]) -> str:
     return decoded
 
 
+_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+_MAX_ATTACHMENTS = 15
+
+
+def _extract_attachments(msg: email.message.Message) -> list:
+    """Image parts of a message (attached or inline-with-filename), as
+    utils.assets.Attachment. Bounded so a stray 40-photo reply can't eat
+    the poll; anything non-image is ignored here."""
+    from utils.assets import Attachment  # local import: keep email_utils light
+
+    found = []
+    if not msg.is_multipart():
+        return found
+    total = 0
+    for part in msg.walk():
+        ctype = part.get_content_type()
+        if not ctype.startswith("image/"):
+            continue
+        filename = part.get_filename() or ""
+        payload = part.get_payload(decode=True) or b""
+        if not payload or total + len(payload) > _MAX_ATTACHMENT_BYTES:
+            continue
+        total += len(payload)
+        found.append(Attachment(filename=_decode(filename), content_type=ctype, data=payload))
+        if len(found) >= _MAX_ATTACHMENTS:
+            break
+    return found
+
+
 def _extract_body(msg: email.message.Message) -> tuple[str, str]:
     """Return (plain_text_body, content_type_summary)."""
     if msg.is_multipart():
@@ -448,6 +480,7 @@ def _fetch_unseen_for_account(account: config.EmailAccount) -> list[InboundEmail
                     content_type=content_type,
                     date=_decode(msg.get("Date")) or datetime.utcnow().isoformat(),
                     account_user=account.user,
+                    attachments=_extract_attachments(msg),
                 )
             )
     return results

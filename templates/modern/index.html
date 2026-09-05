@@ -34,7 +34,7 @@
   <header class="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-slate-200">
     <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
       <a href="#top" class="flex items-center gap-2 text-lg font-extrabold tracking-tight text-slate-900">
-        <span class="text-[var(--accent)]">{{ icon }}</span> {{ business_name }}
+        {% if logo_url %}<img src="{{ logo_url }}" alt="{{ business_name }}" class="h-10 w-auto max-w-[200px] object-contain">{% else %}<span class="text-[var(--accent)]">{{ icon }}</span> {{ business_name }}{% endif %}
       </a>
       <nav class="hidden md:flex gap-7 text-sm font-medium text-slate-600">
         {% for label, anchor in nav_links %}

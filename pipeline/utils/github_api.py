@@ -69,8 +69,10 @@ def create_repo(repo_name: str, private: bool = True, description: str = "") -> 
         raise
 
 
-def push_files(repo: Repository, files: dict[str, str], commit_message: str = "Initial preview site") -> None:
-    """Create each file in `files` (path -> text content) in a single-ish batch.
+def push_files(repo: Repository, files: dict, commit_message: str = "Initial preview site") -> None:
+    """Create each file in `files` (path -> str or bytes content) in a single-ish
+    batch. PyGithub base64-encodes bytes itself, so client photos/logos
+    (utils/assets.py) go through the same call as index.html.
 
     PyGithub's Contents API creates one commit per file (there is no native
     multi-file commit helper), which is fine for a handful of small template
@@ -95,6 +97,11 @@ def push_files(repo: Repository, files: dict[str, str], commit_message: str = "I
                 )
             else:
                 raise
+
+
+def get_repo(repo_full_name: str) -> Repository:
+    """An existing preview repo, for a rebuild (design_agent.rebuild_preview)."""
+    return _get_client().get_repo(repo_full_name)
 
 
 def create_repo_with_files(

@@ -149,6 +149,13 @@ def _capture_sync(preview_url: str, out_path: Path) -> None:
             browser.close()
 
 
+def invalidate(lead_id: int) -> None:
+    """Drop the cached screenshot so the next capture reflects a rebuild."""
+    path = screenshot_path(lead_id)
+    if path.exists():
+        path.unlink()
+
+
 def get_cached_screenshot(lead_id: int) -> Optional[Path]:
     """Return the screenshot path for `lead_id` if one has already been
     captured, else None. Never triggers a new capture -- used by
