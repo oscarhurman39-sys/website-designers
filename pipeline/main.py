@@ -9,6 +9,8 @@ Each iteration:
   3. Runs DesignAgent on 'researched' leads.
   4. Sends at most one rate-limited cold email via SalesAgent on a 'designed' lead.
   5. Polls the inbox and classifies replies via SalesAgent.
+  6. At most once an hour, tears down preview sites past PREVIEW_TTL_DAYS
+     whose lead never replied (utils/teardown.py).
 Then sleeps MAIN_LOOP_SLEEP_SECONDS and repeats, until Ctrl-C.
 
 A second thread reads operator commands from stdin so human-in-the-loop
@@ -28,10 +30,11 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 import config
 from agents import design_agent, lead_agent, sales_agent
-from utils import db, github_api, stripe_utils, vercel_api
+from utils import db, github_api, stripe_utils, teardown, vercel_api
 
 PIPELINE_DIR = Path(__file__).resolve().parent
 LEADS_INBOX = PIPELINE_DIR / "leads_inbox"
@@ -39,6 +42,14 @@ LEADS_PROCESSED = PIPELINE_DIR / "leads_processed"
 PAUSE_FLAG = PIPELINE_DIR / ".paused"  # dashboard.py toggles this file to pause/resume
 
 _shutdown_event = threading.Event()
+
+# Preview teardown only needs to run hourly -- the cycle is every ~60s and
+# the TTL is measured in days, so running it every cycle would just hammer
+# the Vercel/GitHub APIs (and their rate limits) for no gain. Optional so
+# the very first cycle after startup always runs it (time.monotonic() can
+# legitimately be < 1h right after boot).
+_TEARDOWN_INTERVAL_SECONDS = 3600
+_last_teardown_at: Optional[float] = None
 
 
 def _is_paused() -> bool:
@@ -80,6 +91,28 @@ def _run_cycle() -> None:
     replies = sales_agent.check_inbox()
     if replies:
         print(f"[main] Processed {replies} inbound reply(ies)")
+
+    _maybe_expire_previews()
+
+
+def _maybe_expire_previews() -> None:
+    """Run the preview teardown pass, but at most once per hour. The
+    timestamp is taken before the run (not after a success) so a failing
+    pass doesn't get retried every 60s either."""
+    global _last_teardown_at
+    if not config.PREVIEW_TEARDOWN_ENABLED:
+        return
+    now = time.monotonic()
+    if _last_teardown_at is not None and now - _last_teardown_at < _TEARDOWN_INTERVAL_SECONDS:
+        return
+    _last_teardown_at = now
+    try:
+        removed = teardown.expire_previews()
+    except Exception as exc:  # noqa: BLE001 - housekeeping must never kill the cycle
+        print(f"[main] Preview teardown failed: {exc}")
+        return
+    if removed:
+        print(f"[main] Tore down {removed} expired preview(s)")
 
 
 def _print_status() -> None:

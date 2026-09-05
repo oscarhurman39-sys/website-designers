@@ -100,9 +100,16 @@ def get_authenticated_username() -> str:
 
 
 def delete_repo(repo_full_name: str) -> None:
-    """Permanently delete a repo. Destructive and irreversible -- used only
-    by the opt-in integration test (tests/test_pipeline_real.py) to clean
-    up the throwaway repo it creates, never by the normal pipeline flow."""
+    """Permanently delete a repo. Destructive and irreversible -- used by
+    utils/teardown.py (expired previews), cleanup_tests.py (throwaway test
+    leads) and the opt-in integration test; never by the normal lead flow.
+    A missing repo (404) is treated as success so retries and re-runs are
+    idempotent, matching vercel_api.delete_project."""
     client = _get_client()
-    repo = client.get_repo(repo_full_name)
-    repo.delete()
+    try:
+        repo = client.get_repo(repo_full_name)
+        repo.delete()
+    except GithubException as exc:
+        if exc.status == 404:
+            return
+        raise

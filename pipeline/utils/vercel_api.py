@@ -156,10 +156,11 @@ def invite_collaborator(project_name: str, email: str, project_role: str = "ADMI
 
 def delete_project(project_name: str) -> None:
     """Permanently delete a Vercel project (and its deployments). Destructive
-    and irreversible -- used only by the opt-in integration test
-    (tests/test_pipeline_real.py) to clean up the throwaway project it
-    creates, never by the normal pipeline flow. A 404 (already gone) is
-    treated as success, not an error, since cleanup should be idempotent.
+    and irreversible -- used by utils/teardown.py (expired previews),
+    cleanup_tests.py (throwaway test leads) and the opt-in integration test
+    (tests/test_pipeline_real.py), never by the normal lead flow. A 404
+    (already gone) is treated as success, not an error, since cleanup
+    should be idempotent.
 
     Applies the same `_sanitize_project_name` as `deploy_files`, so callers
     can pass the same raw name they'd pass to `deploy_files` (e.g.

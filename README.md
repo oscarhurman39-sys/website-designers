@@ -33,14 +33,16 @@ website-designers/
 │   │   ├── stripe_utils.py    # checkout sessions, webhook verification
 │   │   ├── compliance.py      # unsubscribe tokens, CAN-SPAM footer
 │   │   ├── tracker.py         # click-tracking links
-│   │   └── tracer.py          # trace/agent/tool span logging (VoltAgent + local)
+│   │   ├── tracer.py          # trace/agent/tool span logging (VoltAgent + local)
+│   │   └── teardown.py        # expire previews past PREVIEW_TTL_DAYS
 │   ├── config.py               # env loading & validation
 │   ├── main.py                 # orchestrator loop + operator console
+│   ├── cleanup_tests.py        # delete throwaway test leads + their repos/projects
 │   ├── webhook_server.py       # Flask: /click, /unsubscribe, /webhook/stripe
 │   └── requirements.txt
 ├── templates/                   # one subfolder per niche (index.html + style.css)
 ├── dashboard.py                 # Streamlit monitoring UI
-├── run.py                       # entrypoint: quick-test / loop / dashboard
+├── run.py                       # entrypoint: quick-test / loop / dashboard / test-email / cleanup-tests
 ├── test_lead.csv                # 3 sample leads for a first test run
 ├── .claude/agents/               # Claude Code subagent personas (see below)
 ├── .env.example
@@ -107,6 +109,21 @@ While `main.py` is running, type commands at its console:
 | `pause` / `resume` | Pause/resume the automated loop |
 | `help` | List commands |
 | `quit` | Shut down |
+
+**Preview expiry.** The cold email promises the preview is "live for 7
+days". `main.py` makes that true: at most once an hour it deletes the
+Vercel project and GitHub repo of any preview older than
+`PREVIEW_TTL_DAYS` (default 7) whose lead is `emailed` with no reply,
+`lost`, `bounced` or `unsubscribed`. Leads in `replied` / `negotiating` /
+`payment_sent` / `won` (and not-yet-emailed `designed` leads) are never
+touched, and the lead's status doesn't change -- only
+`websites.torn_down_at` is set and a state-history note is added. Set
+`PREVIEW_TEARDOWN_ENABLED=false` to turn it off, or run it by hand:
+
+```bash
+python pipeline/utils/teardown.py --dry-run   # list what would be removed
+python pipeline/utils/teardown.py             # remove it
+```
 
 **Start the webhook server** (needed for click tracking, one-click
 unsubscribe, and Stripe payment webhooks -- must be publicly reachable at
@@ -230,6 +247,16 @@ If `.env.test` doesn't exist, `tests/conftest.py` falls back to your real
 to throwaway `pipeline/leads.test.db` / `traces.test.json` regardless of
 what `.env` specifies, so even a fallback run can't write into your real
 `leads.db`. Create `.env.test` if you want explicit control instead.
+
+**Cleaning up after manual test runs.** `python run.py test-email ...`
+and `quick-test` create real leads ("Test Business" / "Acme Cafe", or
+anything emailed to `ADMIN_EMAIL`) plus a real GitHub repo and Vercel
+project each, and nothing removes them. To clear them all out:
+
+```bash
+python run.py cleanup-tests --dry-run   # list the test leads that would go
+python run.py cleanup-tests             # delete their repos, projects and DB rows
+```
 
 ## Scheduler / keeping it running
 

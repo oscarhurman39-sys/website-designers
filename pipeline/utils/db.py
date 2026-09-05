@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS websites (
     screenshot_url      TEXT,
     screenshot_path     TEXT,
     transferred         INTEGER NOT NULL DEFAULT 0,
+    torn_down_at        TEXT,
     created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -113,6 +114,7 @@ def init_db(db_path: Optional[str] = None) -> None:
         conn.executescript(_SCHEMA)
         _migrate_add_column(conn, "websites", "screenshot_url", "TEXT")
         _migrate_add_column(conn, "websites", "screenshot_path", "TEXT")
+        _migrate_add_column(conn, "websites", "torn_down_at", "TEXT")
         conn.commit()
 
 
@@ -345,6 +347,95 @@ def get_website_by_lead(lead_id: int) -> Optional[dict[str, Any]]:
 def mark_website_transferred(lead_id: int) -> None:
     with get_connection() as conn:
         conn.execute("UPDATE websites SET transferred = 1 WHERE lead_id = ?", (lead_id,))
+
+
+# Lead statuses whose preview may be torn down once it's past its TTL: the
+# cold email went out (or the lead ended) and nobody is talking to us. Every
+# other status is either pre-email ('new'/'researched'/'designed' -- the
+# 7-day promise hasn't started yet) or a live conversation / paying client
+# whose site must stay up.
+PREVIEW_EXPIRABLE_STATUSES = ("emailed", "lost", "bounced", "unsubscribed")
+
+
+def list_expired_previews(ttl_days: int) -> list[dict[str, Any]]:
+    """Websites whose preview has outlived its promised TTL and can be torn
+    down: not transferred to a client, not already torn down, created more
+    than `ttl_days` ago, and belonging to a lead in PREVIEW_EXPIRABLE_STATUSES.
+
+    The TTL is also measured against the lead's most recent outbound email,
+    not just the website row's created_at: a site can sit 'designed' for
+    days before the rate-limited sender gets to it, and the "live for 7
+    days" promise is made at send time, so a preview must never disappear
+    less than `ttl_days` after the email that advertised it.
+
+    Returns joined rows including the lead's business_name (needed to
+    rebuild the Vercel project name) and status (for the history note).
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=ttl_days)).strftime("%Y-%m-%d %H:%M:%S")
+    status_sql = ", ".join("?" for _ in PREVIEW_EXPIRABLE_STATUSES)
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"""SELECT w.id AS website_id, w.lead_id, w.repo_full_name, w.preview_url,
+                       w.vercel_project_id, w.created_at,
+                       l.business_name, l.status
+                FROM websites w
+                JOIN leads l ON l.id = w.lead_id
+                WHERE w.transferred = 0
+                  AND w.torn_down_at IS NULL
+                  AND w.created_at < ?
+                  AND l.status IN ({status_sql})
+                  AND NOT EXISTS (
+                      SELECT 1 FROM email_threads e
+                      WHERE e.lead_id = w.lead_id
+                        AND e.direction = 'outbound'
+                        AND e.timestamp >= ?
+                  )
+                ORDER BY w.created_at ASC""",
+            (cutoff, *PREVIEW_EXPIRABLE_STATUSES, cutoff),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def mark_website_torn_down(website_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE websites SET torn_down_at = datetime('now') WHERE id = ?", (website_id,)
+        )
+
+
+# --- Test-lead cleanup -----------------------------------------------------
+
+def find_test_leads(business_names: tuple[str, ...], contact_email: str = "") -> list[dict[str, Any]]:
+    """Leads created by manual test runs (test_email.py / quick_run.py):
+    matched by the throwaway business names those scripts use, or by the
+    operator's own contact email. An empty `contact_email` matches nothing
+    (rather than every lead with a blank email)."""
+    clauses = []
+    params: list[Any] = []
+    if business_names:
+        clauses.append(f"business_name IN ({', '.join('?' for _ in business_names)})")
+        params.extend(business_names)
+    if contact_email:
+        clauses.append("contact_email = ?")
+        params.append(contact_email)
+    if not clauses:
+        return []
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM leads WHERE {' OR '.join(clauses)} ORDER BY id ASC", params
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def delete_lead_cascade(lead_id: int) -> None:
+    """Hard-delete a lead and every row referencing it, children first so
+    the FK constraints (PRAGMA foreign_keys = ON) don't reject the delete.
+    Only for throwaway test leads -- real leads are never deleted, their
+    status just changes."""
+    with get_connection() as conn:
+        for table in ("websites", "email_threads", "clicks", "state_history"):
+            conn.execute(f"DELETE FROM {table} WHERE lead_id = ?", (lead_id,))
+        conn.execute("DELETE FROM leads WHERE id = ?", (lead_id,))
 
 
 # --- Clicks ------------------------------------------------------------------
