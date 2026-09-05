@@ -85,6 +85,46 @@ VOLTAGENT_SECRET_KEY: str = os.getenv("VOLTAGENT_SECRET_KEY", "")
 VOLTAGENT_BASE_URL: str = (os.getenv("VOLTAGENT_BASE_URL", "").strip() or "https://api.voltagent.dev").rstrip("/")
 TRACES_PATH: str = os.getenv("TRACES_PATH", "").strip() or str(Path(__file__).resolve().parent / "traces.json")
 
+# --- Lead sourcing via Google Places API (New) (optional) -------------------
+# Off by default: sourcing spends API quota and grows the lead list (and so
+# the outbound email volume) on its own, so it has to be an explicit opt-in.
+# See agents/sourcing_agent.py.
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in ("1", "true", "yes", "on")
+
+
+def _env_list(name: str, default: str, separator: str) -> list[str]:
+    raw = os.getenv(name, "").strip() or default
+    return [item.strip() for item in raw.split(separator) if item.strip()]
+
+
+GOOGLE_PLACES_API_KEY: str = os.getenv("GOOGLE_PLACES_API_KEY", "").strip()
+SOURCING_ENABLED: bool = _env_bool("SOURCING_ENABLED", False)
+# Businesses with no website are useless to this pipeline (LeadAgent can't
+# find an email to send to), so they're filtered out unless this is false.
+SOURCING_REQUIRE_WEBSITE: bool = _env_bool("SOURCING_REQUIRE_WEBSITE", True)
+SOURCING_DAILY_LIMIT: int = int(os.getenv("SOURCING_DAILY_LIMIT", "30") or 30)
+# Comma-separated; each entry must match a template folder under templates/.
+SOURCING_NICHES: list[str] = [
+    niche.lower()
+    for niche in _env_list("SOURCING_NICHES", "plumber,electrician,landscaper,cafe,salon,dentist,gym,restaurant", ",")
+]
+# Semicolon-separated, because a useful search location ("Oxted, Surrey")
+# contains a comma itself. Each is appended to the niche: "plumber in Oxted, Surrey".
+SOURCING_LOCATIONS: list[str] = _env_list(
+    "SOURCING_LOCATIONS",
+    "Oxted, Surrey; Caterham, Surrey; Reigate, Surrey; Croydon, London; Bromley, London",
+    ";",
+)
+# main.py runs sourcing at most this often (it's a quota-spending API call,
+# and new businesses don't appear on Google every 60-second cycle).
+SOURCING_INTERVAL_SECONDS: int = 3600
+
 # --- Rate limiting (cold email deliverability safeguards) ------------------
 EMAIL_MIN_DELAY_SECONDS: int = 120
 EMAIL_MAX_DELAY_SECONDS: int = 300
