@@ -153,7 +153,7 @@ def test_is_platform_host_ignores_real_websites(url):
     assert not sourcing_agent.is_platform_host(url)
 
 
-def test_platform_profile_websites_are_skipped(sourcing_env, monkeypatch):
+def test_platform_profile_websites_are_prioritised(sourcing_env, monkeypatch):
     _use_api(
         monkeypatch,
         {
@@ -166,8 +166,24 @@ def test_platform_profile_websites_are_skipped(sourcing_env, monkeypatch):
         },
     )
 
-    assert sourcing_agent.source_leads() == 1
-    assert [lead["business_name"] for lead in db.list_all_leads()] == ["Real Site"]
+    assert sourcing_agent.source_leads() == 2
+    leads = {lead["business_name"]: lead for lead in db.list_all_leads()}
+    assert leads["Facebook Only"]["website_status"] == "platform_only"
+    assert leads["Facebook Only"]["lead_score"] == 9
+    assert leads["Facebook Only"]["contact_channel"] == "phone"
+    assert leads["Real Site"]["website_status"] == "owned_site"
+    assert leads["Real Site"]["contact_channel"] == "email"
+
+
+def test_scoring_prioritises_need_then_reachability():
+    assert sourcing_agent.site_score_for_status("none") == 0
+    assert sourcing_agent.site_score_for_status("platform_only") == 0
+    assert sourcing_agent.site_score_for_status("owned_site") is None
+    assert sourcing_agent.lead_score_for_candidate("none", "phone") == 10
+    assert sourcing_agent.lead_score_for_candidate("none", "unknown") == 8
+    assert sourcing_agent.lead_score_for_candidate("platform_only", "phone") == 9
+    assert sourcing_agent.lead_score_for_candidate("platform_only", "unknown") == 7
+    assert sourcing_agent.lead_score_for_candidate("owned_site", "email") is None
 
 
 def test_dedupes_on_place_id_and_on_name_plus_location(sourcing_env, monkeypatch):
@@ -296,3 +312,13 @@ def test_main_loop_runs_sourcing_at_most_once_per_hour(monkeypatch):
     now[0] += config.SOURCING_INTERVAL_SECONDS + 1
     main._maybe_source_leads()
     assert len(calls) == 2
+
+
+def test_send_queue_prioritises_scored_leads(sourcing_env):
+    low = db.insert_lead("Low priority", "plumber", "Oxted", status="designed")
+    high = db.insert_lead("High priority", "plumber", "Oxted", status="designed")
+    legacy = db.insert_lead("Legacy", "plumber", "Oxted", status="designed")
+    db.update_lead_fields(low, lead_score=3)
+    db.update_lead_fields(high, lead_score=9)
+
+    assert [lead["id"] for lead in db.list_sendable_leads_by_priority()] == [high, low, legacy]

@@ -51,6 +51,10 @@ CREATE TABLE IF NOT EXISTS leads (
     unsubscribed    INTEGER NOT NULL DEFAULT 0,
     notes           TEXT,
     place_id        TEXT,
+    website_status  TEXT,
+    site_score      INTEGER,
+    lead_score      INTEGER,
+    contact_channel TEXT,
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -140,6 +144,12 @@ def init_db(db_path: Optional[str] = None) -> None:
         # first emailed this lead, so every later message in the thread leaves
         # from the same address and replies land in the same inbox.
         _migrate_add_column(conn, "leads", "sender_account", "TEXT")
+        # Persist acquisition quality so the sales queue can prefer clear website needs.
+        _migrate_add_column(conn, "leads", "website_status", "TEXT")
+        _migrate_add_column(conn, "leads", "site_score", "INTEGER")
+        _migrate_add_column(conn, "leads", "lead_score", "INTEGER")
+        _migrate_add_column(conn, "leads", "contact_channel", "TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_leads_send_priority ON leads(status, lead_score DESC, id ASC)")
         conn.commit()
 
 
@@ -217,6 +227,16 @@ def list_leads_by_status(status: str) -> list[dict[str, Any]]:
     with get_connection() as conn:
         rows = conn.execute(
             "SELECT * FROM leads WHERE status = ? ORDER BY id ASC", (status,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def list_sendable_leads_by_priority() -> list[dict[str, Any]]:
+    """Return designed leads in explicit acquisition priority order."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM leads WHERE status = 'designed' "
+            "ORDER BY CASE WHEN lead_score IS NULL THEN 1 ELSE 0 END, lead_score DESC, id ASC"
         ).fetchall()
         return [dict(r) for r in rows]
 

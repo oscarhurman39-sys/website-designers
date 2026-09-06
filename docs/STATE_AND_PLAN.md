@@ -173,6 +173,6 @@ Answers to these change what gets built next. Reply in this file or in a
 - Stripe is test mode. `_finalize_won_leads` hands over the repo and Vercel
   project; under a hosting model that step changes (keep hosting, add their
   domain instead).
-- No follow-up email, no lead scoring, no website_status yet (section 5).
+- No follow-up email yet. Lead scoring and `website_status` now have a v1 code-backed slice for no-site/platform-only sourcing and send-priority ordering; the next gap is owned-site quality scoring after actual render/reply outcomes.
 - The Gmail connector in this workspace lacks read permission, so inbox
   placement of test sends was not verified from here.

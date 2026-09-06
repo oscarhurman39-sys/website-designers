@@ -15,6 +15,11 @@ alerted -- never blocked -- for the exceptions (round cap hit, paid-customer
 support, failed invite); the manual `transfer` command remains as an
 override and is the only path that removes your own repo access.
 
+The Agency room operating docs are in `docs/AGENCY_SALES_SYSTEM.md` and
+`docs/CLIENT_PROPOSAL_AND_TERMS.md`. They define the first sellable offer,
+lead-scoring rules, outreach flow, proposal/payment language, and go-live
+checklist the StarNet agents use when running this repo.
+
 ## Quick Start
 
 1. `pip install -r requirements.txt && playwright install chromium`

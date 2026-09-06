@@ -3,11 +3,10 @@ API (New) Text Search, so the pipeline isn't limited to hand-typed leads
 and CSV drops.
 
 Why Places rather than a generic web search: the pipeline sells a rebuild
-of a *poor* website, and LeadAgent can only find a contact email by
-scraping a site that exists -- a business with no website is marked
-'lost' at send time. Places tells us up front which businesses are
-OPERATIONAL and have a websiteUri, so we never queue leads the researcher
-is guaranteed to throw away.
+of a *poor* web presence. A normal website can be scraped for an email;
+a Facebook/directory-only business can still be worth a preview and a
+phone-first follow-up; a business with no listed web presence is kept out
+unless SOURCING_REQUIRE_WEBSITE is explicitly disabled.
 
 Everything here is best-effort and must never take the main loop down:
 API/network failures are printed and skipped, and source_leads() always
@@ -58,12 +57,20 @@ class PlacesAuthError(RuntimeError):
     first such response rather than repeating it for every niche x location."""
 
 # Hosts that Google lists as a business's "website" but which are really a
-# social profile or directory entry. They aren't sites we can improve, and
-# LeadAgent can't scrape a contact email from them either, so a lead that
-# points at one is dead on arrival.
+# social profile or directory entry. These are high-intent leads because the
+# business has some online presence but not a proper owned site.
 PLATFORM_HOSTS: frozenset[str] = frozenset(
     {"facebook.com", "instagram.com", "linktr.ee", "yell.com", "checkatrade.com", "google.com"}
 )
+
+WEBSITE_STATUS_NONE = "none"
+WEBSITE_STATUS_PLATFORM_ONLY = "platform_only"
+WEBSITE_STATUS_OWNED = "owned_site"
+WEBSITE_STATUS_UNSCORED = "unscored"
+
+CONTACT_CHANNEL_EMAIL = "email"
+CONTACT_CHANNEL_PHONE = "phone"
+CONTACT_CHANNEL_UNKNOWN = "unknown"
 
 # `niche` must name a folder here, otherwise DesignAgent has no template to
 # build the preview from. Checked at sourcing time so a typo in
@@ -86,6 +93,8 @@ class Candidate:
     review_count: int
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    website_status: str = "unscored"
+    contact_channel: str = "unknown"
 
     def summary(self) -> str:
         """Short JSON blob stored in leads.notes (not scraped_info, which
@@ -121,6 +130,46 @@ def is_platform_host(url: str) -> bool:
     return any(host == platform or host.endswith("." + platform) for platform in PLATFORM_HOSTS)
 
 
+def website_status_for_url(url: str) -> str:
+    """Classify the business's listed web presence from Google Places."""
+    url = (url or "").strip()
+    if not url:
+        return WEBSITE_STATUS_NONE
+    if is_platform_host(url):
+        return WEBSITE_STATUS_PLATFORM_ONLY
+    return WEBSITE_STATUS_OWNED
+
+
+def contact_channel_for_place(place: dict[str, Any]) -> str:
+    """Best known follow-up channel before LeadAgent tries website scraping."""
+    if (place.get("websiteUri") or "").strip() and not is_platform_host(place.get("websiteUri") or ""):
+        return CONTACT_CHANNEL_EMAIL
+    if (place.get("nationalPhoneNumber") or "").strip():
+        return CONTACT_CHANNEL_PHONE
+    return CONTACT_CHANNEL_UNKNOWN
+
+
+def site_score_for_status(website_status: str) -> Optional[int]:
+    """Lower = weaker current web presence. None means not inspected yet."""
+    if website_status in (WEBSITE_STATUS_NONE, WEBSITE_STATUS_PLATFORM_ONLY):
+        return 0
+    return None
+
+
+def lead_score_for_candidate(website_status: str, contact_channel: str) -> Optional[int]:
+    """Deterministic first-pass acquisition score.
+
+    The score favours obvious need first, then reachability. It intentionally
+    ignores rating/review count for now because those need a wider rubric and
+    tests before they influence who gets contacted.
+    """
+    if website_status == WEBSITE_STATUS_NONE:
+        return 10 if contact_channel != CONTACT_CHANNEL_UNKNOWN else 8
+    if website_status == WEBSITE_STATUS_PLATFORM_ONLY:
+        return 9 if contact_channel != CONTACT_CHANNEL_UNKNOWN else 7
+    return None
+
+
 def _skip_reason(place: dict[str, Any]) -> Optional[str]:
     """Why this raw Places result shouldn't become a lead, or None if it should."""
     if place.get("businessStatus") != "OPERATIONAL":
@@ -132,8 +181,6 @@ def _skip_reason(place: dict[str, Any]) -> Optional[str]:
     website = (place.get("websiteUri") or "").strip()
     if not website and config.SOURCING_REQUIRE_WEBSITE:
         return "no website"
-    if website and is_platform_host(website):
-        return f"website is a platform profile ({_host_of(website)})"
     return None
 
 
@@ -201,18 +248,23 @@ def _within_exclusion_zone(candidate: "Candidate") -> bool:
 
 
 def _to_candidate(place: dict[str, Any], niche: str, location: str) -> Candidate:
+    website_url = (place.get("websiteUri") or "").strip()
+    website_status = website_status_for_url(website_url)
+    contact_channel = contact_channel_for_place(place)
     return Candidate(
         business_name=place["displayName"]["text"].strip(),
         niche=niche,
         location=location,
         place_id=place["id"],
-        website_url=(place.get("websiteUri") or "").strip(),
+        website_url=website_url,
         phone=(place.get("nationalPhoneNumber") or "").strip(),
         address=place.get("formattedAddress") or "",
         rating=place.get("rating"),
         review_count=int(place.get("userRatingCount") or 0),
         latitude=(place.get("location") or {}).get("latitude"),
         longitude=(place.get("location") or {}).get("longitude"),
+        website_status=website_status,
+        contact_channel=contact_channel,
     )
 
 
@@ -297,6 +349,10 @@ def _insert(candidate: Candidate) -> int:
         lead_id,
         place_id=candidate.place_id,
         website_url=candidate.website_url or None,
+        website_status=candidate.website_status,
+        site_score=site_score_for_status(candidate.website_status),
+        lead_score=lead_score_for_candidate(candidate.website_status, candidate.contact_channel),
+        contact_channel=candidate.contact_channel,
         phone=candidate.phone or None,
         address=candidate.address or None,
         google_rating=candidate.rating,

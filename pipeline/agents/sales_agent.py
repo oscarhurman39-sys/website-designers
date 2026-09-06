@@ -499,7 +499,7 @@ def send_next_pending() -> Optional[int]:
     the lead_id sent to, or None if nothing was sent this cycle."""
     if not _can_send_now():
         return None
-    for lead in db.list_leads_by_status("designed"):
+    for lead in db.list_sendable_leads_by_priority():
         if send_cold_email(lead):
             return lead["id"]
     return None
