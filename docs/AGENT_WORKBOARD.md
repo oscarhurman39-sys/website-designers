@@ -14,6 +14,16 @@ Source of truth: `docs/STATE_AND_PLAN.md`, then `docs/ROOM_ROSTER.md`, `docs/AGE
 - Proposal/reply/payment wording lives in `docs/CLIENT_PROPOSAL_AND_TERMS.md`.
 - Every code change goes through FINN's review lane and the full test suite before it is considered ready.
 
+## Landed outside the lanes (Claude Code, 2026-09-06)
+
+Commander decisions were wired in directly; FINN should review rather than
+redo: two-option pricing (£589 / £39 per month), guarantee wording, one
+follow-up reminder, monthly-plan escalation to a human, `won_amount` +
+`run.py report`, Kent/Sussex sourcing towns. Details and the five
+pre-launch questions: `docs/STATE_AND_PLAN.md` sections 6a and 6b. The
+uncommitted lead-quality slice (website_status / lead_score / send priority)
+was committed as found, tests green.
+
 ## Active lanes
 
 ### FINN — room lead

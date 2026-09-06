@@ -132,6 +132,20 @@ WEBSITE_OFFER_PRICE: int = _int_env("WEBSITE_OFFER_PRICE", default=750)
 # so it moves with the currency.
 STANDARD_PACKAGE_PRICE: int = _int_env("STANDARD_PACKAGE_PRICE", default=2000)
 
+# Secondary offer: a monthly plan (hosting, edits, domain) beside the one-off
+# price. Quoted in the cold email and by the negotiator; a prospect who
+# picks it is handed to a human (Stripe subscriptions are not automated yet).
+SUBSCRIPTION_ENABLED: bool = os.getenv("SUBSCRIPTION_ENABLED", "true").strip().lower() not in ("0", "false", "no")
+SUBSCRIPTION_MONTHLY_PRICE: int = _int_env("SUBSCRIPTION_MONTHLY_PRICE", default=39)
+
+# Trust builders stated in every email: money-back window and free-edits window.
+GUARANTEE_DAYS: int = _int_env("GUARANTEE_DAYS", default=14)
+FREE_EDITS_DAYS: int = _int_env("FREE_EDITS_DAYS", default=30)
+
+# One reminder to leads who never replied, this many days after the cold email.
+FOLLOW_UP_ENABLED: bool = os.getenv("FOLLOW_UP_ENABLED", "true").strip().lower() not in ("0", "false", "no")
+FOLLOW_UP_AFTER_DAYS: int = _int_env("FOLLOW_UP_AFTER_DAYS", default=3)
+
 # --- Autonomous negotiation band (see agents/sales_agent.py) -----------------
 # The LLM negotiation agent may quote any whole-number price inside
 # [NEGOTIATION_FLOOR, NEGOTIATION_CEILING], in CURRENCY units. The band is

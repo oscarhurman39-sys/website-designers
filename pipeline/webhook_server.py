@@ -89,6 +89,9 @@ def create_app() -> Flask:
                 lead = db.get_lead(lead_id)
                 if lead is not None:
                     db.update_lead_status(lead_id, "won", notes="Stripe checkout.session.completed")
+                    amount_minor = (event.get("data", {}).get("object", {}) or {}).get("amount_total")
+                    if isinstance(amount_minor, int):
+                        db.update_lead_fields(lead_id, won_amount=amount_minor // 100)
                     banner = "*" * 70
                     print(
                         f"\n{banner}\nPAYMENT RECEIVED: {lead['business_name']} (lead {lead_id})\n"

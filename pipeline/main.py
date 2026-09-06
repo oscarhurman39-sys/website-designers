@@ -202,6 +202,8 @@ def _run_cycle() -> None:
     sent_lead_id = sales_agent.send_next_pending()
     if sent_lead_id:
         print(f"[main] Sent cold email to lead {sent_lead_id}")
+    elif (followed := sales_agent.send_follow_up_if_due()):
+        print(f"[main] Sent follow-up reminder to lead {followed}")
 
     replies = sales_agent.check_inbox()
     if replies:

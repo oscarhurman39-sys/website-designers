@@ -5,6 +5,7 @@
     python run.py dashboard            # streamlit run dashboard.py
     python run.py test-email <email>   # one-shot: pipeline/test_email.py
     python run.py cleanup-tests [--dry-run]  # delete test leads + their repos/projects
+    python run.py report                     # per-niche funnel + revenue
     python run.py rebuild <lead_id>          # one-shot: pipeline/rebuild_preview.py
     python run.py source [--limit N] [--dry-run]   # one-shot: pipeline/source_leads.py
 
@@ -56,6 +57,11 @@ def run_cleanup_tests(extra_args: list[str]) -> int:
     )
 
 
+def run_report(extra_args: list[str]) -> int:
+    # Per-niche funnel + revenue, to decide which niches to focus on.
+    return subprocess.call([sys.executable, str(PIPELINE_DIR / "report.py"), *extra_args], cwd=str(PIPELINE_DIR))
+
+
 def run_rebuild(extra_args: list[str]) -> int:
     # Re-render + redeploy one lead's preview in place (after new photos/logo or a template change).
     return subprocess.call(
@@ -77,6 +83,7 @@ _MODES = {
     "cleanup-tests": run_cleanup_tests,
     "source": run_source,
     "rebuild": run_rebuild,
+    "report": run_report,
 }
 
 

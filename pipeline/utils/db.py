@@ -144,6 +144,10 @@ def init_db(db_path: Optional[str] = None) -> None:
         # first emailed this lead, so every later message in the thread leaves
         # from the same address and replies land in the same inbox.
         _migrate_add_column(conn, "leads", "sender_account", "TEXT")
+        # Follow-up reminder (sales_agent.send_follow_up_if_due) and the amount
+        # actually paid (webhook_server), so niches can be ranked by revenue.
+        _migrate_add_column(conn, "leads", "follow_up_sent_at", "TEXT")
+        _migrate_add_column(conn, "leads", "won_amount", "INTEGER")
         # Persist acquisition quality so the sales queue can prefer clear website needs.
         _migrate_add_column(conn, "leads", "website_status", "TEXT")
         _migrate_add_column(conn, "leads", "site_score", "INTEGER")
@@ -626,6 +630,38 @@ def get_last_email_timestamp(lead_id: int) -> Optional[str]:
             (lead_id,),
         ).fetchone()
         return row["timestamp"] if row else None
+
+
+def list_follow_up_due(after_days: int) -> list[dict[str, Any]]:
+    """'emailed' leads whose cold email went out at least `after_days` ago,
+    who never wrote back, aren't suppressed, and haven't had the one
+    reminder yet. Oldest first so nobody waits longer than necessary."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT l.* FROM leads l WHERE l.status = 'emailed' AND l.unsubscribed = 0 "
+            "AND l.follow_up_sent_at IS NULL "
+            "AND NOT EXISTS (SELECT 1 FROM email_threads t WHERE t.lead_id = l.id AND t.direction = 'inbound') "
+            "AND (SELECT MAX(t.timestamp) FROM email_threads t WHERE t.lead_id = l.id AND t.direction = 'outbound') "
+            "    <= datetime('now', ?) "
+            "ORDER BY l.id",
+            (f"-{int(after_days)} days",),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def outcome_report() -> list[dict[str, Any]]:
+    """Per-niche funnel: leads, emailed, replied, won, revenue. Feeds the
+    'which niches make money' decision once real sends have happened."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT niche, COUNT(*) AS leads, "
+            "SUM(CASE WHEN status IN ('emailed','replied','negotiating','payment_sent','won','lost') THEN 1 ELSE 0 END) AS emailed, "
+            "SUM(CASE WHEN EXISTS (SELECT 1 FROM email_threads t WHERE t.lead_id = leads.id AND t.direction='inbound') THEN 1 ELSE 0 END) AS replied, "
+            "SUM(CASE WHEN status = 'won' THEN 1 ELSE 0 END) AS won, "
+            "COALESCE(SUM(won_amount), 0) AS revenue "
+            "FROM leads GROUP BY niche ORDER BY revenue DESC, won DESC, replied DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 # --- State history -----------------------------------------------------------

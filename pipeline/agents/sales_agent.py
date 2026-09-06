@@ -268,10 +268,58 @@ def _closing_paragraphs(preview_link: str) -> list[str]:
         "This preview is live for 7 days -- after that it'll be repurposed. No pressure, just didn't want you to miss it.",
         "If you'd like to own it, reply YES. I'll connect your domain and make any changes you want. "
         "Want your own photos and logo on it? Just attach them to your reply and I'll swap them in, no extra cost.",
-        f"Standard package: {config.CURRENCY_SYMBOL}{config.STANDARD_PACKAGE_PRICE:,}. "
-        f"This completed draft: {config.CURRENCY_SYMBOL}{config.WEBSITE_OFFER_PRICE:,}.",
+        _pricing_line(),
+        _guarantee_line(),
         _SENDER_NAME,
     ]
+
+
+def _pricing_line() -> str:
+    sym = config.CURRENCY_SYMBOL
+    line = (f"Standard package: {sym}{config.STANDARD_PACKAGE_PRICE:,}. "
+            f"This completed draft: {sym}{config.WEBSITE_OFFER_PRICE:,} one-off")
+    if config.SUBSCRIPTION_ENABLED:
+        line += f", or {sym}{config.SUBSCRIPTION_MONTHLY_PRICE}/month with hosting, updates and your domain included"
+    return line + "."
+
+
+def _guarantee_line() -> str:
+    return (f"You only pay once you're happy with it, there's a {config.GUARANTEE_DAYS}-day money-back guarantee, "
+            f"and any edits you want in the first {config.FREE_EDITS_DAYS} days are free.")
+
+
+_SUBSCRIPTION_RE = re.compile(r"\b(monthly|subscription|per month|a month|pay monthly|/month)\b", re.IGNORECASE)
+
+
+def _wants_subscription(body: str) -> bool:
+    return config.SUBSCRIPTION_ENABLED and bool(_SUBSCRIPTION_RE.search(body or ""))
+
+
+def send_follow_up_if_due() -> Optional[int]:
+    """Send at most one reminder per cycle to a lead who never replied,
+    FOLLOW_UP_AFTER_DAYS after the cold email. Same thread, same mailbox,
+    counts against the daily caps like any send. Returns the lead id."""
+    if not config.FOLLOW_UP_ENABLED or not _can_send_now():
+        return None
+    due = db.list_follow_up_due(config.FOLLOW_UP_AFTER_DAYS)
+    if not due:
+        return None
+    lead = due[0]
+    website = db.get_website_by_lead(lead["id"])
+    link = (website or {}).get("preview_url") or ""
+    body = "\n\n".join([
+        f"Quick one -- did you get a chance to look at the site I built for {lead['business_name']}?",
+        f"It's still live here: {link}" if link else "It's still live.",
+        _guarantee_line(),
+        "If it's not for you, no problem at all -- just say and I won't follow up again.",
+        _SENDER_NAME,
+    ])
+    if not _send_thread_reply(lead, body, classification="follow_up"):
+        db.update_lead_fields(lead["id"], follow_up_sent_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"))
+        return None  # unusable address: mark so we don't retry every cycle
+    db.update_lead_fields(lead["id"], follow_up_sent_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"))
+    db.log_state_history(lead["id"], "emailed", "emailed", notes="Follow-up reminder sent")
+    return lead["id"]
 
 
 def _validate_preview_link_for_send(preview_link: str) -> str:
@@ -607,6 +655,11 @@ def _build_negotiation_prompt(
         "If they ask about photos/logo or mention sending some, tell them to attach them to a reply "
         "(logo as PNG or SVG, three to six landscape photos) and they will be on the preview within the hour. "
         "If files are already on the preview, say so and invite them to look.\n"
+        + (f"- A monthly option also exists: {config.CURRENCY_SYMBOL}{config.SUBSCRIPTION_MONTHLY_PRICE}/month with hosting, "
+           "updates and their domain included. If they choose it, REPLY warmly that you'll set it up and "
+           "send the details shortly (do not CLOSE at the one-off price).\n" if config.SUBSCRIPTION_ENABLED else "")
+        + f"- Guarantee they already have: {config.GUARANTEE_DAYS}-day money-back and free edits for "
+          f"{config.FREE_EDITS_DAYS} days. Mention it when they hesitate.\n"
         f"- Automated replies remaining before a human must step in: {rounds_left}\n\n"
         "Conversation so far:\n"
         f"{_render_thread(lead['id'])}\n\n"
@@ -1193,6 +1246,22 @@ def _handle_inbound_impl(lead: dict, msg) -> None:  # msg: email_utils.InboundEm
                 f"A '{lead['status']}' lead sent a positive-looking reply -- not auto-negotiating; "
                 "review the thread and re-engage manually if appropriate.",
             )
+            return
+        if _wants_subscription(msg.body):
+            # Monthly plan isn't automated (no Stripe subscription flow yet):
+            # acknowledge, hand to a human, and don't let the negotiator
+            # close them at the one-off price.
+            db.update_lead_status_unless(
+                lead["id"], "negotiating", notes="Asked about the monthly option; handed to a human",
+                unless_current=("negotiating", "payment_sent", "won", "lost", "bounced", "unsubscribed"),
+            )
+            _send_thread_reply(lead, "\n\n".join([
+                "Great choice -- the monthly plan covers hosting, updates and your domain, so there's nothing else to think about.",
+                "I'll set it up and send you the details shortly.",
+                _SENDER_NAME,
+            ]), classification="subscription_interest")
+            alert_needs_human(lead, f"Prospect wants the monthly plan ({config.CURRENCY_SYMBOL}{config.SUBSCRIPTION_MONTHLY_PRICE}/mo). "
+                                    "Set up the subscription and reply personally.")
             return
         if db.update_lead_status_unless(
             lead["id"], "negotiating",

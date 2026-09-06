@@ -4,7 +4,7 @@ Written 2026-09-05 for whoever operates this repo next, human or agent. Read
 this first, then `README.md`, then `docs/PHOTOS_AND_LOGO_PLAYBOOK.md`.
 Branch: `claude/website-preview-email-upgrade-nz0s8a` (includes everything on
 `main` plus the work below). Tests: `venv\Scripts\python.exe -m pytest -q`
-(94 pass). Nothing has been sent to a real prospect yet.
+(105 pass). Nothing has been sent to a real prospect yet.
 
 ## 1. What the system does today
 
@@ -165,6 +165,45 @@ Answers to these change what gets built next. Reply in this file or in a
 7. Anything in the current template you'd change before the first real
    sends? Render it with `python pipeline/render_preview.py` and look at
    `pipeline/out/*.png`.
+
+## 6a. Decisions applied on 2026-09-06 (Commander, via StarNet)
+
+| Decision | Where it lives |
+|---|---|
+| Email only; no SMS/calls/letters until revenue | Section 5.2 shelved. `contact_channel` is still recorded per lead for later. |
+| £589 one-off (engine works in whole pounds, so not 589.99) | `.env`: `WEBSITE_PRICE`, `WEBSITE_OFFER_PRICE`, `NEGOTIATION_CEILING=589`, `NEGOTIATION_FLOOR=470` |
+| Monthly plan as a secondary option, £39/month stub | `SUBSCRIPTION_ENABLED`, `SUBSCRIPTION_MONTHLY_PRICE`; quoted in the cold email and negotiation prompt; a "monthly" reply gets a warm holding reply + human alert, never an automated close |
+| Keep niches broad, log outcomes | `won_amount` stored from the Stripe webhook; `python run.py report` gives leads/emailed/replied/won/revenue per niche |
+| Kent + Sussex first | `SOURCING_LOCATIONS` = 26 towns across Kent, East and West Sussex; 6-mile Oxted exclusion stays |
+| One follow-up email | `sales_agent.send_follow_up_if_due()` in the main loop: 3 days after the cold email, silent leads only, once, counts against send caps |
+| Money-back + free edits | `GUARANTEE_DAYS=14`, `FREE_EDITS_DAYS=30` in every cold email, follow-up and the negotiation prompt |
+| Commander reviews visuals before launch | `ENABLE_LIVE_SEND=false`, `SOURCING_ENABLED=false` unchanged. Renders: `python pipeline/render_preview.py` -> `pipeline/out/*.png` |
+
+## 6b. Five questions StarNet should confirm before the first live batch
+
+1. **Which mailbox and how many a day?** Confirm the loop will run from
+   casey@caseywebsites.com only, `EMAIL_MAX_PER_DAY_PER_ACCOUNT` set to 10 for
+   week one, and that `install_autostart.ps1` (or the VPS) keeps
+   `webhook_server.py` + ngrok up the whole time, because every email
+   carries an unsubscribe link that dies when they are down.
+2. **Is the database clean?** All 75 leads are test data. Confirm
+   `run.py cleanup-tests` has been run (or the DB replaced) before
+   `run.py source`, otherwise the first live cycle emails 28 old test
+   leads at your own addresses and the report is polluted from day one.
+3. **Who is on the first ten replies?** The classifier, negotiator and the
+   new monthly-plan escalation have only seen synthetic replies. Confirm a
+   human (or MASKY) watches Slack alerts and the dashboard for the first
+   ten real replies and has the `pause` console command ready.
+4. **Stripe live switch owner.** Test mode cannot take money. Confirm who
+   swaps `STRIPE_SECRET_KEY` to live, creates the live webhook endpoint at
+   `PUBLIC_BASE_URL/webhook/stripe`, puts its signing secret in
+   `STRIPE_WEBHOOK_SECRET`, and re-runs `tests/test_stripe_money_pipe.py`,
+   and that this happens before the first `CLOSE`, not after.
+5. **Visual sign-off is recorded.** Confirm the Commander has looked at
+   `pipeline/out/_heroes.png` and one full page per niche they intend to
+   sell, and that any requested change is in `NICHE_THEMES` before
+   `ENABLE_LIVE_SEND=true`. The template is the pitch; nothing else in the
+   email matters if the page looks generic.
 
 ## 7. Known gaps
 

@@ -31,8 +31,11 @@ This is the first sellable version of the Website Designers agency pipeline. It 
 These match the current config defaults unless `.env` overrides them:
 
 - Standard package anchor: `STANDARD_PACKAGE_PRICE=2000`.
-- Pre-built draft offer: `WEBSITE_OFFER_PRICE=750`.
-- Checkout price: `WEBSITE_PRICE=750`.
+- Pre-built draft offer: `WEBSITE_OFFER_PRICE=589` (Commander decision 2026-09-05; the negotiation engine works in whole pounds, so 589 rather than 589.99).
+- Checkout price: `WEBSITE_PRICE=589`.
+- Secondary offer: `SUBSCRIPTION_MONTHLY_PRICE=39`/month (hosting, updates, domain). Quoted in every email; a prospect who picks it is escalated to a human because Stripe subscriptions are not automated yet.
+- Guarantee stated in every email: `GUARANTEE_DAYS=14` money-back and `FREE_EDITS_DAYS=30` free edits.
+- One follow-up reminder `FOLLOW_UP_AFTER_DAYS=3` after the cold email to leads who never replied.
 - Negotiation band: floor defaults to 80% of the offer price; ceiling defaults to the offer price.
 - Currency: `CURRENCY=gbp` by default.
 
