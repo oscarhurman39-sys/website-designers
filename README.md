@@ -18,7 +18,7 @@ override and is the only path that removes your own repo access.
 The Agency room operating docs are in `docs/AGENCY_SALES_SYSTEM.md` and
 `docs/CLIENT_PROPOSAL_AND_TERMS.md`. They define the first sellable offer,
 lead-scoring rules, outreach flow, proposal/payment language, and go-live
-checklist the StarNet agents use when running this repo.
+checklist the StarNet agents use when running this repo. StarNet skill-to-agent wiring lives in `docs/STARNET_SKILL_WIRING.md`; it binds the enabled design skills to the Agency room without authorising live sourcing, sending, or money mode changes.
 
 ## Quick Start
 
@@ -271,6 +271,8 @@ custom-authored for this project in the same style/frontmatter
 convention -- the roles this pipeline needed (e.g. `stripe-checkout`,
 `autonomy-guardrails`) don't have upstream analogs in that collection. See
 `.claude/agents/README.md` for the full per-file provenance breakdown.
+
+StarNet-side web-design skills are wired separately in `docs/STARNET_SKILL_WIRING.md`. In short: `Make a Plan` gates non-trivial repo work, `Creative Ideation` feeds bounded offer/design concepts, `Popular Web Designs` creates prototype directions only, and `ASCII Art` is internal operator/docs sugar, not production UI unless explicitly requested.
 
 ## Domain warm-up
 

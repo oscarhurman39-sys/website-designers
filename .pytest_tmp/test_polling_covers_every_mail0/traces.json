@@ -1,0 +1,47 @@
+[
+  {
+    "id": "154433df-5492-4b16-aaad-3e74e2d2b0c4",
+    "agent_id": "sales-agent",
+    "input": {
+      "lead_id": 1,
+      "from_addr": "owner@acme.test",
+      "subject": "Automatic reply"
+    },
+    "status": "completed",
+    "start_time": "2026-09-06T16:12:12.308137+00:00",
+    "end_time": "2026-09-06T16:12:12.523154+00:00",
+    "agents": [
+      {
+        "name": "SalesAgent",
+        "input": {
+          "lead_id": 1,
+          "from_addr": "owner@acme.test",
+          "subject": "Automatic reply"
+        },
+        "output": {
+          "status": "ok"
+        },
+        "status": "completed",
+        "start_time": "2026-09-06T16:12:12.308150+00:00",
+        "end_time": "2026-09-06T16:12:12.523154+00:00",
+        "tools": [
+          {
+            "name": "classify_and_handle_reply",
+            "input": {
+              "lead_id": 1,
+              "from_addr": "owner@acme.test",
+              "subject": "Automatic reply"
+            },
+            "output": {
+              "status": "ok"
+            },
+            "status": "completed",
+            "start_time": "2026-09-06T16:12:12.308154+00:00",
+            "end_time": "2026-09-06T16:12:12.523154+00:00",
+            "error": null
+          }
+        ]
+      }
+    ]
+  }
+]

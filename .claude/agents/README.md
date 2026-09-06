@@ -34,3 +34,16 @@ says so explicitly in a footer note.
 
 `01-core-development/backend-developer.md` genuinely exists upstream and
 is reproduced verbatim under its MIT license.
+
+## StarNet skill overlay
+
+The seated StarNet Agency-room agents are wired in `docs/STARNET_SKILL_WIRING.md`. These repo-local persona files should follow that overlay when invoked through StarNet:
+
+- use `Make a Plan` before non-trivial source, template, schema, deploy, payment, or process changes;
+- use `Creative Ideation` only for bounded copy/offer/niche/concept exploration;
+- treat `Popular Web Designs` as prototype/design-direction input, not direct production template authority;
+- keep `ASCII Art` internal unless the Commander explicitly requests it in a client-facing artifact;
+- do not depend on the withheld saved `website_designers_pipeline` skill until the Commander approves it in `ABILITIES > SKILLS`.
+
+The overlay does not permit live sourcing, live sending, Stripe live mode, outbound-volume changes, or bypassing FINN's verification gate.
+

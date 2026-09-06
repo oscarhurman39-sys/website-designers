@@ -2,13 +2,13 @@
 
 This room owns the local-business website acquisition pipeline in this repo. The job is to find businesses with no site, a weak site, or a directory/Facebook-only presence; build a useful preview; contact them safely; handle replies; take payment; and hand over or host the finished site.
 
-Source of truth for current repo state: `docs/STATE_AND_PLAN.md`, then `README.md`, then `docs/PHOTOS_AND_LOGO_PLAYBOOK.md`. Active bounded work for the seated room agents is in `docs/AGENT_WORKBOARD.md`.
+Source of truth for current repo state: `docs/STATE_AND_PLAN.md`, then `README.md`, then `docs/PHOTOS_AND_LOGO_PLAYBOOK.md`. Active bounded work for the seated room agents is in `docs/AGENT_WORKBOARD.md`. StarNet skill wiring for those agents is in `docs/STARNET_SKILL_WIRING.md`.
 
 ## Operating rule
 
 MASKY is the overseer. FINN is the room lead for the website-designers repo. Every other agent works a named lane and hands work back through FINN/MASKY instead of making broad cross-lane changes alone.
 
-Do not turn on live sourcing or live sending casually. The repo currently keeps real outbound activity behind `SOURCING_ENABLED=false` and `ENABLE_LIVE_SEND=false`; changing those is a go-live decision, not routine development.
+Do not turn on live sourcing or live sending casually. The repo currently keeps real outbound activity behind `SOURCING_ENABLED=false` and `ENABLE_LIVE_SEND=false`; changing those is a go-live decision, not routine development. Enabled StarNet skills may create plans, concepts, prototypes, and QA checklists, but they do not override FINN's test gate or the go-live checklist.
 
 ## StarNet room crew
 

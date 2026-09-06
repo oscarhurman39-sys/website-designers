@@ -138,6 +138,8 @@ Handover checklist:
 
 ## Agent lanes
 
+Skill wiring for these lanes lives in `docs/STARNET_SKILL_WIRING.md`. The short version: planning/design skills can create plans, concepts, and prototypes, but FINN's tests/renders/docs gate decides what becomes operational.
+
 ### MASKY
 
 Owns orchestration, final go/no-go, and repo verification.

@@ -205,6 +205,18 @@ Answers to these change what gets built next. Reply in this file or in a
    `ENABLE_LIVE_SEND=true`. The template is the pitch; nothing else in the
    email matters if the page looks generic.
 
+## 6c. StarNet skill wiring applied on 2026-09-06
+
+The agency room now has explicit StarNet skill routing in `docs/STARNET_SKILL_WIRING.md`:
+
+- `Make a Plan` gates non-trivial repo, template, payment, schema, deploy, and process changes.
+- `Creative Ideation` feeds bounded niche, offer, copy, proof, and page-section concepts.
+- `Popular Web Designs` is limited to design/prototype directions until render audit and FINN review.
+- `ASCII Art` is internal/operator-facing only.
+- The withheld saved `website_designers_pipeline` skill still needs Commander approval in `ABILITIES > SKILLS`; no agent may infer or recreate it.
+
+This wiring changes agent process only. It does not enable live sourcing, live sending, Stripe live mode, or prospect contact.
+
 ## 7. Known gaps
 
 - Attachment flow tested against constructed emails only; first real

@@ -6,6 +6,8 @@ import json
 import time
 from unittest.mock import Mock
 
+import pytest
+
 import config
 from agents import sales_agent
 from utils import db, stripe_utils
@@ -79,12 +81,14 @@ def test_stripe_webhook_marks_matching_paid_lead_won(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "leads.db"))
     monkeypatch.setattr(config, "STRIPE_WEBHOOK_SECRET", "whsec_test_secret")
     db.init_db()
+    monkeypatch.setattr(config, "STRIPE_SECRET_KEY", "sk_test_placeholder")
     lead_id = db.insert_lead("Paid Ferns", "landscaper", "York", status="payment_sent")
     payload = json.dumps({
         "id": "evt_test_paid",
         "object": "event",
         "type": "checkout.session.completed",
-        "data": {"object": {"metadata": {"lead_id": str(lead_id)}}},
+        "livemode": False,
+        "data": {"object": {"mode": "payment", "payment_status": "paid", "metadata": {"lead_id": str(lead_id)}}},
     }, separators=(",", ":")).encode("utf-8")
 
     response = webhook_server.create_app().test_client().post(
@@ -96,3 +100,33 @@ def test_stripe_webhook_marks_matching_paid_lead_won(monkeypatch, tmp_path):
 
     assert response.status_code == 200
     assert db.get_lead(lead_id)["status"] == "won"
+
+
+@pytest.mark.parametrize("payment_status,event_live,mode,metadata,initial,expected_status,expected_lead", [
+    ("unpaid", False, "payment", "valid", "payment_sent", 200, "payment_sent"),
+    ("paid", True, "payment", "valid", "payment_sent", 200, "payment_sent"),
+    ("paid", False, "subscription", "valid", "payment_sent", 200, "payment_sent"),
+    ("paid", False, "payment", "garbage", "payment_sent", 400, "payment_sent"),
+    ("paid", False, "payment", "valid", "won", 200, "won"),
+])
+def test_webhook_payment_guards(monkeypatch, tmp_path, payment_status, event_live,
+                                mode, metadata, initial, expected_status, expected_lead):
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "guards.db"))
+    monkeypatch.setattr(config, "STRIPE_WEBHOOK_SECRET", "whsec_test_secret")
+    monkeypatch.setattr(config, "STRIPE_SECRET_KEY", "sk_test_placeholder")
+    db.init_db()
+    lead_id = db.insert_lead("Guard Test", "cafe", "York", status=initial)
+    db.update_lead_fields(lead_id, won_amount=589)
+    payload = json.dumps({
+        "id": "evt_guard", "object": "event", "type": "checkout.session.completed",
+        "livemode": event_live,
+        "data": {"object": {"payment_status": payment_status, "mode": mode,
+            "amount_total": 100, "metadata": {"lead_id": str(lead_id) if metadata == "valid" else metadata}}},
+    }).encode()
+    response = webhook_server.create_app().test_client().post(
+        "/webhook/stripe", data=payload, content_type="application/json",
+        headers={"Stripe-Signature": stripe_signature(payload, "whsec_test_secret")})
+    assert response.status_code == expected_status
+    lead = db.get_lead(lead_id)
+    assert lead["status"] == expected_lead
+    assert lead["won_amount"] == 589

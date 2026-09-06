@@ -68,7 +68,7 @@ def create_app() -> Flask:
 
     @app.route("/payment-success", methods=["GET"])
     def payment_success() -> tuple[str, int]:
-        return "<h1>Payment received -- thank you!</h1><p>We'll be in touch shortly.</p>", 200
+        return "<h1>Thanks for checking out.</h1><p>Payment is confirmed separately by our payment provider. We'll be in touch after confirmation.</p>", 200
 
     @app.route("/payment-cancelled", methods=["GET"])
     def payment_cancelled() -> tuple[str, int]:
@@ -84,10 +84,25 @@ def create_app() -> Flask:
             abort(400)
 
         if event["type"] == "checkout.session.completed":
-            lead_id = stripe_utils.extract_lead_id(event)
+            session = event.get("data", {}).get("object", {}) or {}
+            # A completed checkout is not necessarily a settled payment.
+            # Test events must never fulfil orders under a live API key.
+            key = config.STRIPE_SECRET_KEY
+            expected_live = True if key.startswith(("sk_live_", "rk_live_")) else (
+                False if key.startswith(("sk_test_", "rk_test_")) else None
+            )
+            if (expected_live is None or event.get("livemode") is not expected_live
+                    or session.get("payment_status") != "paid"
+                    or session.get("mode") != "payment"):
+                return "", 200
+            try:
+                lead_id = stripe_utils.extract_lead_id(event)
+            except (ValueError, TypeError, OverflowError):
+                return "Invalid lead metadata", 400
             if lead_id is not None:
                 lead = db.get_lead(lead_id)
-                if lead is not None:
+                # A retry must not overwrite recorded payment or trigger handover again.
+                if lead is not None and lead.get("status") != "won":
                     db.update_lead_status(lead_id, "won", notes="Stripe checkout.session.completed")
                     amount_minor = (event.get("data", {}).get("object", {}) or {}).get("amount_total")
                     if isinstance(amount_minor, int):

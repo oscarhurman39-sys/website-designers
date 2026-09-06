@@ -2,7 +2,7 @@
 
 This is the active handoff board for the agents already seated in the Agency room. It implements the room roster as concrete work lanes and now points every lane at the first sellable agency system in `docs/AGENCY_SALES_SYSTEM.md` without enabling sourcing, outbound email, Stripe live mode, or any other go-live switch.
 
-Source of truth: `docs/STATE_AND_PLAN.md`, then `docs/ROOM_ROSTER.md`, `docs/AGENT_LOCKS.md`, and the affected source/tests.
+Source of truth: `docs/STATE_AND_PLAN.md`, then `docs/ROOM_ROSTER.md`, `docs/STARNET_SKILL_WIRING.md`, `docs/AGENT_LOCKS.md`, and the affected source/tests.
 
 ## Current safety state
 
@@ -23,6 +23,19 @@ follow-up reminder, monthly-plan escalation to a human, `won_amount` +
 pre-launch questions: `docs/STATE_AND_PLAN.md` sections 6a and 6b. The
 uncommitted lead-quality slice (website_status / lead_score / send priority)
 was committed as found, tests green.
+
+
+## StarNet skill gate
+
+The enabled web-design skills are wired through `docs/STARNET_SKILL_WIRING.md`:
+
+- `Make a Plan` is mandatory before any non-trivial source, template, payment, schema, deployment, or multi-file process change.
+- `Creative Ideation` is for bounded ideas: niches, offers, proof assets, page sections, follow-up angles. It cannot alter live send/source/payment switches.
+- `Popular Web Designs` is for concept/prototype directions and self-contained page explorations. It does not directly modify production templates until AGENCY-DESIGNER renders them and FINN reviews the patch.
+- `ASCII Art` is internal only: docs, console labels, morale banners, and operator-facing summaries.
+- The saved `website_designers_pipeline` skill is withheld until the Commander approves it in `ABILITIES > SKILLS`; agents must not guess or recreate it.
+
+Skill outputs are proposals until FINN verifies the relevant tests/renders/docs. No skill can turn on `SOURCING_ENABLED`, `ENABLE_LIVE_SEND`, Stripe live mode, webhook mode, or outbound volume.
 
 ## Active lanes
 
