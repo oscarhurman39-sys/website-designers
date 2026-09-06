@@ -227,3 +227,37 @@ This wiring changes agent process only. It does not enable live sourcing, live s
 - No follow-up email yet. Lead scoring and `website_status` now have a v1 code-backed slice for no-site/platform-only sourcing and send-priority ordering; the next gap is owned-site quality scoring after actual render/reply outcomes.
 - The Gmail connector in this workspace lacks read permission, so inbox
   placement of test sends was not verified from here.
+
+## 8. StarNet take after repo review (2026-09-06)
+
+This is no longer just a planning repo. The recent Claude changes have moved several pieces from "idea" into code-backed launch machinery:
+
+- Stripe webhook safety is now meaningfully better: `checkout.session.completed` only marks a lead `won` when the event livemode matches the configured Stripe key, the Checkout session is `payment_status=paid`, the session `mode=payment`, and the lead is not already won. This protects live mode from test events, unpaid completed sessions, subscription-mode events, and webhook retries.
+- The Commander decisions are mostly encoded as defaults now, not just `.env` wishes: £589 one-off, £39/month secondary offer, 14-day guarantee, 30-day free edits, one follow-up after 3 days, and Kent/Sussex sourcing towns.
+- Lead-quality v1 is real: Google Places candidates now get `website_status`, `site_score`, `lead_score`, and `contact_channel`; designed leads are ordered by stored `lead_score` before legacy blank-score leads.
+- Outcome learning exists at the first useful level: `won_amount` and `run.py report` can show funnel/revenue by niche once real outcomes exist.
+- The agency docs are now aligned enough that Claude/StarNet agents have a common operating map: `AGENCY_SALES_SYSTEM`, `CLIENT_PROPOSAL_AND_TERMS`, `AGENT_WORKBOARD`, `ROOM_ROSTER`, `AGENT_LOCKS`, and `STARNET_SKILL_WIRING` all point in the same general direction.
+
+My take for Claude: keep improving toward a watched first batch, not toward more autonomous cleverness. The money pipe and follow-up path are becoming live-capable, but the system still should not be allowed to source/send/charge unattended until the operational proof is boring.
+
+### What I would improve next, in order
+
+1. **Fix the stale sourcing/readme wording.** `pipeline/agents/sourcing_agent.py` can now keep no-site/platform-only leads when `SOURCING_REQUIRE_WEBSITE=false`, but `README.md` still says sourcing inserts businesses that already have a website and skips platform/directory listings. That doc is now half-wrong and could make the next agent operate the old strategy by mistake.
+2. **Add a preflight command for go-live.** Claude should add one command, probably `python run.py preflight`, that prints a hard yes/no for: config valid, `ENABLE_LIVE_SEND`, `SOURCING_ENABLED`, Stripe key mode vs webhook expectation, public URL not localhost, DB contains test leads, mailbox cap, and whether recent renders exist. Right now that knowledge is scattered across docs and human memory.
+3. **Clean or quarantine test artefacts before any first batch.** `git status --short` shows generated test assets/traces under `pipeline/assets/` and `.pytest-tmp/` style paths. They may be harmless, but they make it harder to see real work in the repo. Claude should either gitignore/remove generated assets or deliberately document why they are fixtures.
+4. **Make `SOURCING_REQUIRE_WEBSITE` decision explicit in docs and config comments.** The code default still keeps no-website leads out unless the flag is flipped. That is safe, but it means the shiny `none/platform_only` scoring path is mostly dormant until an operator deliberately changes sourcing rules or imports those leads another way.
+5. **Render audit before copy tinkering.** The template is the pitch. Do not spend another cycle polishing email copy until `python pipeline/render_preview.py` has been reviewed for desktop/tablet/mobile and defects are filed by niche. If the page looks generic, the rest of the funnel is just well-instrumented spam.
+6. **Add owned-site quality scoring only after the render audit.** The current score handles `none` and `platform_only`; owned sites still need cheap checks such as HTTPS, viewport meta, title, stale copyright, weight, mobile screenshot, and obvious placeholder/ancient design signals. That should be a small tested slice, not a giant crawler.
+7. **Keep subscriptions human-only until Stripe Billing is explicitly built.** The copy offers £39/month and the agent escalates monthly interest. That is the right interim move. Do not fake subscription automation with one-off Checkout sessions.
+
+### Verification note from StarNet
+
+I inspected the repo and ran `venv\\Scripts\\python.exe -m pytest -q`. The suite did not prove green in this run because pytest hit a Windows temp-folder permission problem before many fixture-based tests could start: `PermissionError: [WinError 5] Access is denied: C:\\Users\\Oscar's PC\\AppData\\Local\\Temp\\pytest-of-Oscar's PC`. That looks environmental, not a code assertion failure. I then reran the most relevant targeted tests with `TMP` and `TEMP` pointed at `.pytest-tmp`: `venv\\Scripts\\python.exe -m pytest tests/test_sourcing_agent.py tests/test_operator_decisions.py tests/test_stripe_money_pipe.py -q`, and that command exited 0. Re-run the full suite with a repo-local temp base before treating the whole current tree as verified.
+
+### Claude should not change these without Commander confirmation
+
+- Do not flip `ENABLE_LIVE_SEND=true`.
+- Do not flip `SOURCING_ENABLED=true`.
+- Do not swap Stripe into live mode or create live payment/webhook assumptions silently.
+- Do not increase outbound volume or add more mailboxes as a code default.
+- Do not turn the £39/month option into automatic subscription billing until Stripe Billing has its own tested implementation.
