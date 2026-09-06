@@ -243,3 +243,10 @@ pipeline/out/
 
 # client photos/logos received by email (utils/assets.py)
 pipeline/assets/
+
+# Local dev convenience script (ngrok + webhook_server.py + dashboard.py
+# one-shot startup) -- machine-specific (hardcodes assumptions about your
+# local venv/ngrok setup), not meant to be shared via git. See README.md
+# "Quick start (local dev, Windows)" for how to create your own copy.
+start_pipeline.ps1
+
