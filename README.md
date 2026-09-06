@@ -108,6 +108,22 @@ While `main.py` is running, type commands at its console:
 | `help` | List commands |
 | `quit` | Shut down |
 
+**Launch checklist** (run before the first real batch, all from the repo root):
+
+```bash
+python run.py preflight          # env, gates, caps, DB hygiene, every template renders; exit 1 on BLOCK
+python run.py render-previews    # writes pipeline/previews/<niche>/index.html -- open and approve visually
+python run.py reset-db --yes     # backs up leads.db, wipes it, keeps the unsubscribe list
+```
+
+`ENABLE_LIVE_SEND` defaults to `false`: the pipeline runs end to end but every
+email (cold, payment link, goodbye) is written to `pipeline/dry_run/` as a
+`.eml`/`.json` file instead of being sent. Read those files, then set
+`ENABLE_LIVE_SEND=true` in `.env`. Leads emailed during a dry run are marked
+`emailed` with a `DRY RUN` note; `preflight` warns about them and `reset-db`
+clears them. Daily/hourly caps come from `EMAIL_MAX_PER_DAY` /
+`EMAIL_MAX_PER_HOUR` in `.env` (defaults 10/day, 20/hour).
+
 **Start the webhook server** (needed for click tracking, one-click
 unsubscribe, and Stripe payment webhooks -- must be publicly reachable at
 `PUBLIC_BASE_URL`):
@@ -203,12 +219,19 @@ convention -- the roles this pipeline needed (e.g. `stripe-checkout`,
 
 Before sending real cold email at volume, read `WARMUP.md` -- it covers
 SPF/DKIM/DMARC setup, a manual or tool-assisted (Mailwarm etc.) warm-up
-ramp, and reputation monitoring. The pipeline's `EMAIL_MAX_PER_HOUR=20` /
-`EMAIL_MAX_PER_DAY=50` caps (`pipeline/config.py`) stop the *pipeline*
+ramp, and reputation monitoring. The pipeline's caps (`EMAIL_MAX_PER_HOUR`,
+`EMAIL_MAX_PER_DAY` in `.env`; defaults 20/hour, 10/day) stop the *pipeline*
 from sending too fast; they don't substitute for actually warming up a
 new domain first.
 
 ## Testing
+
+Unit tests run offline with a plain `pytest` (no `.env` needed):
+
+```bash
+pip install -r pipeline/requirements.txt
+pytest tests -q
+```
 
 `tests/test_pipeline_real.py` is an opt-in, end-to-end integration test
 that exercises the real pipeline against real GitHub/Vercel/SMTP/IMAP

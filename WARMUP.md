@@ -5,8 +5,8 @@ domain that suddenly jumps from 0 to 50 emails/day) gets flagged by spam
 filters fast, and a burned domain is expensive to recover -- easier to warm
 it up properly once than to fix a bad reputation later.
 
-**The pipeline already enforces hard caps** (`pipeline/config.py`):
-`EMAIL_MAX_PER_HOUR = 20`, `EMAIL_MAX_PER_DAY = 50`, with a random
+**The pipeline already enforces hard caps** (`EMAIL_MAX_PER_HOUR` /
+`EMAIL_MAX_PER_DAY` in `.env`, defaults 20/hour and 10/day), with a random
 120-300s delay between sends. Those caps protect you from *the pipeline*
 sending too fast -- they do **not** warm up a new domain's reputation for
 you. Reputation is built by mailbox providers (Gmail, Outlook, etc.)

@@ -198,7 +198,10 @@ def _testimonial(lead: dict) -> str:
     )
 
 
-def build_context(lead: dict) -> dict:
+def build_context(lead: dict, hero_image_url: Optional[str] = None) -> dict:
+    """Template context for one lead. `hero_image_url` lets offline callers
+    (launch.py's render-previews) skip the Unsplash lookup; every pipeline
+    caller leaves it None and gets the normal get_hero_image_url() result."""
     niche = lead["niche"]
     return {
         "business_name": lead["business_name"],
@@ -206,7 +209,7 @@ def build_context(lead: dict) -> dict:
         "location": lead.get("location") or "",
         "pain_point_solution": _pain_point_solution(lead),
         "testimonial": _testimonial(lead),
-        "hero_image_url": get_hero_image_url(niche),
+        "hero_image_url": hero_image_url or get_hero_image_url(niche),
         "year": datetime.now(timezone.utc).year,
         # Added for the newer Tailwind-based templates (landscaper/cafe/
         # plumber/salon/electrician); older templates simply ignore unused

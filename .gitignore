@@ -233,4 +233,6 @@ pipeline/leads_processed/
 pipeline/.scheduler.pid
 pipeline/scheduler.log
 pipeline/screenshots/
-
+pipeline/dry_run/
+pipeline/previews/
+*.db.bak-*

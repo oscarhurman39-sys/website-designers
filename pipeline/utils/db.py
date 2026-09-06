@@ -238,6 +238,42 @@ def mark_unsubscribed(lead_id: int, email: str) -> None:
         conn.execute("UPDATE leads SET status = 'unsubscribed' WHERE id = ?", (lead_id,))
 
 
+def list_unsubscribes() -> list[dict[str, Any]]:
+    """Every suppressed address with its timestamp. Used by launch.py's
+    reset-db so a database reset never forgets who asked us to stop."""
+    with get_connection() as conn:
+        rows = conn.execute("SELECT email, timestamp FROM unsubscribes ORDER BY timestamp").fetchall()
+        return [dict(r) for r in rows]
+
+
+def restore_unsubscribes(rows: list[dict[str, Any]]) -> None:
+    """Re-insert rows from list_unsubscribes() into a fresh database,
+    keeping their original timestamps. Idempotent."""
+    with get_connection() as conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO unsubscribes (email, timestamp) VALUES (?, ?)",
+            [(r["email"], r["timestamp"]) for r in rows],
+        )
+
+
+def list_dry_run_emailed_lead_ids() -> list[int]:
+    """Leads currently 'emailed' whose transition into that status was a
+    dry run (ENABLE_LIVE_SEND=false), so no real email ever went out."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT l.id FROM leads l JOIN state_history h ON h.lead_id = l.id "
+            "WHERE l.status = 'emailed' AND h.to_state = 'emailed' AND h.notes LIKE '%DRY RUN%' "
+            "ORDER BY l.id"
+        ).fetchall()
+        return [r["id"] for r in rows]
+
+
+def count_leads_by_status() -> dict[str, int]:
+    with get_connection() as conn:
+        rows = conn.execute("SELECT status, COUNT(*) AS n FROM leads GROUP BY status").fetchall()
+        return {r["status"]: r["n"] for r in rows}
+
+
 def is_unsubscribed(email: str) -> bool:
     with get_connection() as conn:
         row = conn.execute("SELECT 1 FROM unsubscribes WHERE email = ?", (email,)).fetchone()

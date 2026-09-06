@@ -15,12 +15,13 @@ from __future__ import annotations
 
 import email
 import imaplib
+import json
 import logging
 import re
 import smtplib
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from email.header import decode_header
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
@@ -48,6 +49,26 @@ import config
 from utils import compliance
 
 logger = logging.getLogger(__name__)
+
+
+def _record_dry_run(lead_id: int, to_addr: str, message_id: str, payload: str, ext: str) -> Path:
+    """Write a fully built outbound email to config.DRY_RUN_DIR instead of
+    sending it. Called by both transports when ENABLE_LIVE_SEND is false --
+    the single choke point that keeps every code path (cold emails, payment
+    links, goodbyes, test_email.py) from reaching SMTP/SendGrid until the
+    operator flips the gate in .env."""
+    dry_dir = Path(config.DRY_RUN_DIR)
+    dry_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    safe_addr = "".join(ch if ch.isalnum() else "_" for ch in to_addr)[:40]
+    path = dry_dir / f"{stamp}-lead{lead_id}-{safe_addr}.{ext}"
+    path.write_text(payload, encoding="utf-8")
+    logger.warning(
+        f"DRY RUN (ENABLE_LIVE_SEND=false): email to {to_addr} written to {path}, NOT sent "
+        f"(Message-ID {message_id})"
+    )
+    print(f"[email] DRY RUN -- not sent. Written to {path}")
+    return path
 
 # Simple email validation regex
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
@@ -128,6 +149,10 @@ def send_email(
     msg["Message-ID"] = message_id
     msg["List-Unsubscribe"] = compliance.list_unsubscribe_header(lead_id)
     msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+
+    if not config.ENABLE_LIVE_SEND:
+        _record_dry_run(lead_id, to_addr, message_id, msg.as_string(), "eml")
+        return message_id
 
     with smtplib.SMTP(config.EMAIL_HOST, config.EMAIL_PORT, timeout=30) as server:
         server.starttls()
@@ -255,6 +280,10 @@ def send_email_sendgrid(
         )
         mail.add_attachment(attachment)
         logger.debug(f"Added inline image: {image_path.name} ({len(image_bytes)} bytes)")
+
+    if not config.ENABLE_LIVE_SEND:
+        _record_dry_run(lead_id, to_addr, message_id, json.dumps(mail.get(), indent=2, default=str), "json")
+        return message_id
 
     # Send via SendGrid
     try:

@@ -37,6 +37,19 @@ REQUIRED_VARS: list[str] = [
     "PHYSICAL_ADDRESS",
 ]
 
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in ("1", "true", "yes", "on")
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    return int(raw) if raw else default
+
+
 # --- Values (all optional at import time; validated via validate()) --------
 GITHUB_TOKEN: str = os.getenv("GITHUB_TOKEN", "")
 VERCEL_TOKEN: str = os.getenv("VERCEL_TOKEN", "")
@@ -85,11 +98,25 @@ VOLTAGENT_SECRET_KEY: str = os.getenv("VOLTAGENT_SECRET_KEY", "")
 VOLTAGENT_BASE_URL: str = (os.getenv("VOLTAGENT_BASE_URL", "").strip() or "https://api.voltagent.dev").rstrip("/")
 TRACES_PATH: str = os.getenv("TRACES_PATH", "").strip() or str(Path(__file__).resolve().parent / "traces.json")
 
+# --- Live-send gate ----------------------------------------------------------
+# False (the default) means every outbound email is fully built -- footer,
+# unsubscribe headers, inline screenshot -- and then written to
+# pipeline/dry_run/ as a .eml/.json file instead of being handed to SMTP or
+# SendGrid. Nothing leaves the machine until ENABLE_LIVE_SEND=true is set in
+# .env. Enforced inside utils/email_utils.py so every caller is covered.
+ENABLE_LIVE_SEND: bool = _env_bool("ENABLE_LIVE_SEND", default=False)
+DRY_RUN_DIR: str = os.getenv("DRY_RUN_DIR", "").strip() or str(Path(__file__).resolve().parent / "dry_run")
+
 # --- Rate limiting (cold email deliverability safeguards) ------------------
 EMAIL_MIN_DELAY_SECONDS: int = 120
 EMAIL_MAX_DELAY_SECONDS: int = 300
-EMAIL_MAX_PER_HOUR: int = 20
-EMAIL_MAX_PER_DAY: int = 50
+# Both caps can be raised in .env once the sending domain is warmed up (see
+# WARMUP.md). The defaults are the cautious first-week numbers;
+# `python run.py preflight` warns when the daily cap is above
+# FIRST_WEEK_MAX_PER_DAY.
+FIRST_WEEK_MAX_PER_DAY: int = 10
+EMAIL_MAX_PER_HOUR: int = _env_int("EMAIL_MAX_PER_HOUR", 20)
+EMAIL_MAX_PER_DAY: int = _env_int("EMAIL_MAX_PER_DAY", FIRST_WEEK_MAX_PER_DAY)
 # NOTE: A dedicated IP/domain warm-up tool (e.g. Instantly, Mailwarm, or a
 # manual warm-up schedule) is strongly recommended for the first 2-4 weeks of
 # a new sending domain's life. This pipeline only staggers *send timing* and

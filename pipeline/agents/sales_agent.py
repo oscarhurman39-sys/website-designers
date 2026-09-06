@@ -20,7 +20,12 @@ import requests
 from huggingface_hub import InferenceClient
 
 import config
+from agents.design_agent import _AUTH_PAGE_MARKERS, _AUTH_URL_PARTS
 from utils import compliance, db, email_utils, screenshot, tracer, tracker
+
+# How long _validate_preview_link_for_send waits for the deployed preview to
+# answer before refusing to email a link that might be dead.
+_PREVIEW_VALIDATION_TIMEOUT_SECONDS = 15
 
 try:
     from slack_sdk import WebClient
@@ -243,17 +248,6 @@ def _closing_paragraphs(preview_link: str) -> list[str]:
 
 def _validate_preview_link_for_send(preview_link: str) -> str:
     """Return a public preview URL or raise before any cold email is sent."""
-    website = db.get_website_by_lead(lead["id"])
-    preview_link = website["preview_url"] if website and website.get("preview_url") else ""
-    try:
-        preview_link = _validate_preview_link_for_send(preview_link)
-    except RuntimeError as exc:
-        db.update_lead_status(
-            lead["id"],
-            "researched",
-            notes=f"Email blocked: preview URL is not publicly sendable ({exc})",
-        )
-        return False
     parsed = urlparse(preview_link)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise RuntimeError(f"Preview URL is missing or invalid: {preview_link!r}")
@@ -423,7 +417,14 @@ def _send_cold_email_impl(lead: dict) -> bool:
         to_addr=email_addr,
         message_id=message_id,
     )
-    db.update_lead_status(lead["id"], "emailed", notes="Cold email sent")
+    if config.ENABLE_LIVE_SEND:
+        db.update_lead_status(lead["id"], "emailed", notes="Cold email sent")
+    else:
+        db.update_lead_status(
+            lead["id"],
+            "emailed",
+            notes="DRY RUN -- email written to pipeline/dry_run/, not sent (ENABLE_LIVE_SEND=false)",
+        )
 
     _next_send_allowed_at = datetime.now(timezone.utc) + timedelta(
         seconds=random.uniform(config.EMAIL_MIN_DELAY_SECONDS, config.EMAIL_MAX_DELAY_SECONDS)

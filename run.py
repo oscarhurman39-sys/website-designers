@@ -4,6 +4,9 @@
     python run.py loop                 # main.py's always-on orchestrator + console
     python run.py dashboard            # streamlit run dashboard.py
     python run.py test-email <email>   # one-shot: pipeline/test_email.py
+    python run.py preflight            # launch-readiness checks: pipeline/launch.py
+    python run.py render-previews      # render every template offline for visual approval
+    python run.py reset-db --yes       # back up + wipe leads.db (keeps the unsubscribe list)
 
 Each mode runs as its own subprocess, not imported in-process -- this is a
 thin dispatcher, not a reimplementation. That matters because `loop` reads
@@ -45,7 +48,19 @@ def run_test_email(extra_args: list[str]) -> int:
     )
 
 
+def _run_launch_tool(subcommand: str):
+    def _run(extra_args: list[str]) -> int:
+        return subprocess.call(
+            [sys.executable, str(PIPELINE_DIR / "launch.py"), subcommand, *extra_args], cwd=str(PIPELINE_DIR)
+        )
+
+    return _run
+
+
 _MODES = {
+    "preflight": _run_launch_tool("preflight"),
+    "render-previews": _run_launch_tool("render-previews"),
+    "reset-db": _run_launch_tool("reset-db"),
     "quick-test": run_quick_test,
     "loop": run_loop,
     "dashboard": run_dashboard,
