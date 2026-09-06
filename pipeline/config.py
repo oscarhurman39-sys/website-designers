@@ -123,10 +123,10 @@ def _int_env(*names: str, default: int) -> int:
 
 
 # Amount charged via Stripe checkout once a lead says yes, in CURRENCY units.
-WEBSITE_PRICE: int = _int_env("WEBSITE_PRICE", "WEBSITE_PRICE_USD", default=750)
+WEBSITE_PRICE: int = _int_env("WEBSITE_PRICE", "WEBSITE_PRICE_USD", default=589)
 # Discounted price quoted in cold emails for the pre-built draft (see
 # sales_agent.py's offer copy). Separate from WEBSITE_PRICE.
-WEBSITE_OFFER_PRICE: int = _int_env("WEBSITE_OFFER_PRICE", default=750)
+WEBSITE_OFFER_PRICE: int = _int_env("WEBSITE_OFFER_PRICE", default=589)
 # The higher "standard package" figure the cold email anchors against before
 # quoting the discounted draft price. Config, not a magic number in the copy,
 # so it moves with the currency.
@@ -247,7 +247,12 @@ SOURCING_NICHES: list[str] = [
 # contains a comma itself. Each is appended to the niche: "plumber in Oxted, Surrey".
 SOURCING_LOCATIONS: list[str] = _env_list(
     "SOURCING_LOCATIONS",
-    "Oxted, Surrey; Caterham, Surrey; Reigate, Surrey; Croydon, London; Bromley, London",
+    "Maidstone, Kent; Ashford, Kent; Canterbury, Kent; Tonbridge, Kent; Tunbridge Wells, Kent; "
+    "Sevenoaks, Kent; Dartford, Kent; Gravesend, Kent; Folkestone, Kent; Dover, Kent; Margate, Kent; "
+    "Whitstable, Kent; Sittingbourne, Kent; Faversham, Kent; Brighton, East Sussex; Eastbourne, East Sussex; "
+    "Hastings, East Sussex; Lewes, East Sussex; Uckfield, East Sussex; Crawley, West Sussex; "
+    "Horsham, West Sussex; Worthing, West Sussex; Haywards Heath, West Sussex; Burgess Hill, West Sussex; "
+    "Chichester, West Sussex; Bognor Regis, West Sussex",
     ";",
 )
 # main.py runs sourcing at most this often (it's a quota-spending API call,
