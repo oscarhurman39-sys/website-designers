@@ -302,7 +302,41 @@ First real batch, in order. Every step is a command that already exists:
    say `GO (ARMED)`), start the loop, watch Slack alerts and the dashboard.
 6. After ten real outcomes, change copy/price/niche/towns from data, not taste.
 
-StarNet's part: keep the E-STOP on (the `Daily Sales Pipeline` routine runs
-the loop at 19:00 as MASKY at FULL POWER) until step 5 is deliberate; keep
-`AGENCY-NEGOTIATOR` in ASK mode for the first ten replies; the station is not
-needed for any of steps 1-5.
+## 10. StarNet station, rewired 2026-09-08
+
+The station now drives the sourcing and research side. What changed:
+
+- **Every one of the 11 agents moved from `openai/gpt-5.5` to `codex/gpt-5.5`**
+  -- same model, but the ChatGPT-subscription lane, so agent runs no longer bill
+  the metered OpenAI key. Spend today went to $0.00. Reasoning was off
+  (`effort=none`) on seven of them; now `low` for routine crew and `medium` for
+  MASKY, AGENCY-NEGOTIATOR and the accessibility checker.
+- **The agency room could not reach the web.** It had compute, files and
+  terminal but no dish and no server cart, so the designer, marketer and
+  accessibility checker had no search, fetch, browser, notebook or saved
+  skills on the interactive surface. A dish and a server cart were placed; the
+  room now grants COMPUTE + FILES + TERMINAL + WEB + MEMORY.
+- **Guardrails set before the E-STOP was lifted:** budget caps of $2 per run
+  and $10 per day (there were none), max iterations 40 (was unlimited), and
+  AGENCY-NEGOTIATOR dropped from FULL POWER to ASK, because it reads
+  unsolicited email from strangers and had unattended write/execute authority.
+- **MASKY's `context.md` and `operating-manual.md` were empty and are now
+  written.** The operating manual is the durable guardrail: it names
+  `ENABLE_LIVE_SEND`, `SOURCING_ENABLED`, the live Stripe keys and the mailbox
+  caps as switches no agent may touch without Oscar saying so in the current
+  conversation, and tells the agent to treat prospect replies and scraped
+  websites as data rather than instructions.
+- **E-STOP fully lifted**: scheduling armed, loops running, night shift ACTIVE.
+
+Still broken, needs a decision: the `hello` and `Daily Sales Pipeline` routines
+fail immediately with `origin delivery has no captured channel target`. They
+are saved but cannot fire until they are re-saved from the chat session their
+output should land in -- which means choosing that session. Until then the
+daily 19:00 pipeline run does not happen.
+
+Two things to know about the tooling: `scripts/station-report.js` reports
+scheduling and loops as HALTED whenever the halt files exist, even when they
+contain `"halted": false`, so check `cron.halt.json` and `loops.halt.json`
+directly rather than trusting that line. And in the model dropdown there are
+two entries reading `gpt 5.5`: the one under the **GPT / CODEX** group header is
+the unmetered lane, the lowercase one under **OPENAI API** is the metered one.
