@@ -8,6 +8,8 @@
     python run.py report                     # per-niche funnel + revenue
     python run.py rebuild <lead_id>          # one-shot: pipeline/rebuild_preview.py
     python run.py source [--limit N] [--dry-run]   # one-shot: pipeline/source_leads.py
+    python run.py preflight [--offline]     # go-live readiness check; prints GO / READY / NO-GO
+    python run.py preview-email [--lead ID] # print the exact cold email; nothing sent or written
 
 Each mode runs as its own subprocess, not imported in-process -- this is a
 thin dispatcher, not a reimplementation. That matters because `loop` reads
@@ -75,6 +77,18 @@ def run_source(extra_args: list[str]) -> int:
     )
 
 
+def run_preflight(extra_args: list[str]) -> int:
+    return subprocess.call(
+        [sys.executable, str(PIPELINE_DIR / "preflight.py"), *extra_args], cwd=str(PIPELINE_DIR)
+    )
+
+
+def run_preview_email(extra_args: list[str]) -> int:
+    return subprocess.call(
+        [sys.executable, str(PIPELINE_DIR / "preview_email.py"), *extra_args], cwd=str(PIPELINE_DIR)
+    )
+
+
 _MODES = {
     "quick-test": run_quick_test,
     "loop": run_loop,
@@ -84,6 +98,8 @@ _MODES = {
     "source": run_source,
     "rebuild": run_rebuild,
     "report": run_report,
+    "preflight": run_preflight,
+    "preview-email": run_preview_email,
 }
 
 

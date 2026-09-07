@@ -231,3 +231,150 @@ def test_cleanup_tests_ignores_blank_admin_email(tmp_db, monkeypatch):
     monkeypatch.setattr(config, "ADMIN_EMAIL", "")
     _make_lead("emailed", business_name="Real Prospect", contact_email="")
     assert cleanup_tests.find_test_leads() == []
+
+
+# --- Pre-launch reset: teardown --all and cleanup_tests --reset ------------------
+
+
+def test_find_test_leads_matches_the_testville_marker_location(tmp_db, monkeypatch):
+    monkeypatch.setattr(config, "ADMIN_EMAIL", "")
+    fake = db.insert_lead("Surrey Auto", "vehicle-repair", "Testville", status="designed")
+    db.insert_lead("Surrey Auto", "vehicle-repair", "Oxted", status="designed")
+    assert {lead["id"] for lead in cleanup_tests.find_test_leads()} == {fake}
+
+
+def test_teardown_all_takes_every_deployed_preview_but_never_a_transferred_one(tmp_db, fake_apis):
+    delete_project, delete_repo = fake_apis
+    fresh = _make_lead("designed", site_age_days=0.1)
+    old = _make_lead("lost", site_age_days=30, email_age_days=30)
+    handed_over = _make_lead("emailed", business_name="Handed Over", transferred=True)
+
+    assert {row["lead_id"] for row in db.list_live_previews()} == {fresh, old}
+    assert teardown.expire_previews(dry_run=True, all_previews=True) == 0
+    delete_project.assert_not_called()
+
+    assert teardown.expire_previews(all_previews=True) == 2
+    assert delete_project.call_count == 2
+    assert delete_repo.call_count == 2
+    assert db.list_live_previews() == []
+    assert db.get_website_by_lead(handed_over)["torn_down_at"] is None
+    assert db.get_lead(fresh)["status"] == "designed"  # housekeeping never moves the funnel
+
+
+def test_teardown_all_refuses_when_any_lead_has_paid(tmp_db, fake_apis):
+    delete_project, _ = fake_apis
+    _make_lead("designed")
+    _make_lead("won", business_name="Paying Client")
+    assert teardown.expire_previews(all_previews=True) == 0
+    delete_project.assert_not_called()
+
+
+def test_reset_refuses_while_previews_are_deployed_or_data_looks_real(tmp_db, monkeypatch, tmp_path):
+    monkeypatch.setattr(cleanup_tests, "ARCHIVE_DIR", tmp_path / "archive")
+    monkeypatch.setattr(config, "TRACES_PATH", str(tmp_path / "traces.json"))
+    lead = _make_lead("designed")
+
+    assert cleanup_tests.reset_prelaunch() is None  # a preview is still deployed
+    assert db.get_lead(lead) is not None
+
+    db.mark_website_torn_down(db.get_website_by_lead(lead)["id"])
+    db.mark_unsubscribed(lead, "owner@example.com")
+    assert cleanup_tests.reset_prelaunch() is None  # a suppression entry exists
+    assert db.get_lead(lead) is not None
+    assert not (tmp_path / "archive").exists()
+
+
+def test_reset_archives_the_database_and_starts_empty(tmp_db, monkeypatch, tmp_path):
+    import sqlite3
+
+    archive_dir = tmp_path / "archive"
+    monkeypatch.setattr(cleanup_tests, "ARCHIVE_DIR", archive_dir)
+    traces = tmp_path / "traces.json"
+    traces.write_text("[]")
+    monkeypatch.setattr(config, "TRACES_PATH", str(traces))
+    lead = _make_lead("emailed", email_age_days=1)
+    db.mark_website_torn_down(db.get_website_by_lead(lead)["id"])
+
+    assert cleanup_tests.reset_prelaunch(dry_run=True) is None
+    assert db.get_lead(lead) is not None
+
+    archive = cleanup_tests.reset_prelaunch()
+    assert archive is not None and archive.exists()
+    assert db.get_lead(lead) is None
+    with db.get_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM leads").fetchone()[0] == 0
+    copied = sqlite3.connect(archive)
+    try:
+        assert copied.execute("SELECT COUNT(*) FROM leads").fetchone()[0] == 1
+    finally:
+        copied.close()
+    assert not traces.exists()
+    assert (archive_dir / archive.name.replace("leads-", "traces-").replace(".db", ".json")).exists()
+
+
+# --- A token without delete_repo must not stall the cleanup ----------------------
+
+
+def test_teardown_records_the_preview_as_gone_when_the_repo_cannot_be_deleted(
+    tmp_db, fake_apis, monkeypatch, tmp_path
+):
+    """A 403 means the token lacks delete_repo: retrying can never work, and
+    the Vercel project is already deleted, so the preview really is dead."""
+    delete_project, delete_repo = fake_apis
+    monkeypatch.setattr(teardown, "ARCHIVE_DIR", tmp_path / "archive")
+    lead = _make_lead("emailed", email_age_days=30)
+    repo = db.get_website_by_lead(lead)["repo_full_name"]
+    delete_repo.side_effect = github_api.RepoDeleteForbidden(repo)
+
+    assert teardown.expire_previews() == 1
+    delete_project.assert_called_once()
+    assert db.get_website_by_lead(lead)["torn_down_at"] is not None  # not retried forever
+    assert db.list_live_previews() == []                            # and the reset is unblocked
+
+    listed = sorted((tmp_path / "archive").glob("orphan-repos-*.txt"))
+    assert len(listed) == 1
+    assert listed[0].read_text(encoding="utf-8").strip() == repo
+    with db.get_connection() as conn:
+        notes = conn.execute(
+            "SELECT notes FROM state_history WHERE lead_id = ? ORDER BY id DESC LIMIT 1", (lead,)
+        ).fetchone()["notes"]
+    assert "left in place" in notes
+
+
+def test_a_transient_github_failure_is_still_retried_next_pass(tmp_db, fake_apis):
+    _, delete_repo = fake_apis
+    delete_repo.side_effect = RuntimeError("502 Bad Gateway")
+    lead = _make_lead("emailed", email_age_days=30)
+
+    assert teardown.expire_previews() == 0
+    assert db.get_website_by_lead(lead)["torn_down_at"] is None
+    assert {row["lead_id"] for row in db.list_expired_previews(config.PREVIEW_TTL_DAYS)} == {lead}
+
+
+def test_cleanup_tests_deletes_the_lead_even_when_its_repo_survives(tmp_db, fake_apis, monkeypatch, tmp_path):
+    delete_project, delete_repo = fake_apis
+    monkeypatch.setattr(teardown, "ARCHIVE_DIR", tmp_path / "archive")
+    monkeypatch.setattr(config, "ADMIN_EMAIL", "")
+    delete_repo.side_effect = github_api.RepoDeleteForbidden("me/test-business-preview-1")
+    lead = _make_lead("designed", business_name="Test Business")
+
+    assert cleanup_tests.cleanup() == 1
+    assert db.get_lead(lead) is None
+    assert delete_project.call_count == 1
+    assert sorted((tmp_path / "archive").glob("orphan-repos-*.txt"))
+
+
+def test_delete_listed_repos_clears_the_saved_list_and_reports_a_still_bad_token(fake_apis, tmp_path):
+    _, delete_repo = fake_apis
+    listing = tmp_path / "orphan-repos.txt"
+    listing.write_text("me/one\n\nme/two\n", encoding="utf-8")  # blank lines ignored
+
+    assert teardown.delete_listed_repos(listing, dry_run=True) == 0
+    delete_repo.assert_not_called()
+
+    assert teardown.delete_listed_repos(listing) == 2
+    assert [call.args[0] for call in delete_repo.call_args_list] == ["me/one", "me/two"]
+
+    delete_repo.reset_mock()
+    delete_repo.side_effect = github_api.RepoDeleteForbidden("me/one")
+    assert teardown.delete_listed_repos(listing) == 0  # scope still missing: nothing silently "succeeds"

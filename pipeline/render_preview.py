@@ -2,12 +2,21 @@
 screenshot each one -- no GitHub repo, no Vercel deploy, no DB writes.
 
     python pipeline/render_preview.py                 # all niches, sample data
+    python pipeline/render_preview.py --all-widths    # + tablet and phone screenshots
     python pipeline/render_preview.py --lead 81       # a real lead from the DB
     python pipeline/render_preview.py --niche plumber --no-screenshot
 
 Output goes to pipeline/out/<slug>/index.html (+ style.css) and
-pipeline/out/<slug>.png. Use it to check a template change by eye before
-the next real lead gets a site built from it.
+pipeline/out/<slug>.png (desktop, 1280 wide); --all-widths adds
+<slug>.tablet.png (834 wide) and <slug>.mobile.png (390 wide, 2x). Use it to
+check a template change by eye before the next real lead gets a site built
+from it.
+
+Known capture limitation: the "Get in touch" map (a Google Maps embed
+iframe) is not captured by headless Chromium and shows as an empty white
+box in these PNGs; that is the screenshot, not the template. Judge
+everything else from the PNGs and check the map by opening
+pipeline/out/<slug>/index.html (or a deployed preview) in a real browser.
 """
 from __future__ import annotations
 
@@ -54,7 +63,17 @@ def _slug(lead: dict) -> str:
     return "".join(c if c.isalnum() else "-" for c in f"{lead['niche']}-{lead['business_name']}".lower()).strip("-")
 
 
-def render_one(lead: dict, screenshot: bool = True) -> Path:
+# Screenshot viewports: file-name suffix -> (width, height). Width is what
+# matters (the templates' breakpoints are width-based); height only sets the
+# first fold before the full-page capture.
+VIEWPORTS: dict[str, tuple[int, int]] = {
+    "": (1280, 800),         # desktop
+    ".tablet": (834, 1112),  # iPad-sized portrait
+    ".mobile": (390, 844),   # phone; captured at 2x so text stays legible
+}
+
+
+def render_one(lead: dict, screenshot: bool = True, all_widths: bool = False) -> Path:
     context = design_agent.build_context(lead)
     files = design_agent.render_template_files(lead["niche"], context)
     out = OUT_DIR / _slug(lead)
@@ -63,19 +82,63 @@ def render_one(lead: dict, screenshot: bool = True) -> Path:
         (out / name).write_text(content, encoding="utf-8")
     html_path = out / "index.html"
     if screenshot:
-        _screenshot(html_path, OUT_DIR / f"{_slug(lead)}.png")
+        _screenshot(html_path, _slug(lead), list(VIEWPORTS) if all_widths else [""])
     return html_path
 
 
-def _screenshot(html_path: Path, png_path: Path) -> None:
+def _serve_out_dir():
+    """Serve pipeline/out over plain HTTP on a free localhost port for the
+    duration of a screenshot run. Google's map embed renders blank when the
+    parent page is a file:// URL, which made every local render look as if
+    the contact section were broken; over http:// it behaves as on Vercel."""
+    import threading
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+    class QuietHandler(SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=str(OUT_DIR), **kwargs)
+
+        def log_message(self, *args, **kwargs):  # keep the console clean
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), QuietHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def _screenshot(html_path: Path, slug: str, suffixes: list[str]) -> None:
     from playwright.sync_api import sync_playwright
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 800})
-        page.goto(html_path.resolve().as_uri(), wait_until="networkidle", timeout=60_000)
-        page.wait_for_timeout(800)  # let the fade-up animation finish
-        page.screenshot(path=str(png_path), full_page=True)
+    server = _serve_out_dir()
+    url = f"http://127.0.0.1:{server.server_port}/{html_path.relative_to(OUT_DIR).as_posix()}"
+    try:
+        with sync_playwright() as p:
+            _capture(p, url, slug, suffixes)
+    finally:
+        server.shutdown()
+
+
+def _capture(p, url: str, slug: str, suffixes: list[str]) -> None:
+    browser = p.chromium.launch()
+    try:
+        for suffix in suffixes:
+            width, height = VIEWPORTS[suffix]
+            page = browser.new_page(
+                viewport={"width": width, "height": height},
+                device_scale_factor=2 if width < 500 else 1,
+            )
+            page.goto(url, wait_until="networkidle", timeout=60_000)
+            # The contact map is a lazy-loaded iframe: a full-page capture never
+            # scrolls, so without this nudge it screenshots as an empty box that
+            # looks like a template bug. Scroll to the bottom, let it load, go back.
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            page.wait_for_load_state("networkidle")
+            page.wait_for_timeout(1500)
+            page.evaluate("window.scrollTo(0, 0)")
+            page.wait_for_timeout(800)  # let the fade-up animation finish
+            page.screenshot(path=str(OUT_DIR / f"{slug}{suffix}.png"), full_page=True)
+            page.close()
+    finally:
         browser.close()
 
 
@@ -84,6 +147,7 @@ def main() -> None:
     parser.add_argument("--lead", type=int, help="render a real lead id from the DB instead of the samples")
     parser.add_argument("--niche", help="only render the sample for this niche")
     parser.add_argument("--no-screenshot", action="store_true")
+    parser.add_argument("--all-widths", action="store_true", help="also capture tablet and phone screenshots")
     args = parser.parse_args()
 
     if args.lead:
@@ -95,7 +159,7 @@ def main() -> None:
         leads = [l for l in SAMPLE_LEADS if not args.niche or l["niche"] == args.niche]
 
     for lead in leads:
-        path = render_one(lead, screenshot=not args.no_screenshot)
+        path = render_one(lead, screenshot=not args.no_screenshot, all_widths=args.all_widths)
         print(f"rendered {lead['niche']:<15} {lead['business_name']:<30} -> {path}")
 
 

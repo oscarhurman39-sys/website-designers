@@ -1,5 +1,6 @@
 """Flask app serving these public-facing routes:
 
+  GET  /health                             -- liveness probe used by preflight / uptime checks
   GET  /click?lead_id=<id>&token=<token>   -- click-tracking redirect to the preview site
   GET  /unsubscribe/<token>                -- one-click CAN-SPAM unsubscribe
   GET  /screenshots/<lead_id>.png          -- serves a cached preview screenshot
@@ -21,6 +22,13 @@ from utils import compliance, db, screenshot, stripe_utils, tracker
 
 def create_app() -> Flask:
     app = Flask(__name__)
+
+    @app.route("/health", methods=["GET"])
+    def health() -> tuple[dict, int]:
+        """Liveness only: proves this app is the thing answering at
+        PUBLIC_BASE_URL (ngrok's own offline page answers 404 to everything).
+        Deliberately reveals nothing about configuration or data."""
+        return {"ok": True, "service": "website-designers-webhook"}, 200
 
     @app.route("/click", methods=["GET"])
     def click_redirect() -> Response:

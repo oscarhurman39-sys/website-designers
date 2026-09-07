@@ -49,6 +49,9 @@ coverage.xml
 *.py.cover
 .hypothesis/
 .pytest_cache/
+.pytest-tmp/
+.pytest_tmp/
+.pytest_tmp_money/
 cover/
 
 # Translations
@@ -250,3 +253,6 @@ pipeline/assets/
 # "Quick start (local dev, Windows)" for how to create your own copy.
 start_pipeline.ps1
 
+# Pre-launch database archives (cleanup-tests --reset) and .env backups
+pipeline/archive/
+.env.bak-*

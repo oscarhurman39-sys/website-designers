@@ -8,8 +8,9 @@ Source of truth: `docs/STATE_AND_PLAN.md`, then `docs/ROOM_ROSTER.md`, `docs/STA
 
 - `SOURCING_ENABLED=false` unless the operator deliberately opts into hourly Google Places sourcing.
 - `ENABLE_LIVE_SEND=false` unless the operator deliberately turns real email on.
-- Stripe remains in test mode until the operator deliberately supplies live keys.
-- Existing data in `pipeline/leads.db` is test data and must not be treated as a sales queue.
+- Stripe is LIVE (keys and webhook endpoint since 2026-09-06): a YES reply on a live send creates a real, payable checkout.
+- Existing data in `pipeline/leads.db` is test data and must not be treated as a sales queue; `python run.py preflight` counts it until `cleanup-tests --reset` has been run.
+- `python run.py preflight` is the go-live gate: it must print `GO (ARMED)` after `ENABLE_LIVE_SEND` is flipped, and `NO-GO` means stop.
 - The sellable offer, lead rules, payment terms, and go-live checklist live in `docs/AGENCY_SALES_SYSTEM.md`.
 - Proposal/reply/payment wording lives in `docs/CLIENT_PROPOSAL_AND_TERMS.md`.
 - Every code change goes through FINN's review lane and the full test suite before it is considered ready.

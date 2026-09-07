@@ -138,12 +138,32 @@ def get_authenticated_username() -> str:
     return _get_client().get_user().login
 
 
+class RepoDeleteForbidden(RuntimeError):
+    """GitHub refused a repo delete with 403.
+
+    In practice this always means the personal access token carries the
+    `repo` scope but not `delete_repo` -- GitHub words it "Must have admin
+    rights to Repository" even when the token's owner *is* the owner. It is
+    a token-scope problem, not a data problem, so callers can treat the repo
+    as "left behind" and carry on rather than failing the whole batch.
+    """
+
+    def __init__(self, repo_full_name: str):
+        super().__init__(
+            f"Not allowed to delete {repo_full_name}: GITHUB_TOKEN needs the 'delete_repo' scope "
+            "(github.com/settings/tokens -> edit the token -> tick delete_repo)."
+        )
+        self.repo_full_name = repo_full_name
+
+
 def delete_repo(repo_full_name: str) -> None:
     """Permanently delete a repo. Destructive and irreversible -- used by
     utils/teardown.py (expired previews), cleanup_tests.py (throwaway test
     leads) and the opt-in integration test; never by the normal lead flow.
     A missing repo (404) is treated as success so retries and re-runs are
-    idempotent, matching vercel_api.delete_project."""
+    idempotent, matching vercel_api.delete_project. A 403 raises
+    RepoDeleteForbidden so callers can tell "token lacks delete_repo" apart
+    from a genuine API failure worth retrying."""
     client = _get_client()
     try:
         repo = client.get_repo(repo_full_name)
@@ -151,4 +171,6 @@ def delete_repo(repo_full_name: str) -> None:
     except GithubException as exc:
         if exc.status == 404:
             return
+        if exc.status == 403:
+            raise RepoDeleteForbidden(repo_full_name) from exc
         raise

@@ -534,6 +534,24 @@ def mark_website_transferred(lead_id: int) -> None:
 PREVIEW_EXPIRABLE_STATUSES = ("emailed", "lost", "bounced", "unsubscribed")
 
 
+def list_live_previews() -> list[dict[str, Any]]:
+    """Every preview still deployed: not transferred to a client and not yet
+    torn down, regardless of age or lead status. Same row shape as
+    list_expired_previews. Used by `teardown.py --all` for the pre-launch
+    reset, never by the hourly expiry pass."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT w.id AS website_id, w.lead_id, w.repo_full_name, w.preview_url,
+                      w.vercel_project_id, w.created_at,
+                      l.business_name, l.status
+               FROM websites w
+               JOIN leads l ON l.id = w.lead_id
+               WHERE w.transferred = 0 AND w.torn_down_at IS NULL
+               ORDER BY w.id ASC"""
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def list_expired_previews(ttl_days: int) -> list[dict[str, Any]]:
     """Websites whose preview has outlived its promised TTL and can be torn
     down: not transferred to a client, not already torn down, created more
@@ -582,11 +600,16 @@ def mark_website_torn_down(website_id: int) -> None:
 
 # --- Test-lead cleanup -----------------------------------------------------
 
-def find_test_leads(business_names: tuple[str, ...], contact_email: str = "") -> list[dict[str, Any]]:
+def find_test_leads(
+    business_names: tuple[str, ...],
+    contact_email: str = "",
+    locations: tuple[str, ...] = (),
+) -> list[dict[str, Any]]:
     """Leads created by manual test runs (test_email.py / quick_run.py):
-    matched by the throwaway business names those scripts use, or by the
-    operator's own contact email. An empty `contact_email` matches nothing
-    (rather than every lead with a blank email)."""
+    matched by the throwaway business names those scripts use, by the
+    operator's own contact email, or by a made-up location such as
+    "Testville". An empty `contact_email` matches nothing (rather than every
+    lead with a blank email)."""
     clauses = []
     params: list[Any] = []
     if business_names:
@@ -595,6 +618,9 @@ def find_test_leads(business_names: tuple[str, ...], contact_email: str = "") ->
     if contact_email:
         clauses.append("contact_email = ?")
         params.append(contact_email)
+    if locations:
+        clauses.append(f"location IN ({', '.join('?' for _ in locations)})")
+        params.extend(locations)
     if not clauses:
         return []
     with get_connection() as conn:

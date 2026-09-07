@@ -47,7 +47,7 @@ The repo also contains project-scoped persona files under `.claude/agents/`. Tre
 2. Contact coverage: add a safe path for no-site or directory-only businesses instead of skipping them because no website email exists.
 3. Follow-up: add one polite reminder after 3 days, then stop.
 4. Offer model: decide whether to keep one-off pricing or add an upfront-plus-monthly hosting package before live sales.
-5. Go-live readiness: clean test leads, keep Stripe in test until live keys are set, keep sending/sourcing off until the Commander explicitly flips those flags.
+5. Go-live readiness: clean test leads (`teardown.py --all` + `cleanup-tests --reset`), Stripe is already live (2026-09-06), keep sending/sourcing off until the Commander explicitly flips those flags and `run.py preflight` says GO.
 
 ## Handoff format
 

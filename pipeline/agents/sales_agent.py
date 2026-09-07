@@ -461,6 +461,12 @@ def _pin_sender(lead: dict, account: config.EmailAccount) -> None:
         lead["sender_account"] = account.user
 
 
+def cold_email_subject(lead: dict) -> str:
+    """Subject line of the first email. Shared with preview_email.py so an
+    operator review shows exactly what would be sent."""
+    return f"I built a website for {lead['business_name']}"
+
+
 def send_cold_email(lead: dict) -> bool:
     """Send the initial cold email for one 'designed' lead. Returns True if sent.
     Wrapped in a trace -> agent -> tool span (see utils/tracer.py); the
@@ -483,7 +489,7 @@ def _send_cold_email_impl(lead: dict) -> bool:
                                notes="No usable email at send time")
         return False
 
-    subject = f"I built a website for {lead['business_name']}"
+    subject = cold_email_subject(lead)
     website = db.get_website_by_lead(lead["id"])
     preview_link = website["preview_url"] if website and website.get("preview_url") else ""
     try:

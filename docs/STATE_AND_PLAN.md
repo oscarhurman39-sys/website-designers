@@ -36,17 +36,22 @@ A cold-email pipeline for selling pre-built websites to local businesses.
 |---|---|
 | Mail | Zoho Mail Lite (paid to 2027-09), smtppro/imappro.zoho.eu, IMAP on, DNS (MX/SPF/DKIM/DMARC) verified. Login test passes. |
 | Public URL | ngrok static domain -> `webhook_server.py` :5000, only while `start_all.bat` (or `install_autostart.ps1`'s logon task) is running. VPS setup ready in `deploy/`. |
-| Stripe | TEST keys; test-mode webhook endpoint created at the ngrok URL. Live keys needed before real money. |
-| Google Places | New key, Places API (New) enabled, verified. |
-| Database | `pipeline/leads.db`: 75 leads, ALL test data (Casey's own addresses). `run.py cleanup-tests --dry-run` lists 45 of them; the rest are older test names. A clean DB before real sourcing is recommended. |
-| Live sending | `ENABLE_LIVE_SEND=false`. Every send is a logged dry run until flipped. |
+| Stripe | **LIVE keys since 2026-09-06**, live webhook endpoint at the ngrok URL with its signing secret in `.env`. A YES reply creates a real, payable checkout. The endpoint dies if `PUBLIC_BASE_URL` changes. |
+| Google Places | New key, Places API (New) enabled, verified. `run.py source --dry-run --limit 10` works (2026-09-07). |
+| Database | **Empty and ready (reset 2026-09-07).** The 75 test leads and 58 test previews are archived in `pipeline/archive/leads-20260907T155834Z.db`; every Vercel preview project is deleted. |
+| GitHub | `GITHUB_TOKEN` has scope `repo` but NOT `delete_repo`, so 46 private test repos could not be deleted and are listed in `pipeline/archive/orphan-repos-20260907T155746Z.txt`. Add the scope, then `pipeline/utils/teardown.py --repos-from <that file>`. Until fixed, every future 7-day preview teardown leaves its repo behind too. |
+| Live sending | `ENABLE_LIVE_SEND=false`. Found `=true` on 2026-09-07 with the test DB and the public URL down; set back. Every send is a logged dry run until flipped for a reviewed batch. |
 | Sourcing | `SOURCING_ENABLED=false`. Run `run.py source --limit N` by hand first. |
+| Caps | `EMAIL_MAX_PER_DAY=10`, `EMAIL_MAX_PER_DAY_PER_ACCOUNT=10` (week one per `WARMUP.md`); preflight warns above 10. |
+| Preflight | `run.py preflight --offline` on 2026-09-07 after the reset: READY (dry run), 0 warnings. The only live-network gap is the public URL, which is down until `start_public.bat` runs. |
 
 Secrets live only in `.env` (gitignored). `.env.example` documents every key.
 
 ## 3. Commands
 
 ```
+python run.py preflight [--offline]         # go-live check: NO-GO / READY / GO, changes nothing
+python run.py preview-email [--lead ID]     # the exact cold email a lead would get; nothing sent
 python run.py source --dry-run --limit 10   # preview what sourcing would add
 python run.py source --limit 10             # insert 10 real leads
 python run.py loop                          # the pipeline (research/design/send/replies)
@@ -54,8 +59,10 @@ python run.py dashboard                     # Streamlit view of leads and thread
 python run.py test-email you@x.com          # end-to-end on a dummy lead
 python run.py rebuild <lead_id>             # redeploy a preview (new photos/logo/template)
 python run.py cleanup-tests [--dry-run]     # delete test leads + their repos/projects
-python pipeline/render_preview.py           # render every niche locally, screenshots in pipeline/out
+python run.py cleanup-tests --reset         # pre-launch: archive the whole DB to pipeline/archive/, start empty
+python pipeline/render_preview.py --all-widths  # render every niche at desktop/tablet/phone into pipeline/out
 python pipeline/utils/teardown.py --dry-run # what the 7-day teardown would remove
+python pipeline/utils/teardown.py --all     # pre-launch: tear down every deployed preview (run before --reset)
 start_all.bat                               # webhook server + ngrok + pipeline supervisor
 ```
 
@@ -221,10 +228,17 @@ This wiring changes agent process only. It does not enable live sourcing, live s
 
 - Attachment flow tested against constructed emails only; first real
   photo reply should be watched.
-- Stripe is test mode. `_finalize_won_leads` hands over the repo and Vercel
-  project; under a hosting model that step changes (keep hosting, add their
-  domain instead).
-- No follow-up email yet. Lead scoring and `website_status` now have a v1 code-backed slice for no-site/platform-only sourcing and send-priority ordering; the next gap is owned-site quality scoring after actual render/reply outcomes.
+- Stripe is live (2026-09-06). `_finalize_won_leads` hands over the repo and
+  Vercel project; under a hosting model (the £39/month option, human-handled
+  for now) that step changes: keep hosting, add their domain instead.
+- Lead scoring and `website_status` have a v1 code-backed slice for
+  no-site/platform-only sourcing and send-priority ordering; the next gap is
+  owned-site quality scoring after actual render/reply outcomes.
+- `run.py source --limit 10` fills the batch from the first niche x town
+  combination (10 Crawley plumbers on 2026-09-07). A spread across niches and
+  towns needs a round-robin in `sourcing_agent`, or several small runs.
+- The public URL only exists while `start_public.bat` / `start_all.bat` (or
+  the VPS in `deploy/`) is running. Preflight probes `/health` and reports it.
 - The Gmail connector in this workspace lacks read permission, so inbox
   placement of test sends was not verified from here.
 
@@ -261,3 +275,32 @@ I inspected the repo and ran `venv\\Scripts\\python.exe -m pytest -q`. The suite
 - Do not swap Stripe into live mode or create live payment/webhook assumptions silently.
 - Do not increase outbound volume or add more mailboxes as a code default.
 - Do not turn the £39/month option into automatic subscription billing until Stripe Billing has its own tested implementation.
+
+## 9. Launch runbook (Claude, 2026-09-07)
+
+What landed: `run.py preflight` (mode-aware GO/READY/NO-GO, probes
+`PUBLIC_BASE_URL/health` and logs in to the mailbox), `run.py preview-email`,
+`/health` on `webhook_server.py`, `cleanup-tests` matching widened to every
+test name in the DB plus `--reset`, `teardown.py --all`,
+`render_preview.py --all-widths`. `ENABLE_LIVE_SEND` set back to false; caps
+set to 10/day. Full suite green with the repo-local temp dirs.
+
+First real batch, in order. Every step is a command that already exists:
+
+1. ~~Reset the database.~~ **Done 2026-09-07**: all previews torn down, 75 test
+   leads archived, `leads.db` empty. Left over: 46 private GitHub repos, because
+   the token lacks `delete_repo` (see the GitHub row in section 2).
+2. `start_public.bat` (or the VPS) and keep it up: `python run.py preflight`
+   must show `public URL reachable: OK`.
+3. `python run.py source --limit 10` (or hand-enter leads), then
+   `python run.py loop` with `ENABLE_LIVE_SEND=false` until the 10 previews
+   are built; check `pipeline/out/*.png` renders and each lead's preview URL.
+4. `python run.py preview-email --lead <id> --check-link` for each lead.
+5. Flip `ENABLE_LIVE_SEND=true`, run `python run.py preflight` again (it must
+   say `GO (ARMED)`), start the loop, watch Slack alerts and the dashboard.
+6. After ten real outcomes, change copy/price/niche/towns from data, not taste.
+
+StarNet's part: keep the E-STOP on (the `Daily Sales Pipeline` routine runs
+the loop at 19:00 as MASKY at FULL POWER) until step 5 is deliberate; keep
+`AGENCY-NEGOTIATOR` in ASK mode for the first ten replies; the station is not
+needed for any of steps 1-5.

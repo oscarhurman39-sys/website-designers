@@ -101,13 +101,14 @@ cd ..
 **Lead sourcing from Google Places** (optional). Instead of typing leads
 in, let the pipeline find them: for every `SOURCING_NICHES` x
 `SOURCING_LOCATIONS` combination it runs a Places API (New) text search
-and inserts businesses that are OPERATIONAL and already have a website --
-the only kind LeadAgent can find a contact email for. Results are deduped
-on the Google place id (plus a name+location fallback for hand-typed
-leads) and capped at `SOURCING_DAILY_LIMIT` per day. Listings whose
-"website" is a facebook.com / instagram.com / linktr.ee / yell.com /
-checkatrade.com / google.com profile are skipped: there's no site to
-improve and no email to scrape.
+and inserts businesses that are OPERATIONAL. By default it still requires a
+listed website (`SOURCING_REQUIRE_WEBSITE=true`), because owned websites are
+the safest route for LeadAgent to find a contact email. If you deliberately
+set `SOURCING_REQUIRE_WEBSITE=false`, sourcing may also keep businesses with
+no site or only a platform/directory presence; those are scored as weak-web
+leads and marked for phone/platform follow-up rather than assumed emailable.
+Results are deduped on the Google place id (plus a name+location fallback
+for hand-typed leads) and capped at `SOURCING_DAILY_LIMIT` per day.
 
 
 Businesses within `SOURCING_EXCLUDE_RADIUS_MILES` (default 6) of
@@ -356,6 +357,36 @@ python run.py cleanup-tests --dry-run   # list the test leads that would go
 python run.py cleanup-tests             # delete their repos, projects and DB rows
 ```
 
+Matching is by the test business names, a `Testville` location, or a
+contact email equal to `ADMIN_EMAIL`. When the whole database is pre-launch
+test data (the state before the first real batch), reset it in two
+retry-safe steps instead of picking rows:
+
+```bash
+python pipeline/utils/teardown.py --all --dry-run   # every deployed preview, any age/status
+python pipeline/utils/teardown.py --all             # delete those Vercel projects + GitHub repos
+python run.py cleanup-tests --reset --dry-run
+python run.py cleanup-tests --reset                 # archive leads.db + traces.json to pipeline/archive/, start empty
+```
+
+`--reset` refuses if anything looks real (an unsubscribed address, a paid
+lead, a site handed to a client) or if any preview is still deployed, so
+nothing remote is orphaned.
+
+**Deleting GitHub repos needs the `delete_repo` scope on `GITHUB_TOKEN`.** A
+token with only `repo` gets a 403 worded "Must have admin rights to
+Repository" even on your own repos. The teardown treats that as a token
+problem rather than a failure: the Vercel project is deleted either way (so
+the preview URL is dead, which is what the 7-day promise is about), the row
+is recorded as torn down, and the repos that survived are listed in
+`pipeline/archive/orphan-repos-<stamp>.txt`. To clear them afterwards, add
+the scope at github.com/settings/tokens (editing a classic token's scopes
+keeps the same token value, so `.env` needs no change) and run:
+
+```bash
+python pipeline/utils/teardown.py --repos-from pipeline/archive/orphan-repos-<stamp>.txt
+```
+
 ## Scheduler / keeping it running
 
 `main.py` already contains its own infinite work loop -- once started, it
@@ -382,6 +413,29 @@ keeps running and doesn't need to be re-invoked. Two ways to keep the
 Work through these in order the first time you switch from dry runs to real
 sending. Each one is cheap; skipping them is how domains get burned.
 
+Start with the repo's read-only preflight check:
+
+```bash
+python run.py preflight            # probes the public URL and logs in to the mailbox
+python run.py preflight --offline  # config, database and copy checks only
+```
+
+It prints one line per check and ends with `NO-GO` (a blocker), `READY (dry
+run)` or `GO (ARMED)`. Checks: required config, postal address, sender
+domain, the live-send and sourcing switches, `PUBLIC_BASE_URL` set *and
+answering* `/health`, Stripe key mode and webhook secret, SMTP+IMAP login,
+daily caps against the week-one limit, the cold email's price/guarantee/
+address/unsubscribe link, test leads still in the database, the send queue,
+render freshness and leftover test artefacts. Several checks are warnings
+while `ENABLE_LIVE_SEND=false` and become blockers once it is true, so run it
+again right after flipping the switch. To read the exact email a lead would
+get without sending anything:
+
+```bash
+python run.py preview-email             # built-in sample lead
+python run.py preview-email --lead 81   # a real lead, with its real preview URL
+```
+
 1. **Keep it running.** Windows: `.\install_autostart.ps1` once. Real
    sending: the VPS steps in [`deploy/README.md`](deploy/README.md).
 2. **`ENABLE_LIVE_SEND=true`** in `.env` -- until then every send is a
@@ -396,13 +450,19 @@ sending. Each one is cheap; skipping them is how domains get burned.
 5. **Stripe live mode.** Swap `STRIPE_SECRET_KEY` for the live key and
    create a live-mode webhook endpoint at `PUBLIC_BASE_URL/webhook/stripe`
    (its signing secret goes in `STRIPE_WEBHOOK_SECRET`). Test keys never
-   charge anyone.
+   charge anyone. Done on 2026-09-06 for this deployment; preflight shows
+   the current mode. The endpoint is tied to the ngrok URL and must be
+   recreated if `PUBLIC_BASE_URL` ever changes.
 6. **DMARC.** The domain starts at `p=none` (monitor only). After a month of
    clean sending change the `_dmarc` TXT record at Porkbun to
    `p=quarantine`, then `p=reject` once you trust it. Stricter DMARC lifts
    inbox placement.
 7. **Prune test artefacts.** `python run.py cleanup-tests` removes the
-   "Test Business" leads plus their Vercel projects and GitHub repos.
+   known test leads plus their Vercel projects and GitHub repos. For a
+   database that is *entirely* pre-launch test data, archive the whole thing
+   instead (see "Cleaning up after manual test runs" under Testing):
+   `python pipeline/utils/teardown.py --all`, then
+   `python run.py cleanup-tests --reset`.
 
 ## Deployment
 
