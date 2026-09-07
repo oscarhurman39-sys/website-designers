@@ -39,7 +39,8 @@ A cold-email pipeline for selling pre-built websites to local businesses.
 | Stripe | **LIVE keys since 2026-09-06**, live webhook endpoint at the ngrok URL with its signing secret in `.env`. A YES reply creates a real, payable checkout. The endpoint dies if `PUBLIC_BASE_URL` changes. |
 | Google Places | New key, Places API (New) enabled, verified. `run.py source --dry-run --limit 10` works (2026-09-07). |
 | Database | **Empty and ready (reset 2026-09-07).** The 75 test leads and 58 test previews are archived in `pipeline/archive/leads-20260907T155834Z.db`; every Vercel preview project is deleted. |
-| GitHub | `GITHUB_TOKEN` has scope `repo` but NOT `delete_repo`, so 46 private test repos could not be deleted and are listed in `pipeline/archive/orphan-repos-20260907T155746Z.txt`. Add the scope, then `pipeline/utils/teardown.py --repos-from <that file>`. Until fixed, every future 7-day preview teardown leaves its repo behind too. |
+| GitHub | New classic token with `repo` + `delete_repo` (2026-09-07, old one retired). The 46 leftover test repos are deleted; the account holds no preview repos. Preflight now reports the token's scopes on its own line. |
+| Slack | `SLACK_BOT_TOKEN` is still the example placeholder, so reply/payment alerts fail silently and only the console shows them. Preflight warns about it. Either create a bot token (api.slack.com/apps, `chat:write`, invite the bot to `#leads`) or blank the variable and watch the dashboard instead. |
 | Live sending | `ENABLE_LIVE_SEND=false`. Found `=true` on 2026-09-07 with the test DB and the public URL down; set back. Every send is a logged dry run until flipped for a reviewed batch. |
 | Sourcing | `SOURCING_ENABLED=false`. Run `run.py source --limit N` by hand first. |
 | Caps | `EMAIL_MAX_PER_DAY=10`, `EMAIL_MAX_PER_DAY_PER_ACCOUNT=10` (week one per `WARMUP.md`); preflight warns above 10. |
@@ -288,8 +289,8 @@ set to 10/day. Full suite green with the repo-local temp dirs.
 First real batch, in order. Every step is a command that already exists:
 
 1. ~~Reset the database.~~ **Done 2026-09-07**: all previews torn down, 75 test
-   leads archived, `leads.db` empty. Left over: 46 private GitHub repos, because
-   the token lacks `delete_repo` (see the GitHub row in section 2).
+   leads archived, `leads.db` empty, all 46 leftover GitHub repos deleted once
+   the token gained `delete_repo`.
 2. `start_public.bat` (or the VPS) and keep it up: `python run.py preflight`
    must show `public URL reachable: OK`.
 3. `python run.py source --limit 10` (or hand-enter leads), then

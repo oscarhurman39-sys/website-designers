@@ -44,6 +44,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "SUBSCRIPTION_MONTHLY_PRICE", 39)
     monkeypatch.setattr(config, "GUARANTEE_DAYS", 14)
     monkeypatch.setattr(config, "CURRENCY_SYMBOL", "£")
+    monkeypatch.setattr(config, "SLACK_BOT_TOKEN", "")  # console-only alerts: a deliberate, valid choice
     monkeypatch.setattr(preflight, "_probe_public_url", lambda url: (True, "up"))
     monkeypatch.setattr(preflight, "_mailbox_problem", lambda account: None)
     monkeypatch.setattr(preflight, "_github_token_state", lambda: (True, True, "casey: [repo, delete_repo]"))
@@ -290,3 +291,28 @@ def test_github_scope_probe_reads_the_header(monkeypatch):
 
     monkeypatch.setattr(config, "GITHUB_TOKEN", "")
     assert preflight._github_token_state() == (False, False, "GITHUB_TOKEN is empty")
+
+
+def test_slack_placeholder_token_is_a_warning_not_a_silent_failure(env, monkeypatch):
+    import requests
+
+    def no_network(*args, **kwargs):
+        raise AssertionError("Slack must not be called for a placeholder or in --offline mode")
+
+    monkeypatch.setattr(requests, "post", no_network)
+
+    monkeypatch.setattr(config, "SLACK_BOT_TOKEN", "xoxb-placeholder-for-your-slack-bot-token")
+    check = _by_name(preflight.collect_checks())["Slack alerts"]
+    assert not check.ok and check.level == preflight.WARN and "placeholder" in check.detail
+    assert preflight.main([]) == 0  # alerts never block a send
+
+    monkeypatch.setattr(config, "SLACK_BOT_TOKEN", "xoxb-test-fixture-not-a-real-token")
+    check = _by_name(preflight.collect_checks(offline=True))["Slack alerts"]
+    assert check.ok and check.level == preflight.INFO and "not verified" in check.detail
+
+    responses = iter([{"ok": True, "team": "Casey Websites"}, {"ok": False, "error": "invalid_auth"}])
+    monkeypatch.setattr(requests, "post", lambda *a, **k: Mock(json=lambda: next(responses)))
+    check = _by_name(preflight.collect_checks())["Slack alerts"]
+    assert check.ok and "Casey Websites" in check.detail
+    check = _by_name(preflight.collect_checks())["Slack alerts"]
+    assert not check.ok and "invalid_auth" in check.detail

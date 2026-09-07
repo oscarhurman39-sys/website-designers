@@ -26,6 +26,7 @@ sends are live.
 from __future__ import annotations
 
 import argparse
+import re
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -186,6 +187,38 @@ def _github_token_state() -> tuple[bool, bool, str]:
         return False, False, f"{login}: [{raw}], missing {', '.join(missing_required)} -- cannot build previews"
     can_delete = all(s in scopes for s in _GITHUB_HOUSEKEEPING_SCOPES)
     return True, can_delete, f"{login}: [{raw}]"
+
+
+_SLACK_BOT_TOKEN_RE = re.compile(r"^xoxb-\d+-\d+-[A-Za-z0-9]+$")
+
+
+def _slack_state(offline: bool) -> tuple[bool, str, str]:
+    """(ok, detail, level) for the alert channel. Alerts are how a human
+    notices a positive reply or a payment; sales_agent swallows a failed
+    post with one console line, so a placeholder token fails silently."""
+    token = config.SLACK_BOT_TOKEN.strip()
+    if not token:
+        return True, "SLACK_BOT_TOKEN empty: reply/payment alerts print to the console only", INFO
+    if "placeholder" in token.lower() or not _SLACK_BOT_TOKEN_RE.match(token):
+        return False, (
+            "SLACK_BOT_TOKEN is a placeholder, so every alert fails and only the console shows "
+            "replies; set a real xoxb- bot token, or blank it to make console-only deliberate"
+        ), WARN
+    if offline:
+        return True, "looks like a bot token (not verified: --offline)", INFO
+    import requests
+
+    try:
+        data = requests.post(
+            "https://slack.com/api/auth.test",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=NETWORK_TIMEOUT_SECONDS,
+        ).json()
+    except (requests.RequestException, ValueError) as exc:
+        return True, f"slack.com unreachable ({type(exc).__name__}); token unverified", INFO
+    if data.get("ok"):
+        return True, f"bot token valid for workspace {data.get('team', '?')}; alerts go to {config.SLACK_ALERT_CHANNEL}", WARN
+    return False, f"Slack rejected the token ({data.get('error', 'unknown error')}); alerts will fail", WARN
 
 
 def _scalar(db_path: str, sql: str, params: tuple = ()) -> Optional[int]:
@@ -422,6 +455,11 @@ def collect_checks(offline: bool = False) -> list[Check]:
             f"SMTP+IMAP login OK for {', '.join(user for user, _ in results)}" if not failed else "; ".join(failed),
             level=_escalate(armed),
         ))
+
+    # Alerts: the only way a human notices a reply or a payment without
+    # staring at the console.
+    slack_ok, slack_detail, slack_level = _slack_state(offline)
+    checks.append(Check("Slack alerts", slack_ok, slack_detail, level=slack_level))
 
     caps_ok = (
         config.EMAIL_MAX_PER_DAY <= WEEK_ONE_DAILY_CAP
