@@ -40,11 +40,11 @@ A cold-email pipeline for selling pre-built websites to local businesses.
 | Google Places | New key, Places API (New) enabled, verified. `run.py source --dry-run --limit 10` works (2026-09-07). |
 | Database | **Empty and ready (reset 2026-09-07).** The 75 test leads and 58 test previews are archived in `pipeline/archive/leads-20260907T155834Z.db`; every Vercel preview project is deleted. |
 | GitHub | New classic token with `repo` + `delete_repo` (2026-09-07, old one retired). The 46 leftover test repos are deleted; the account holds no preview repos. Preflight now reports the token's scopes on its own line. |
-| Slack | `SLACK_BOT_TOKEN` is still the example placeholder, so reply/payment alerts fail silently. Preflight warns; `run.py test-alert` posts a real message to prove the channel works. `.env` carries a pre-configured app-manifest link. Blanking the variable is the valid alternative (console-only alerts). |
+| Slack | **Working (2026-09-07).** Bot `casey_alerts` in workspace OSCAR posts to `#leads`; a real test alert was received. `run.py test-alert` re-proves it any time. The app-level (`xapp-`) token is kept commented in `.env` for StarNet's Slack channel, which needs both tokens; the pipeline uses only the bot token. |
 | Live sending | `ENABLE_LIVE_SEND=false`. Found `=true` on 2026-09-07 with the test DB and the public URL down; set back. Every send is a logged dry run until flipped for a reviewed batch. |
 | Sourcing | `SOURCING_ENABLED=false`. Run `run.py source --limit N` by hand first. |
 | Caps | `EMAIL_MAX_PER_DAY=10`, `EMAIL_MAX_PER_DAY_PER_ACCOUNT=10` (week one per `WARMUP.md`); preflight warns above 10. |
-| Preflight | `run.py preflight --offline` on 2026-09-07 after the reset: READY (dry run), 0 warnings. The only live-network gap is the public URL, which is down until `start_public.bat` runs. |
+| Preflight | READY (dry run) on 2026-09-07. One warning remains: the public URL is down until `start_public.bat` runs. Everything else (config, GitHub scopes, mailbox, Stripe, Slack, empty DB, renders) passes. |
 
 Secrets live only in `.env` (gitignored). `.env.example` documents every key.
 
