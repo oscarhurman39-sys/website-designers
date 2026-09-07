@@ -223,7 +223,12 @@ def _slack_state(offline: bool) -> tuple[bool, str, str]:
     except (requests.RequestException, ValueError) as exc:
         return True, f"slack.com unreachable ({type(exc).__name__}); token unverified", INFO
     if data.get("ok"):
-        return True, f"bot token valid for workspace {data.get('team', '?')}; alerts go to {config.SLACK_ALERT_CHANNEL}", WARN
+        # auth.test proves the token, never that the channel exists or admits
+        # the bot -- only an actual post does, hence the pointer to test-alert.
+        return True, (
+            f"token valid for workspace {data.get('team', '?')} as {data.get('user', '?')}; "
+            f"run `python run.py test-alert` to prove {config.SLACK_ALERT_CHANNEL} receives"
+        ), WARN
     return False, f"Slack rejected the token ({data.get('error', 'unknown error')}); alerts will fail", WARN
 
 
