@@ -436,6 +436,23 @@ python run.py preview-email             # built-in sample lead
 python run.py preview-email --lead 81   # a real lead, with its real preview URL
 ```
 
+**Alerts.** A positive reply, a payment and a negotiation round-cap all raise a
+Slack alert, and a failed post is swallowed with one console line, so a wrong
+`SLACK_BOT_TOKEN` fails silently. Preflight checks the token; only a real post
+proves the channel is reachable:
+
+```bash
+python run.py test-alert
+```
+
+To set the bot up, open the [pre-configured app link in `.env`](.env), pick your
+workspace, Create, then **Install to Workspace** and copy the *Bot User OAuth
+Token*. The manifest asks for `chat:write` and `chat:write.public`, so the bot
+can post to a public `SLACK_ALERT_CHANNEL` without being invited; a private
+channel still needs `/invite`. Leaving `SLACK_BOT_TOKEN` blank is a valid
+choice: alerts then print to the console only and preflight treats that as
+deliberate.
+
 1. **Keep it running.** Windows: `.\install_autostart.ps1` once. Real
    sending: the VPS steps in [`deploy/README.md`](deploy/README.md).
 2. **`ENABLE_LIVE_SEND=true`** in `.env` -- until then every send is a

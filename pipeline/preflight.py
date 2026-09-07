@@ -26,7 +26,6 @@ sends are live.
 from __future__ import annotations
 
 import argparse
-import re
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -189,7 +188,11 @@ def _github_token_state() -> tuple[bool, bool, str]:
     return True, can_delete, f"{login}: [{raw}]"
 
 
-_SLACK_BOT_TOKEN_RE = re.compile(r"^xoxb-\d+-\d+-[A-Za-z0-9]+$")
+# Deliberately loose: Slack has several valid bot-token shapes (xoxb-, and
+# xoxe.xoxb- once token rotation is on), and auth.test below is the real
+# authority. This only catches values that were never a token at all.
+_SLACK_BOT_TOKEN_PREFIXES = ("xoxb-", "xoxe.xoxb-")
+_SLACK_PLACEHOLDER_FRAGMENTS = ("placeholder", "your-", "xxx", "changeme", "example")
 
 
 def _slack_state(offline: bool) -> tuple[bool, str, str]:
@@ -199,10 +202,13 @@ def _slack_state(offline: bool) -> tuple[bool, str, str]:
     token = config.SLACK_BOT_TOKEN.strip()
     if not token:
         return True, "SLACK_BOT_TOKEN empty: reply/payment alerts print to the console only", INFO
-    if "placeholder" in token.lower() or not _SLACK_BOT_TOKEN_RE.match(token):
+    lowered = token.lower()
+    looks_placeholder = any(f in lowered for f in _SLACK_PLACEHOLDER_FRAGMENTS)
+    if looks_placeholder or not lowered.startswith(_SLACK_BOT_TOKEN_PREFIXES):
         return False, (
-            "SLACK_BOT_TOKEN is a placeholder, so every alert fails and only the console shows "
-            "replies; set a real xoxb- bot token, or blank it to make console-only deliberate"
+            "SLACK_BOT_TOKEN is not a real bot token, so every alert fails and only the console "
+            "shows replies; paste the xoxb- Bot User OAuth Token, or blank it to make console-only "
+            "deliberate"
         ), WARN
     if offline:
         return True, "looks like a bot token (not verified: --offline)", INFO

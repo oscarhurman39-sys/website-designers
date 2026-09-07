@@ -79,14 +79,24 @@ _NEGOTIATION_CLASSIFICATION = "negotiation"
 # --- Console / Slack alerting -------------------------------------------------
 # All alerts are notifications only: automation never waits on a human.
 
-def _slack_notify(text: str) -> None:
+def _slack_notify(text: str) -> bool:
+    """Post one alert to SLACK_ALERT_CHANNEL. Returns whether it actually
+    reached Slack.
+
+    Never raises. An alert is a notification, so a bad token, a missing
+    channel or a Slack outage must not abort a send, a close or a handover
+    -- every caller also prints a console banner. `test_alert.py` uses the
+    return value to tell an operator whether alerts really work, which a
+    token check alone cannot prove."""
     if not config.SLACK_BOT_TOKEN or WebClient is None:
-        return
+        return False
     try:
         client = WebClient(token=config.SLACK_BOT_TOKEN)
         client.chat_postMessage(channel=config.SLACK_ALERT_CHANNEL, text=text)
-    except SlackApiError as exc:
+        return True
+    except Exception as exc:  # noqa: BLE001 - incl. network errors, not just SlackApiError
         print(f"[sales_agent] Slack alert failed: {exc}")
+        return False
 
 
 def alert_positive_reply(lead: dict) -> None:

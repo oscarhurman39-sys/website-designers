@@ -301,9 +301,10 @@ def test_slack_placeholder_token_is_a_warning_not_a_silent_failure(env, monkeypa
 
     monkeypatch.setattr(requests, "post", no_network)
 
+    # Starts with xoxb- like a real token, which is why the masked .env view hid it.
     monkeypatch.setattr(config, "SLACK_BOT_TOKEN", "xoxb-placeholder-for-your-slack-bot-token")
     check = _by_name(preflight.collect_checks())["Slack alerts"]
-    assert not check.ok and check.level == preflight.WARN and "placeholder" in check.detail
+    assert not check.ok and check.level == preflight.WARN and "not a real bot token" in check.detail
     assert preflight.main([]) == 0  # alerts never block a send
 
     monkeypatch.setattr(config, "SLACK_BOT_TOKEN", "xoxb-test-fixture-not-a-real-token")
@@ -316,3 +317,40 @@ def test_slack_placeholder_token_is_a_warning_not_a_silent_failure(env, monkeypa
     assert check.ok and "Casey Websites" in check.detail
     check = _by_name(preflight.collect_checks())["Slack alerts"]
     assert not check.ok and "invalid_auth" in check.detail
+
+
+# --- Alert plumbing (preflight warns; test_alert.py proves) ----------------------
+
+
+def test_slack_notify_reports_whether_the_post_landed_and_never_raises(monkeypatch):
+    """The pipeline ignores the result, but an alert must never abort a send,
+    close or handover -- and test_alert.py needs the truth."""
+    import test_alert
+    from agents import sales_agent
+
+    monkeypatch.setattr(config, "SLACK_BOT_TOKEN", "")
+    assert sales_agent._slack_notify("hi") is False  # console-only: nothing attempted
+
+    posted = Mock()
+    monkeypatch.setattr(config, "SLACK_BOT_TOKEN", "xoxb-real")
+    monkeypatch.setattr(config, "SLACK_ALERT_CHANNEL", "#leads")
+    monkeypatch.setattr(sales_agent, "WebClient", Mock(return_value=Mock(chat_postMessage=posted)))
+    assert sales_agent._slack_notify("hi") is True
+    assert posted.call_args.kwargs["channel"] == "#leads"
+
+    # A network error is not a SlackApiError, and must still be swallowed.
+    monkeypatch.setattr(
+        sales_agent, "WebClient",
+        Mock(return_value=Mock(chat_postMessage=Mock(side_effect=ConnectionError("slack down")))),
+    )
+    assert sales_agent._slack_notify("hi") is False
+
+    assert test_alert.main() == 1  # surfaces the failure to the operator
+
+
+def test_test_alert_treats_a_blank_token_as_a_deliberate_choice(monkeypatch, capsys):
+    import test_alert
+
+    monkeypatch.setattr(config, "SLACK_BOT_TOKEN", "  ")
+    assert test_alert.main() == 0
+    assert "console-only by design" in capsys.readouterr().out

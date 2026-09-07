@@ -40,7 +40,7 @@ A cold-email pipeline for selling pre-built websites to local businesses.
 | Google Places | New key, Places API (New) enabled, verified. `run.py source --dry-run --limit 10` works (2026-09-07). |
 | Database | **Empty and ready (reset 2026-09-07).** The 75 test leads and 58 test previews are archived in `pipeline/archive/leads-20260907T155834Z.db`; every Vercel preview project is deleted. |
 | GitHub | New classic token with `repo` + `delete_repo` (2026-09-07, old one retired). The 46 leftover test repos are deleted; the account holds no preview repos. Preflight now reports the token's scopes on its own line. |
-| Slack | `SLACK_BOT_TOKEN` is still the example placeholder, so reply/payment alerts fail silently and only the console shows them. Preflight warns about it. Either create a bot token (api.slack.com/apps, `chat:write`, invite the bot to `#leads`) or blank the variable and watch the dashboard instead. |
+| Slack | `SLACK_BOT_TOKEN` is still the example placeholder, so reply/payment alerts fail silently. Preflight warns; `run.py test-alert` posts a real message to prove the channel works. `.env` carries a pre-configured app-manifest link. Blanking the variable is the valid alternative (console-only alerts). |
 | Live sending | `ENABLE_LIVE_SEND=false`. Found `=true` on 2026-09-07 with the test DB and the public URL down; set back. Every send is a logged dry run until flipped for a reviewed batch. |
 | Sourcing | `SOURCING_ENABLED=false`. Run `run.py source --limit N` by hand first. |
 | Caps | `EMAIL_MAX_PER_DAY=10`, `EMAIL_MAX_PER_DAY_PER_ACCOUNT=10` (week one per `WARMUP.md`); preflight warns above 10. |
@@ -53,6 +53,7 @@ Secrets live only in `.env` (gitignored). `.env.example` documents every key.
 ```
 python run.py preflight [--offline]         # go-live check: NO-GO / READY / GO, changes nothing
 python run.py preview-email [--lead ID]     # the exact cold email a lead would get; nothing sent
+python run.py test-alert                    # prove Slack alerts actually reach you
 python run.py source --dry-run --limit 10   # preview what sourcing would add
 python run.py source --limit 10             # insert 10 real leads
 python run.py loop                          # the pipeline (research/design/send/replies)
