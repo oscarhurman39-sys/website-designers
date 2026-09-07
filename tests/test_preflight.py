@@ -46,6 +46,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CURRENCY_SYMBOL", "£")
     monkeypatch.setattr(preflight, "_probe_public_url", lambda url: (True, "up"))
     monkeypatch.setattr(preflight, "_mailbox_problem", lambda account: None)
+    monkeypatch.setattr(preflight, "_github_token_state", lambda: (True, True, "casey: [repo, delete_repo]"))
     monkeypatch.setattr(preflight, "_renders_state", lambda: (True, "fresh"))
     monkeypatch.setattr(preflight, "_generated_test_artifacts", lambda: [])
     monkeypatch.setattr(preflight, "_test_leads", lambda: [])
@@ -123,9 +124,11 @@ def test_offline_skips_every_network_probe(env, monkeypatch):
 
     monkeypatch.setattr(preflight, "_probe_public_url", boom)
     monkeypatch.setattr(preflight, "_mailbox_problem", boom)
+    monkeypatch.setattr(preflight, "_github_token_state", boom)
     checks = _by_name(preflight.collect_checks(offline=True))
     assert checks["public URL reachable"].ok and "skipped" in checks["public URL reachable"].detail
     assert checks["mailbox login"].ok and "skipped" in checks["mailbox login"].detail
+    assert checks["GitHub token"].ok and "skipped" in checks["GitHub token"].detail
 
 
 def test_cold_email_content_check_catches_stale_copy(env, monkeypatch):
@@ -223,3 +226,67 @@ def test_health_route_answers_with_the_expected_body():
     resp = client.get("/health")
     assert resp.status_code == 200
     assert resp.get_json() == {"ok": True, "service": "website-designers-webhook"}
+
+
+def test_github_token_check_separates_unusable_from_merely_untidy(env, monkeypatch):
+    """Missing `repo` stops previews being built at all; missing `delete_repo`
+    only leaks repos, so it must never block a send."""
+    monkeypatch.setattr(preflight, "_github_token_state", lambda: (True, True, "casey: [repo, delete_repo]"))
+    checks = _by_name(preflight.collect_checks())
+    assert checks["GitHub token"].ok
+    assert "GitHub repo cleanup" not in checks
+
+    monkeypatch.setattr(preflight, "_github_token_state", lambda: (True, False, "casey: [repo]"))
+    checks = _by_name(preflight.collect_checks())
+    assert checks["GitHub token"].ok  # usable: previews still build and hand over
+    cleanup = checks["GitHub repo cleanup"]
+    assert not cleanup.ok and cleanup.level == preflight.WARN and "delete_repo" in cleanup.detail
+    assert preflight.main([]) == 0  # a warning, never a stop sign
+
+    monkeypatch.setattr(config, "ENABLE_LIVE_SEND", True)
+    assert preflight.main([]) == 0  # still only a warning once armed
+
+    monkeypatch.setattr(preflight, "_github_token_state", lambda: (False, False, "token rejected (401)"))
+    checks = _by_name(preflight.collect_checks())
+    assert not checks["GitHub token"].ok and checks["GitHub token"].level == preflight.BLOCKER
+    assert preflight.main([]) == 1
+
+
+def test_github_scope_probe_reads_the_header(monkeypatch):
+    import requests
+
+    def responder(status, scopes=None, exc=None):
+        def _get(url, headers, timeout):
+            if exc:
+                raise exc
+            resp = Mock(status_code=status, headers={} if scopes is None else {"X-OAuth-Scopes": scopes})
+            resp.json = Mock(return_value={"login": "casey"})
+            return resp
+        return _get
+
+    monkeypatch.setattr(config, "GITHUB_TOKEN", "ghp_x")
+    monkeypatch.setattr(requests, "get", responder(200, "repo, delete_repo"))
+    assert preflight._github_token_state()[:2] == (True, True)
+
+    monkeypatch.setattr(requests, "get", responder(200, "repo"))
+    usable, can_delete, detail = preflight._github_token_state()
+    assert (usable, can_delete) == (True, False) and detail == "casey: [repo]"
+
+    monkeypatch.setattr(requests, "get", responder(200, "gist"))
+    usable, can_delete, detail = preflight._github_token_state()
+    assert (usable, can_delete) == (False, False) and "cannot build previews" in detail
+
+    monkeypatch.setattr(requests, "get", responder(401))
+    assert preflight._github_token_state()[0] is False
+
+    # A fine-grained token reports no scopes: say so rather than guess.
+    monkeypatch.setattr(requests, "get", responder(200, ""))
+    assert "fine-grained" in preflight._github_token_state()[2]
+
+    # An unreachable API must not be read as a bad token.
+    monkeypatch.setattr(requests, "get", responder(0, exc=requests.ConnectionError("offline")))
+    usable, can_delete, detail = preflight._github_token_state()
+    assert (usable, can_delete) == (True, True) and "unverified" in detail
+
+    monkeypatch.setattr(config, "GITHUB_TOKEN", "")
+    assert preflight._github_token_state() == (False, False, "GITHUB_TOKEN is empty")

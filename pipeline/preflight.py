@@ -140,6 +140,54 @@ def _mailbox_problem(account: config.EmailAccount) -> Optional[str]:
     return None
 
 
+# What the pipeline does with GITHUB_TOKEN, and therefore what it must be allowed
+# to do: `repo` covers creating each lead's private repo, pushing the site, and
+# inviting the buyer as an admin collaborator at handover; `delete_repo` covers
+# preview expiry and cleanup-tests. Missing `delete_repo` only leaks repos, so it
+# is never a reason to stop a send.
+_GITHUB_REQUIRED_SCOPES = ("repo",)
+_GITHUB_HOUSEKEEPING_SCOPES = ("delete_repo",)
+
+
+def _github_token_state() -> tuple[bool, bool, str]:
+    """Probe GITHUB_TOKEN. Returns (usable, can_delete_repos, detail).
+
+    Scopes come from the API's X-OAuth-Scopes header, which is authoritative
+    and far quicker than discovering the gap when a teardown 403s. A
+    fine-grained token reports no scopes at all, so it is reported as
+    unverifiable rather than guessed at."""
+    import requests
+
+    if not config.GITHUB_TOKEN:
+        return False, False, "GITHUB_TOKEN is empty"
+    try:
+        resp = requests.get(
+            "https://api.github.com/user",
+            headers={"Authorization": f"token {config.GITHUB_TOKEN}"},
+            timeout=NETWORK_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as exc:
+        return True, True, f"could not reach api.github.com ({type(exc).__name__}); scopes unverified"
+    if resp.status_code == 401:
+        return False, False, "token rejected (401): expired or revoked"
+    if resp.status_code != 200:
+        return True, True, f"api.github.com answered HTTP {resp.status_code}; scopes unverified"
+
+    login = resp.json().get("login", "?")
+    raw = resp.headers.get("X-OAuth-Scopes", "")
+    scopes = {s.strip() for s in raw.split(",") if s.strip()}
+    if not scopes:
+        return True, True, (
+            f"{login}: fine-grained token, scopes not reportable. It needs repository "
+            "Administration + Contents write on All repositories"
+        )
+    missing_required = [s for s in _GITHUB_REQUIRED_SCOPES if s not in scopes]
+    if missing_required:
+        return False, False, f"{login}: [{raw}], missing {', '.join(missing_required)} -- cannot build previews"
+    can_delete = all(s in scopes for s in _GITHUB_HOUSEKEEPING_SCOPES)
+    return True, can_delete, f"{login}: [{raw}]"
+
+
 def _scalar(db_path: str, sql: str, params: tuple = ()) -> Optional[int]:
     path = Path(db_path)
     if not path.exists():
@@ -347,6 +395,20 @@ def collect_checks(offline: bool = False) -> list[Check]:
         "Stripe webhook secret", secret_ok,
         "set (whsec_...)" if secret_ok else "missing or not a whsec_ value; the webhook cannot verify events",
     ))
+
+    # GitHub: the previews are built with it, and the buyer is handed the repo.
+    if offline:
+        checks.append(Check("GitHub token", True, "skipped (--offline)", level=INFO))
+    else:
+        usable, can_delete, detail = _github_token_state()
+        checks.append(Check("GitHub token", usable, detail))
+        if usable and not can_delete:
+            checks.append(Check(
+                "GitHub repo cleanup", False,
+                "token has no delete_repo scope, so expired previews and cleanup-tests leave their "
+                "private repos behind; add it at github.com/settings/tokens",
+                level=WARN,
+            ))
 
     # Mail.
     if offline:
