@@ -445,6 +445,24 @@ proves the channel is reachable:
 python run.py test-alert
 ```
 
+**Keeping the public URL up.** Every unsubscribe, click-tracking and Stripe
+link resolves against `PUBLIC_BASE_URL`, so those links are dead whenever the
+webhook server or the ngrok tunnel is down:
+
+```bash
+python run.py serve-public            # start whatever is missing, then verify
+python run.py serve-public --status   # report only; starts nothing
+```
+
+Prefer this over double-clicking `start_public.bat`. It is safe to run twice
+(the .bat is not: a second webhook server cannot bind port 5000 and a second
+ngrok cannot claim a static domain already in use), it takes the tunnel domain
+from `PUBLIC_BASE_URL` rather than a hard-coded string, and it waits for
+`/health` to answer through the public URL before claiming success. Both
+processes open in their own console windows and keep running after the command
+returns, so an agent can call it too. For a machine that should always be up,
+use `install_autostart.ps1` or the VPS steps in `deploy/README.md` instead.
+
 To set the bot up, open the [pre-configured app link in `.env`](.env), pick your
 workspace, Create, then **Install to Workspace** and copy the *Bot User OAuth
 Token*. The manifest asks for `chat:write` and `chat:write.public`, so the bot

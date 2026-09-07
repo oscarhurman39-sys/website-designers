@@ -11,6 +11,7 @@
     python run.py preflight [--offline]     # go-live readiness check; prints GO / READY / NO-GO
     python run.py preview-email [--lead ID] # print the exact cold email; nothing sent or written
     python run.py test-alert                # post one test alert to the Slack channel
+    python run.py serve-public [--status]   # bring PUBLIC_BASE_URL up, or report why it is not
 
 Each mode runs as its own subprocess, not imported in-process -- this is a
 thin dispatcher, not a reimplementation. That matters because `loop` reads
@@ -96,6 +97,12 @@ def run_test_alert(extra_args: list[str]) -> int:
     )
 
 
+def run_serve_public(extra_args: list[str]) -> int:
+    return subprocess.call(
+        [sys.executable, str(PIPELINE_DIR / "serve_public.py"), *extra_args], cwd=str(PIPELINE_DIR)
+    )
+
+
 _MODES = {
     "quick-test": run_quick_test,
     "loop": run_loop,
@@ -108,6 +115,7 @@ _MODES = {
     "preflight": run_preflight,
     "preview-email": run_preview_email,
     "test-alert": run_test_alert,
+    "serve-public": run_serve_public,
 }
 
 
