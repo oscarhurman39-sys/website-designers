@@ -267,11 +267,14 @@ def accent_pair(lead: dict) -> tuple:
     # Contrast is a functional constraint, not taste: darken until white text on
     # this colour (and this colour as text on white) clears AA. Terminates --
     # lightness only falls, and black is 21:1.
-    rgb = colorsys.hls_to_rgb(hue, light, sat)
-    while _contrast_with_white(rgb) < ACCENT_MIN_CONTRAST_ON_WHITE and light > ACCENT_MIN_LIGHTNESS:
+    # Measured on the ROUNDED hex, not the float RGB: quantising to 8 bits per
+    # channel moves the ratio, and measuring before the rounding let colours
+    # land at 4.48-4.50 -- just under the floor they were supposed to clear.
+    accent = _rgb_to_hex(colorsys.hls_to_rgb(hue, light, sat))
+    while (_contrast_with_white(_hex_to_rgb(accent)) < ACCENT_MIN_CONTRAST_ON_WHITE
+           and light > ACCENT_MIN_LIGHTNESS):
         light = max(ACCENT_MIN_LIGHTNESS, light - 0.02)
-        rgb = colorsys.hls_to_rgb(hue, light, sat)
-    accent = _rgb_to_hex(rgb)
+        accent = _rgb_to_hex(colorsys.hls_to_rgb(hue, light, sat))
 
     # accent_dark keeps the hand-tuned RELATIONSHIP of the niche pair (gym drops
     # 0.20 lightness, dentist 0.07) applied to the varied accent, rather than
@@ -583,6 +586,8 @@ def rebuild_preview(lead: dict) -> Optional[dict]:
     github_api.push_files(github_api.get_repo(website["repo_full_name"]), files, commit_message="Rebuild preview")
     deployment = vercel_api.deploy_files(project_raw_name, files)
     preview_url = _validate_deployment_url(deployment)
+    if preview_url != website.get("preview_url"):
+        db.update_website_preview_url(lead["id"], preview_url)
     screenshot.invalidate(lead["id"])
     screenshot_url, screenshot_path = _capture_and_publish_screenshot(lead["id"], preview_url)
     if screenshot_url:

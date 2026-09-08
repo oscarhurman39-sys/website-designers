@@ -66,27 +66,62 @@ def deploy_files(project_name: str, files: dict) -> dict:
     resp.raise_for_status()
     data = resp.json()
     deployment_id = data["id"]
-    url = data.get("url", "")
+    # Vercel returns this deployment's own hostname without a scheme
+    # (e.g. "foo-abc123.vercel.app"). It is always valid for a READY
+    # deployment, which the clean project alias is not -- see _public_url.
+    deployment_url = f"https://{data['url']}" if data.get("url") else ""
 
     _disable_deployment_protection(project_name)
 
-    public_url = f"https://{project_name}.vercel.app"
-    if not _wait_until_publicly_accessible(public_url):
-        print(
-            f"[vercel_api] '{project_name}' still looks protected after "
-            f"{_PROTECTION_CHECK_TIMEOUT_SECONDS}s -- the preview may show a Vercel login "
-            "wall to leads. Check Vercel dashboard -> project -> Settings -> Deployment "
-            "Protection, or set VERCEL_BYPASS_TOKEN so screenshot capture can bypass it."
-        )
-
+    # Order matters: the reachability probes below must run against a
+    # finished build, otherwise they spend their whole budget polling a
+    # deployment that has not been served yet and report a false negative.
     final_state = _poll_until_ready(deployment_id)
 
     return {
         "deployment_id": deployment_id,
-        "url": public_url,
+        "url": _public_url(project_name, deployment_url),
         "project_name": project_name,
         "ready_state": final_state,
     }
+
+
+def _public_url(project_name: str, deployment_url: str) -> str:
+    """Return a URL a lead can actually open.
+
+    Vercel only assigns the clean `<project>.vercel.app` alias when the
+    project name is short enough; longer names never get one and the
+    guessed alias 404s. Observed on this account: every project name up to
+    35 characters resolved, every one from 36 characters up returned 404,
+    which silently failed 7 of 10 previews before this was fixed.
+
+    Prefer the clean alias anyway -- it is the link that goes in a cold
+    email and a tidy hostname converts better than a hash -- but only after
+    confirming an anonymous visitor really gets the site. Otherwise fall
+    back to the per-deployment hostname the API handed us.
+    """
+    alias = f"https://{_sanitize_project_name(project_name)}.vercel.app"
+    if _wait_until_publicly_accessible(alias):
+        return alias
+
+    if deployment_url and _wait_until_publicly_accessible(deployment_url):
+        print(
+            f"[vercel_api] '{project_name}' has no public '{alias}' alias "
+            "(Vercel skips it for longer project names) -- using the "
+            f"deployment hostname {deployment_url} instead."
+        )
+        return deployment_url
+
+    # Neither is reachable. Hand back the best candidate and let
+    # design_agent._validate_deployment_url refuse to email it.
+    print(
+        f"[vercel_api] '{project_name}' is not publicly reachable after "
+        f"{_PROTECTION_CHECK_TIMEOUT_SECONDS}s on either {alias} or "
+        f"{deployment_url or '(no deployment URL returned)'} -- the preview may show a "
+        "Vercel login wall to leads. Check Vercel dashboard -> project -> Settings -> "
+        "Deployment Protection, or set VERCEL_BYPASS_TOKEN so screenshot capture can bypass it."
+    )
+    return deployment_url or alias
 
 
 def _disable_deployment_protection(project_name: str) -> None:

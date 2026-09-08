@@ -541,6 +541,17 @@ def update_website_screenshot_url(lead_id: int, screenshot_url: str) -> None:
         )
 
 
+def update_website_preview_url(lead_id: int, preview_url: str) -> None:
+    """A redeploy can land on a different hostname than the first build (a
+    project that has no clean alias falls back to a per-deployment one), so
+    a rebuild must write the URL back -- otherwise the emailed link keeps
+    pointing at the pre-rebuild site forever."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE websites SET preview_url = ? WHERE lead_id = ?", (preview_url, lead_id)
+        )
+
+
 def get_website_by_lead(lead_id: int) -> Optional[dict[str, Any]]:
     with get_connection() as conn:
         row = conn.execute(
