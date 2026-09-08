@@ -77,7 +77,9 @@ PHYSICAL_ADDRESS: str = os.getenv("PHYSICAL_ADDRESS", "")
 UNSPLASH_ACCESS_KEY: str = os.getenv("UNSPLASH_ACCESS_KEY", "")
 # "modern" (default) renders every niche through templates/modern, the
 # photo-led design driven by agents/design_agent.py's NICHE_THEMES. "legacy"
-# uses the old text-only per-niche folders.
+# uses the old text-only per-niche folders. NOTE: the legacy templates hard-code
+# their colours in Tailwind classes, so the per-business accent
+# (design_agent.accent_pair) has no effect there -- legacy is colour-frozen.
 DESIGN_TEMPLATE_STYLE: str = (os.getenv("DESIGN_TEMPLATE_STYLE", "").strip().lower() or "modern")
 # `.strip() or default` (rather than getenv's own default) so an empty
 # `DB_PATH=` line in .env falls back too, not just a fully-absent key.
@@ -145,6 +147,15 @@ FREE_EDITS_DAYS: int = _int_env("FREE_EDITS_DAYS", default=30)
 # One reminder to leads who never replied, this many days after the cold email.
 FOLLOW_UP_ENABLED: bool = os.getenv("FOLLOW_UP_ENABLED", "true").strip().lower() not in ("0", "false", "no")
 FOLLOW_UP_AFTER_DAYS: int = _int_env("FOLLOW_UP_AFTER_DAYS", default=3)
+
+# Never cold-email two businesses in the same niche AND the same town inside
+# this window. Small on purpose: this is a hard divisor on send volume (very
+# roughly distinct niches x distinct towns / N per day), and the Kent trial is
+# one niche across a handful of towns. Set to 0 to disable entirely.
+# Inline int(os.getenv(...)) rather than _int_env: _int_env's `if value` cannot
+# express 0, so an explicit OUTREACH_COOLDOWN_DAYS=0 would silently fall back
+# to the default instead of switching the cooldown off.
+OUTREACH_COOLDOWN_DAYS: int = int(os.getenv("OUTREACH_COOLDOWN_DAYS", "1") or 1)
 
 # --- Autonomous negotiation band (see agents/sales_agent.py) -----------------
 # The LLM negotiation agent may quote any whole-number price inside
@@ -474,6 +485,14 @@ def validate() -> None:
             f"Negotiation band must be positive, got floor={NEGOTIATION_FLOOR}, "
             f"ceiling={NEGOTIATION_CEILING}. Fix NEGOTIATION_FLOOR / "
             "NEGOTIATION_CEILING in .env."
+        )
+    # A negative cooldown reaches SQLite as the modifier '--3 days', which
+    # evaluates to NULL rather than erroring: the predicate would then match
+    # nothing and the cooldown would silently do nothing at all.
+    if OUTREACH_COOLDOWN_DAYS < 0:
+        raise RuntimeError(
+            f"OUTREACH_COOLDOWN_DAYS must be 0 or more, got {OUTREACH_COOLDOWN_DAYS}. "
+            "Set it to 0 in .env to disable the niche+town outreach cooldown."
         )
     if NEGOTIATION_FLOOR > NEGOTIATION_CEILING:
         raise RuntimeError(

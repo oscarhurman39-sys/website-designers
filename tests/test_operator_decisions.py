@@ -54,7 +54,24 @@ def test_cold_email_states_both_prices_and_the_guarantee():
     text = "\n".join(paras)
     assert "£589 one-off" in text and "£39/month" in text
     assert "14-day money-back" in text and "first 30 days are free" in text
-    assert "attach them to your reply" in text  # photos/logo offer kept
+    assert "swap in your own" in text  # photos/logo offer kept
+
+
+def test_cold_email_calls_it_a_draft_and_offers_their_own_photos():
+    """The first email must not imply a bespoke build. Every preview is the
+    same templates/modern layout with stock photography until the prospect
+    sends their own photos, so the first contact has to say so -- and carry
+    the offer that makes it theirs, rather than holding it back for the
+    negotiation stage."""
+    body = sales_agent._plain_text_body("Acme Plumbing", "https://preview.test", "Crawley")
+    lower = body.lower()
+    assert "draft" in lower                      # framed as a draft, not a finished site
+    assert "stock" in lower                      # the photos are honestly described
+    assert "photos and logo" in lower            # the offer is in the FIRST email
+    assert "i built a website" not in lower      # the old overclaim never returns
+    assert sales_agent.cold_email_subject({"business_name": "Acme Plumbing"}) == (
+        "a draft website for Acme Plumbing"
+    )
 
 
 def test_follow_up_goes_only_to_silent_leads_after_the_wait(env, monkeypatch):

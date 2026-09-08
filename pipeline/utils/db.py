@@ -245,6 +245,34 @@ def list_sendable_leads_by_priority() -> list[dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
+def last_cold_email_at(niche: str, location: Optional[str], within_days: int) -> Optional[str]:
+    """Timestamp of the most recent COLD email to any lead in this
+    (niche, town) bucket inside the window, or None.
+
+    Anchored on state_history rather than email_threads (which also holds
+    follow-ups, negotiation replies and handover mail), and on
+    notes='Cold email sent' rather than to_state='emailed' alone --
+    send_follow_up_if_due() and insert_lead() both write to_state='emailed'
+    rows of their own, and either would otherwise re-arm the cooldown.
+    """
+    if within_days <= 0:
+        return None
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT MAX(sh.timestamp) AS ts FROM state_history sh "
+            "JOIN leads l ON l.id = sh.lead_id "
+            "WHERE sh.to_state = 'emailed' AND sh.notes = 'Cold email sent' "
+            "AND l.niche = ? COLLATE NOCASE "
+            # COALESCE both sides: leads.location is nullable, and `l.location = ?`
+            # never matches when either side is NULL, so a town-less lead would
+            # otherwise neither block nor be blocked.
+            "AND COALESCE(l.location, '') = COALESCE(?, '') COLLATE NOCASE "
+            "AND sh.timestamp > datetime('now', ?)",
+            (niche, location or "", f"-{int(within_days)} days"),
+        ).fetchone()
+        return row["ts"] if row and row["ts"] else None
+
+
 def list_all_leads() -> list[dict[str, Any]]:
     with get_connection() as conn:
         rows = conn.execute("SELECT * FROM leads ORDER BY id DESC").fetchall()

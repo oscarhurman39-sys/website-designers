@@ -508,9 +508,26 @@ def collect_checks(offline: bool = False) -> list[Check]:
         ))
         designed = _scalar(config.DB_PATH, "SELECT COUNT(*) FROM leads WHERE status = 'designed'") or 0
         pending = _scalar(config.DB_PATH, "SELECT COUNT(*) FROM leads WHERE status IN ('new', 'researched')") or 0
+        # How many of those 'designed' leads cannot go out yet because another
+        # business in the same niche+town was cold-emailed inside the cooldown.
+        # Without this line a quiet send day reads as "sourcing is broken".
+        held = 0
+        if config.OUTREACH_COOLDOWN_DAYS > 0:
+            held = _scalar(
+                config.DB_PATH,
+                "SELECT COUNT(*) FROM leads l WHERE l.status = 'designed' AND EXISTS ("
+                "  SELECT 1 FROM state_history sh JOIN leads p ON p.id = sh.lead_id"
+                "  WHERE sh.to_state = 'emailed' AND sh.notes = 'Cold email sent'"
+                "    AND p.niche = l.niche COLLATE NOCASE"
+                "    AND COALESCE(p.location,'') = COALESCE(l.location,'') COLLATE NOCASE"
+                "    AND sh.timestamp > datetime('now', ?))",
+                (f"-{config.OUTREACH_COOLDOWN_DAYS} days",),
+            ) or 0
         checks.append(Check(
             "send queue", True,
-            f"{designed} designed (next to be emailed), {pending} new/researched (previews still to build)",
+            f"{designed} designed (next to be emailed)"
+            + (f", {held} held by the {config.OUTREACH_COOLDOWN_DAYS}-day niche+town cooldown" if held else "")
+            + f", {pending} new/researched (previews still to build)",
             level=INFO,
         ))
         unsubscribed = _scalar(config.DB_PATH, "SELECT COUNT(*) FROM unsubscribes") or 0

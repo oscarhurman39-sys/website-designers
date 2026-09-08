@@ -4,6 +4,8 @@ preview URL.
 """
 from __future__ import annotations
 
+import colorsys
+import hashlib
 import json
 import re
 from datetime import datetime, timezone
@@ -188,6 +190,103 @@ DEFAULT_THEME: dict = {
     "nav": ["Services", "About", "Reviews", "Contact"],
 }
 
+# --- Per-business accent ------------------------------------------------------
+# Every business in a niche used to render byte-identical colours, which is what
+# made a run of previews look like one template with the names swapped. The
+# niche theme's accent is now the *base* hue: each business gets a small,
+# deterministic rotation around it derived from its name alone. Same name ->
+# same colour, on every machine and on every rebuild (hashlib, never Python's
+# hash(), which is salted per process). No network call, no stored column.
+ACCENT_HUE_SHIFT_DEG = 12        # max +/- rotation; a plumber stays blue
+ACCENT_SAT_SHIFT = 10            # max +/- saturation, percentage points
+ACCENT_LIGHT_SHIFT = 6           # max +/- lightness, percentage points
+ACCENT_SAT_RANGE = (0.55, 0.92)  # never muddy, never neon
+ACCENT_MIN_LIGHTNESS = 0.12
+# accent is BOTH a white-text background and text on white in the modern
+# template, so one number governs both: WCAG AA for normal text on white.
+ACCENT_MIN_CONTRAST_ON_WHITE = 4.5
+ACCENT_DARK_MIN_DROP = 0.05      # accent_dark must stay visibly darker
+ACCENT_DARK_MIN_LIGHTNESS = 0.08
+_HEX_RE = re.compile(r"^#[0-9a-f]{6}$")
+
+
+def _hex_to_rgb(value: str) -> tuple:
+    v = value.lstrip("#")
+    return tuple(int(v[i:i + 2], 16) / 255 for i in (0, 2, 4))
+
+
+def _rgb_to_hex(rgb) -> str:
+    return "#%02x%02x%02x" % tuple(max(0, min(255, round(c * 255))) for c in rgb)
+
+
+def _relative_luminance(rgb) -> float:
+    """WCAG 2.1 relative luminance."""
+    def channel(c: float) -> float:
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = (channel(c) for c in rgb)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _contrast_with_white(rgb) -> float:
+    """WCAG contrast ratio against #ffffff."""
+    return 1.05 / (_relative_luminance(rgb) + 0.05)
+
+
+def _business_seed(business_name: str) -> Optional[bytes]:
+    """Stable digest of a business name. Whitespace-collapsed and casefolded so
+    'Acme  Plumbing' and 'ACME PLUMBING' are one business."""
+    key = re.sub(r"\s+", " ", business_name or "").strip().casefold()
+    if not key:
+        return None
+    return hashlib.blake2b(key.encode("utf-8"), digest_size=8).digest()
+
+
+def _signed(byte: int, span: int) -> int:
+    """A byte mapped onto the inclusive range [-span, +span]."""
+    return (byte % (2 * span + 1)) - span
+
+
+def accent_pair(lead: dict) -> tuple:
+    """(accent, accent_dark) for this business: the niche's colours, nudged
+    deterministically by business name. Falls back to the untouched niche pair
+    for a blank name or anything that isn't a plain #rrggbb."""
+    theme = theme_for(lead["niche"])
+    base, base_dark = theme["accent"], theme["accent_dark"]
+    seed = _business_seed(lead.get("business_name") or "")
+    if seed is None:
+        return base, base_dark
+
+    h0, l0, s0 = colorsys.rgb_to_hls(*_hex_to_rgb(base))
+    hd, ld, sd = colorsys.rgb_to_hls(*_hex_to_rgb(base_dark))
+
+    hue = ((h0 * 360 + _signed(seed[0], ACCENT_HUE_SHIFT_DEG)) % 360) / 360
+    sat = min(ACCENT_SAT_RANGE[1],
+              max(ACCENT_SAT_RANGE[0], s0 + _signed(seed[1], ACCENT_SAT_SHIFT) / 100))
+    light = max(ACCENT_MIN_LIGHTNESS, l0 + _signed(seed[2], ACCENT_LIGHT_SHIFT) / 100)
+
+    # Contrast is a functional constraint, not taste: darken until white text on
+    # this colour (and this colour as text on white) clears AA. Terminates --
+    # lightness only falls, and black is 21:1.
+    rgb = colorsys.hls_to_rgb(hue, light, sat)
+    while _contrast_with_white(rgb) < ACCENT_MIN_CONTRAST_ON_WHITE and light > ACCENT_MIN_LIGHTNESS:
+        light = max(ACCENT_MIN_LIGHTNESS, light - 0.02)
+        rgb = colorsys.hls_to_rgb(hue, light, sat)
+    accent = _rgb_to_hex(rgb)
+
+    # accent_dark keeps the hand-tuned RELATIONSHIP of the niche pair (gym drops
+    # 0.20 lightness, dentist 0.07) applied to the varied accent, rather than
+    # being re-derived from scratch and drifting out of family.
+    hue_dark = (hue + (hd - h0)) % 1.0
+    light_dark = max(ACCENT_DARK_MIN_LIGHTNESS,
+                     min(light - ACCENT_DARK_MIN_DROP, light - (l0 - ld)))
+    sat_dark = min(ACCENT_SAT_RANGE[1], max(0.35, sat * (sd / s0 if s0 else 1.0)))
+    accent_dark = _rgb_to_hex(colorsys.hls_to_rgb(hue_dark, light_dark, sat_dark))
+
+    if not (_HEX_RE.match(accent) and _HEX_RE.match(accent_dark)):
+        return base, base_dark  # never let anything but #rrggbb reach the template
+    return accent, accent_dark
+
+
 # Human-readable labels for common Google Places 'types' specialties, shown
 # as a trust badge in the hero when a lead has one.
 SPECIALTY_LABELS = {
@@ -362,6 +461,7 @@ def build_context(lead: dict) -> dict:
     template can hide the element instead of printing a placeholder."""
     niche = lead["niche"]
     theme = theme_for(niche)
+    accent, accent_dark = accent_pair(lead)
     city = _city(lead)
     facts = _places_facts(lead)
     phone = (lead.get("phone") or "").strip() or None
@@ -380,8 +480,8 @@ def build_context(lead: dict) -> dict:
         "business_name": name,
         "niche_label": theme["label"],
         "icon": theme["icon"],
-        "accent": theme["accent"],
-        "accent_dark": theme["accent_dark"],
+        "accent": accent,
+        "accent_dark": accent_dark,
         "city": city,
         "location": (lead.get("location") or "").strip(),
         "phone": phone,

@@ -191,7 +191,9 @@ streamlit run dashboard.py
 Every lead renders through **`templates/modern/`** by default: one photo-led,
 Tailwind (CDN, no build step) design, themed per niche from
 `NICHE_THEMES` in `pipeline/agents/design_agent.py`. A theme supplies the
-accent colours, a hand-picked hero and gallery photo, the tagline, an
+*base* accent pair -- which `design_agent.accent_pair()` then rotates
+deterministically from the business name, so two plumbers in one town never
+get identical colours -- a hand-picked hero and gallery photo, the tagline, an
 "about" paragraph, six services with one-line blurbs, and the section
 headings and calls to action (a cafe says "What we serve" and "Find us", a
 plumber says "What we do" and "Get a quote"). Adding a niche is adding one

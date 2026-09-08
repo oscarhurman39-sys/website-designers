@@ -155,7 +155,10 @@ def _build_prompt(lead: dict) -> str:
         f"- Location: {lead.get('location', '')}\n"
         f"- Something noticed about their current site/reputation: {pain_point}\n\n"
         "The email must:\n"
-        "- Mention that you built a free, live website preview for their business, no strings attached\n"
+        "- Say you put together a free, live DRAFT website for their business, no strings attached\n"
+        "- Be honest that it is a draft built from a template, not a finished bespoke site\n"
+        "- Offer to swap in their own photos and logo, free, to make it theirs\n"
+        "- Never claim you built them a finished or custom website\n"
         "- Be under 150 words\n"
         "- NOT include a link (one will be appended separately)\n"
         "- NOT include a signature, footer, or unsubscribe text (appended separately)\n\n"
@@ -168,13 +171,13 @@ def _build_prompt(lead: dict) -> str:
 def _fallback_email(lead: dict) -> tuple[str, str]:
     """Deterministic template used if the HF call fails, so a bad API day
     never stops the pipeline from sending compliant, on-brand emails."""
-    subject = f"a free preview site for {lead['business_name']}"
+    subject = f"a draft website for {lead['business_name']}"
     body = (
         f"Hi there,\n\n"
-        f"I put together a free, live website preview for {lead['business_name']} -- "
-        "no strings attached, just wanted to show you what's possible. "
-        "I noticed your current online presence could use a refresh, so I figured "
-        "I'd build one and let you take a look.\n\n"
+        f"I put together a free, live draft website for {lead['business_name']} -- "
+        "no strings attached, just wanted to show you what's possible. It's built "
+        "from a template and the photos on it are stock ones, so send me your own "
+        "photos and logo and I'll put them in free.\n\n"
         "Take a look whenever you get a chance -- no pressure either way."
     )
     return subject, body
@@ -228,12 +231,24 @@ def _intro_line(business_name: str) -> str:
     frames this as solving a discoverability problem, not just a sales pitch."""
     return (
         f"I noticed people searching for {business_name} only find your Google "
-        "listing. So I built a site that could help you appear more professional "
-        "online."
+        "listing, so I put together a draft website to show what one could look "
+        "like for you."
     )
 
 
-_CHECKLIST_HEADER = "What we improved"
+def _draft_note() -> str:
+    """The honesty line, and the offer that turns the draft into their site.
+    Sits directly under the screenshot in HTML, so it lands where the stock
+    photography is actually visible. Front-loaded deliberately -- it used to
+    appear only at negotiation, after the first email had already implied a
+    bespoke build."""
+    return (
+        "It's a draft, so the photos on it are stock ones for now. Send me your "
+        "own photos and logo and I'll put them in free, so it's actually yours."
+    )
+
+
+_CHECKLIST_HEADER = "What the draft gives you"
 
 
 def _checklist_items(city: str) -> list[str]:
@@ -276,8 +291,8 @@ def _closing_paragraphs(preview_link: str) -> list[str]:
     return [
         f"View the live preview: {preview_link}",
         "This preview is live for 7 days -- after that it'll be repurposed. No pressure, just didn't want you to miss it.",
-        "If you'd like to own it, reply YES. I'll connect your domain and make any changes you want. "
-        "Want your own photos and logo on it? Just attach them to your reply and I'll swap them in, no extra cost.",
+        "If you'd like to own it, reply YES -- I'll connect your domain, swap in your own "
+        "photos and logo, and make any changes you want.",
         _pricing_line(),
         _guarantee_line(),
         _SENDER_NAME,
@@ -318,7 +333,7 @@ def send_follow_up_if_due() -> Optional[int]:
     website = db.get_website_by_lead(lead["id"])
     link = (website or {}).get("preview_url") or ""
     body = "\n\n".join([
-        f"Quick one -- did you get a chance to look at the site I built for {lead['business_name']}?",
+        f"Quick one -- did you get a chance to look at the draft site I put together for {lead['business_name']}?",
         f"It's still live here: {link}" if link else "It's still live.",
         _guarantee_line(),
         "If it's not for you, no problem at all -- just say and I won't follow up again.",
@@ -361,6 +376,7 @@ def _validate_preview_link_for_send(preview_link: str) -> str:
 def _plain_text_body(business_name: str, preview_link: str, city: str) -> str:
     return "\n\n".join([
         _intro_line(business_name),
+        _draft_note(),
         _checklist_paragraph(city),
         *_closing_paragraphs(preview_link),
     ])
@@ -374,22 +390,23 @@ def _build_html_body(business_name: str, preview_link: str, city: str) -> str:
     intro_html = f"<p>{html_module.escape(_intro_line(business_name))}</p>"
     image_html = (
         f'<p><a href="{escaped_link}">'
-        f'<img src="cid:{_SCREENSHOT_CID}" alt="Your new website preview" '
+        f'<img src="cid:{_SCREENSHOT_CID}" alt="Draft website preview" '
         'style="max-width:100%;border:1px solid #ddd;border-radius:8px;">'
         "</a></p>"
     )
+    draft_note_html = f"<p>{html_module.escape(_draft_note())}</p>"
     checklist_html = _checklist_html(city)
     preview_button_html = (
         f'<a href="{escaped_link}" style="display:inline-block;padding:14px 28px;'
         'background:#2563eb;color:white;border-radius:8px;text-decoration:none;'
-        'font-size:16px;font-weight:bold;margin:16px 0">View Your Free Website &rarr;</a>'
+        'font-size:16px;font-weight:bold;margin:16px 0">View the draft &rarr;</a>'
     )
     closing_paragraphs = _closing_paragraphs(preview_link)
     closing_html = preview_button_html + "".join(
         f"<p>{html_module.escape(para).replace(chr(10), '<br>')}</p>"
         for para in closing_paragraphs[1:]
     )
-    return intro_html + image_html + checklist_html + closing_html
+    return intro_html + image_html + draft_note_html + checklist_html + closing_html
 
 
 def _can_send_now() -> bool:
@@ -403,6 +420,23 @@ def _can_send_now() -> bool:
     if not mailboxes.any_account_under_cap():
         return False  # every mailbox at its own daily cap (EMAIL_MAX_PER_DAY_PER_ACCOUNT)
     return True
+
+
+def _cooldown_blocked_until(lead: dict) -> Optional[str]:
+    """The timestamp of the last cold email to this lead's (niche, town) bucket,
+    if that bucket is still inside OUTREACH_COOLDOWN_DAYS. None means clear to
+    send. Two businesses in the same trade and the same town getting the same
+    template days apart is what makes the outreach look like a mailshot.
+
+    Deliberately NOT folded into _can_send_now(): that gate is shared with
+    send_follow_up_if_due(), whose leads are by definition inside their own
+    cooldown window, so gating there would silently kill every follow-up."""
+    days = config.OUTREACH_COOLDOWN_DAYS
+    if days <= 0:
+        return None
+    # .get("niche") rather than ["niche"]: callers outside the queue build lead
+    # dicts by hand and do not always carry one.
+    return db.last_cold_email_at(lead.get("niche") or "", lead.get("location") or "", days)
 
 
 def _send_via_configured_transport(
@@ -474,7 +508,7 @@ def _pin_sender(lead: dict, account: config.EmailAccount) -> None:
 def cold_email_subject(lead: dict) -> str:
     """Subject line of the first email. Shared with preview_email.py so an
     operator review shows exactly what would be sent."""
-    return f"I built a website for {lead['business_name']}"
+    return f"a draft website for {lead['business_name']}"
 
 
 def send_cold_email(lead: dict) -> bool:
@@ -497,6 +531,12 @@ def _send_cold_email_impl(lead: dict) -> bool:
     if not email_addr or db.is_unsubscribed(email_addr):
         db.update_lead_status(lead["id"], "unsubscribed" if db.is_unsubscribed(email_addr) else "lost",
                                notes="No usable email at send time")
+        return False
+
+    # One cold email per niche+town per OUTREACH_COOLDOWN_DAYS. Same contract as
+    # the every-mailbox-at-cap path: return False, no status change, no sender
+    # pinned -- the lead stays 'designed' and comes back round on a later cycle.
+    if _cooldown_blocked_until(lead):
         return False
 
     subject = cold_email_subject(lead)
@@ -550,7 +590,16 @@ def _send_cold_email_impl(lead: dict) -> bool:
         message_id=message_id,
     )
     _pin_sender(lead, account)
-    db.update_lead_status(lead["id"], "emailed", notes="Cold email sent")
+    # A dry run (ENABLE_LIVE_SEND=false) still gets a message_id back from the
+    # transport, so the note is the only place the difference can be recorded.
+    # It has to be: this exact string is what db.last_cold_email_at() counts as
+    # a real send, so writing it for a dry run would let testing the pipeline
+    # freeze a real town under the niche+town cooldown -- and it would put a
+    # send in the audit trail that never happened.
+    db.update_lead_status(
+        lead["id"], "emailed",
+        notes="Cold email sent" if config.ENABLE_LIVE_SEND else "Cold email drafted (dry run -- not sent)",
+    )
 
     _next_send_allowed_at = datetime.now(timezone.utc) + timedelta(
         seconds=random.uniform(config.EMAIL_MIN_DELAY_SECONDS, config.EMAIL_MAX_DELAY_SECONDS)
@@ -564,6 +613,8 @@ def send_next_pending() -> Optional[int]:
     if not _can_send_now():
         return None
     for lead in db.list_sendable_leads_by_priority():
+        if _cooldown_blocked_until(lead):
+            continue  # another business in this niche+town was emailed too recently
         if send_cold_email(lead):
             return lead["id"]
     return None
@@ -779,7 +830,7 @@ def _negotiation_decision(
 
 
 def _reply_subject(lead: dict) -> str:
-    return f"Re: I built a website for {lead['business_name']}"
+    return f"Re: a draft website for {lead['business_name']}"
 
 
 def _send_thread_reply(lead: dict, body: str, classification: str = _NEGOTIATION_CLASSIFICATION) -> bool:

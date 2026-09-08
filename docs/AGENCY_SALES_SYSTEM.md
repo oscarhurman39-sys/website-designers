@@ -36,6 +36,9 @@ These match the current config defaults unless `.env` overrides them:
 - Secondary offer: `SUBSCRIPTION_MONTHLY_PRICE=39`/month (hosting, updates, domain). Quoted in every email; a prospect who picks it is escalated to a human because Stripe subscriptions are not automated yet.
 - Guarantee stated in every email: `GUARANTEE_DAYS=14` money-back and `FREE_EDITS_DAYS=30` free edits.
 - One follow-up reminder `FOLLOW_UP_AFTER_DAYS=3` after the cold email to leads who never replied.
+- One cold email per niche per town per `OUTREACH_COOLDOWN_DAYS=1`: a second business in the same
+  trade and town waits its turn, so neighbours never receive the same template days apart. Follow-ups
+  to leads already emailed are unaffected. `run.py preflight` reports how many leads are being held.
 - Negotiation band: floor defaults to 80% of the offer price; ceiling defaults to the offer price.
 - Currency: `CURRENCY=gbp` by default.
 
