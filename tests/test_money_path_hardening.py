@@ -161,3 +161,26 @@ def test_tracked_link_is_only_used_when_the_endpoint_answers(monkeypatch):
     monkeypatch.setattr(tracker.requests, "get", lambda url, timeout: SimpleNamespace(status_code=200))
     assert tracker.public_endpoint_up() is True
     tracker._health_cache = (0.0, False)
+
+
+# ------------------------------------------------------- dry-run re-queue
+
+def test_dry_run_leads_are_requeued_once_live_send_is_armed():
+    db.init_db()
+    def emailed(note):
+        lead_id = db.insert_lead("Acme Plumbing", "plumber", "Horsham", status="designed")
+        db.update_lead_status(lead_id, "emailed", notes=note)
+        return lead_id
+    rehearsed = emailed("Cold email drafted (dry run -- not sent)")
+    real = emailed("Cold email sent")
+    real_after_rehearsal = emailed("Cold email drafted (dry run -- not sent)")
+    db.log_state_history(real_after_rehearsal, "emailed", "emailed", notes="Cold email sent")
+    followed_up = emailed("Cold email drafted (dry run -- not sent)")
+    db.log_state_history(followed_up, "emailed", "emailed", notes="Follow-up reminder sent")
+
+    assert db.requeue_dry_run_leads() == 2
+    assert db.get_lead(rehearsed)["status"] == "designed"
+    assert db.get_lead(followed_up)["status"] == "designed"   # a follow-up note does not mask the dry run
+    assert db.get_lead(real)["status"] == "emailed"
+    assert db.get_lead(real_after_rehearsal)["status"] == "emailed"
+    assert db.requeue_dry_run_leads() == 0  # idempotent

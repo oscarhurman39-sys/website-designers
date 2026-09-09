@@ -406,6 +406,30 @@ def mark_unsubscribed(lead_id: int, email: str, notes: str = "unsubscribe link c
         return prior_status
 
 
+def requeue_dry_run_leads() -> int:
+    """Put every lead whose most recent cold email was a dry run back in the
+    send queue. A dry run advances the lead to 'emailed' on purpose (no
+    retry loop while rehearsing), which means that without this the lead
+    would be silently retired: it looks sent, so nothing ever sends it for
+    real. main.py calls this at startup once ENABLE_LIVE_SEND is armed.
+    Idempotent. Returns the number of leads re-queued."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT l.id, (SELECT notes FROM state_history h
+                              WHERE h.lead_id = l.id AND h.notes LIKE 'Cold email%'
+                              ORDER BY h.id DESC LIMIT 1) AS last_note
+               FROM leads l WHERE l.status = 'emailed'"""
+        ).fetchall()
+        targets = [r["id"] for r in rows if "dry run" in (r["last_note"] or "").lower()]
+        for lead_id in targets:
+            conn.execute("UPDATE leads SET status = 'designed' WHERE id = ?", (lead_id,))
+            conn.execute(
+                "INSERT INTO state_history (lead_id, from_state, to_state, notes) VALUES (?, 'emailed', 'designed', ?)",
+                (lead_id, "Re-queued: last cold email was a dry run, live send is now armed"),
+            )
+        return len(targets)
+
+
 def suppress_email(email: str) -> None:
     """Record an email-level opt-out WITHOUT changing any lead's status.
 

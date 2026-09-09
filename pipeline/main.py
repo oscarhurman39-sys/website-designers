@@ -428,6 +428,10 @@ def main() -> None:
     config.validate()
     db.init_db()
     print(f"[main] Pipeline starting. DB: {config.DB_PATH}")
+    if config.ENABLE_LIVE_SEND:
+        requeued = db.requeue_dry_run_leads()
+        if requeued:
+            print(f"[main] Live send armed: re-queued {requeued} lead(s) whose only cold email was a dry run")
     print(f"[main] Autonomous negotiation band: {config.CURRENCY_SYMBOL}{config.NEGOTIATION_FLOOR:,}"
           f"-{config.CURRENCY_SYMBOL}{config.NEGOTIATION_CEILING:,} ({config.CURRENCY.upper()}, "
           f"max {config.MAX_NEGOTIATION_ROUNDS} auto-replies/lead)")
