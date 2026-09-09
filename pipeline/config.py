@@ -256,6 +256,10 @@ def _parse_latlng(raw: str):
 SOURCING_EXCLUDE_CENTER = _parse_latlng(os.getenv("SOURCING_EXCLUDE_CENTER", "51.2572,0.0040"))
 SOURCING_EXCLUDE_RADIUS_MILES: float = float(os.getenv("SOURCING_EXCLUDE_RADIUS_MILES", "6") or 6)
 SOURCING_DAILY_LIMIT: int = int(os.getenv("SOURCING_DAILY_LIMIT", "30") or 30)
+# Leads taken from any one "<niche> in <town>" search per run. Sourcing walks
+# every niche x town bucket round-robin, so a run spreads across many towns
+# and trades instead of filling the daily limit from the first search.
+SOURCING_PER_BUCKET: int = int(os.getenv("SOURCING_PER_BUCKET", "2") or 2)
 # Comma-separated; each entry must match a template folder under templates/.
 SOURCING_NICHES: list[str] = [
     niche.lower()

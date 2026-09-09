@@ -294,8 +294,21 @@ def iter_candidates(limit: Optional[int] = None) -> Iterator[Candidate]:
     for niche in config.SOURCING_NICHES:
         if not (TEMPLATES_DIR / niche).is_dir():
             print(f"[sourcing] WARNING: no templates/{niche}/ folder; DesignAgent will fall back for these leads")
-        for location in config.SOURCING_LOCATIONS:
+
+    # Walk every niche x town bucket round-robin, at most SOURCING_PER_BUCKET
+    # leads from each, town-major and starting from a different bucket each
+    # day. A niche-major walk with no cap filled the whole daily limit from the
+    # first search (20 plumbers in one town); this spreads a run across towns
+    # and trades so the send queue -- and each town's cooldown -- stays varied.
+    per_bucket = config.SOURCING_PER_BUCKET if config.SOURCING_PER_BUCKET > 0 else None
+    buckets = [(niche, location) for location in config.SOURCING_LOCATIONS for niche in config.SOURCING_NICHES]
+    if buckets:
+        start = _rotation_offset() % len(buckets)
+        buckets = buckets[start:] + buckets[:start]
+
+    for niche, location in buckets:
             query = f"{niche} in {location}"
+            taken = 0
             try:
                 for place in _iter_places(query):
                     reason = _skip_reason(place)
@@ -315,9 +328,12 @@ def iter_candidates(limit: Optional[int] = None) -> Iterator[Candidate]:
                         continue
                     yield candidate
                     yielded += 1
+                    taken += 1
                     if limit is not None and yielded >= limit:
                         _print_skip_summary(skipped)
                         return
+                    if per_bucket is not None and taken >= per_bucket:
+                        break  # next bucket; unread pages of this search are never fetched
             except PlacesAuthError as exc:
                 print(f"[sourcing] Aborting run -- {exc}")
                 _print_skip_summary(skipped)
@@ -325,6 +341,12 @@ def iter_candidates(limit: Optional[int] = None) -> Iterator[Candidate]:
             except (requests.RequestException, RuntimeError, ValueError, KeyError) as exc:
                 print(f"[sourcing] Query {query!r} failed: {exc}")
     _print_skip_summary(skipped)
+
+
+def _rotation_offset() -> int:
+    """Which bucket a run starts from: advances one per UTC day, so the same
+    front-of-list towns are not searched first every day."""
+    return datetime.now(timezone.utc).date().toordinal()
 
 
 def _print_skip_summary(skipped: dict[str, int]) -> None:
