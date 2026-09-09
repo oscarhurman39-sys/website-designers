@@ -50,7 +50,7 @@ from typing import Optional
 
 import config
 from agents import design_agent, lead_agent, sales_agent, sourcing_agent
-from utils import db, github_api, teardown, vercel_api
+from utils import db, github_api, stripe_utils, teardown, vercel_api
 
 PIPELINE_DIR = Path(__file__).resolve().parent
 LEADS_INBOX = PIPELINE_DIR / "leads_inbox"
@@ -190,27 +190,98 @@ def _maybe_source_leads() -> None:
         print(f"[main] Sourced {inserted} new lead(s) from Google Places")
 
 
-def _run_cycle() -> None:
-    _process_inbox_csvs()
-    _maybe_source_leads()
+_STAGE_ALERT_AFTER = 3
+_stage_failures: dict[str, int] = {}
 
+
+def _stage(name: str, fn) -> None:
+    """Run one cycle stage in isolation. Before this, one SMTP error in the
+    send stage skipped reply polling and post-payment handover for the rest
+    of the cycle, and the only trace was a console line. A stage that fails
+    _STAGE_ALERT_AFTER cycles in a row raises a Slack alert once; the counter
+    resets on the next success."""
+    try:
+        fn()
+    except Exception as exc:  # noqa: BLE001 - one stage must not take the others down
+        count = _stage_failures.get(name, 0) + 1
+        _stage_failures[name] = count
+        print(f"[main] Stage '{name}' failed ({count} in a row): {exc}")
+        if count == _STAGE_ALERT_AFTER:
+            sales_agent._slack_notify(
+                f":rotating_light: *PIPELINE STAGE FAILING* -- '{name}' has failed "
+                f"{count} cycles in a row. Latest: {exc}"
+            )
+        return
+    _stage_failures.pop(name, None)
+
+
+def _research_new_leads() -> None:
     for lead in db.list_leads_by_status("new"):
         lead_agent.research_lead(lead)
 
-    design_agent.run()
 
+def _send_outreach() -> None:
     sent_lead_id = sales_agent.send_next_pending()
     if sent_lead_id:
         print(f"[main] Sent cold email to lead {sent_lead_id}")
     elif (followed := sales_agent.send_follow_up_if_due()):
         print(f"[main] Sent follow-up reminder to lead {followed}")
 
+
+def _poll_replies() -> None:
     replies = sales_agent.check_inbox()
     if replies:
         print(f"[main] Processed {replies} inbound reply(ies)")
 
-    _finalize_won_leads()
-    _maybe_expire_previews()
+
+_RECONCILE_INTERVAL_SECONDS = 10 * 60
+_last_reconcile_at: Optional[float] = None
+
+
+def _maybe_reconcile_payments() -> None:
+    """Stripe's webhook is the only thing that marks a lead paid, and it only
+    arrives if the tunnel and webhook process are both up. Every ten minutes
+    ask Stripe directly about every lead holding a checkout link, so a
+    customer who paid while the webhook was deaf still gets their handover."""
+    global _last_reconcile_at
+    now = time.monotonic()
+    if _last_reconcile_at is not None and now - _last_reconcile_at < _RECONCILE_INTERVAL_SECONDS:
+        return
+    _last_reconcile_at = now
+    for lead in db.list_leads_by_status("payment_sent"):
+        if not lead.get("checkout_url"):
+            continue
+        paid = stripe_utils.find_paid_session(lead["id"])
+        if paid and sales_agent.record_payment(lead["id"], paid["id"], paid["amount_total"], source="reconciliation"):
+            print(f"[main] Reconciliation found a settled payment for lead {lead['id']} the webhook missed.")
+
+
+_BACKUP_INTERVAL_SECONDS = 24 * 60 * 60
+_last_backup_at: Optional[float] = None
+
+
+def _maybe_backup_db() -> None:
+    global _last_backup_at
+    now = time.monotonic()
+    if _last_backup_at is not None and now - _last_backup_at < _BACKUP_INTERVAL_SECONDS:
+        return
+    _last_backup_at = now
+    print(f"[main] Database backed up to {db.backup_database()}")
+
+
+def _run_cycle() -> None:
+    # Money-side stages run before the send so a mail failure can no longer
+    # starve reply handling or handover, and each is isolated regardless.
+    _stage("inbox-csv", _process_inbox_csvs)
+    _stage("sourcing", _maybe_source_leads)
+    _stage("research", _research_new_leads)
+    _stage("design", design_agent.run)
+    _stage("replies", _poll_replies)
+    _stage("reconcile-payments", _maybe_reconcile_payments)
+    _stage("handover", _finalize_won_leads)
+    _stage("send", _send_outreach)
+    _stage("expire-previews", _maybe_expire_previews)
+    _stage("backup", _maybe_backup_db)
 
 
 def _maybe_expire_previews() -> None:

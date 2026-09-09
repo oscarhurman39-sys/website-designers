@@ -13,8 +13,35 @@ from base64 import urlsafe_b64decode, urlsafe_b64encode
 from typing import Optional
 from urllib.parse import quote
 
+import time
+
+import requests
+
 import config
 from utils import db
+
+_HEALTH_CACHE_SECONDS = 300
+_health_cache: tuple[float, bool] = (0.0, False)
+
+
+def public_endpoint_up() -> bool:
+    """Is PUBLIC_BASE_URL/click going to work for a lead right now? A tracked
+    link only redirects if webhook_server.py is reachable there, so a cold
+    email must fall back to the raw preview URL when it is not. Cached for
+    five minutes so a send does not cost a probe every time."""
+    global _health_cache
+    checked_at, up = _health_cache
+    if checked_at and time.monotonic() - checked_at < _HEALTH_CACHE_SECONDS:
+        return up
+    base = (config.PUBLIC_BASE_URL or "").rstrip("/")
+    up = False
+    if base and not any(h in base for h in ("localhost", "127.0.0.1")):
+        try:
+            up = requests.get(f"{base}/health", timeout=3).status_code == 200
+        except requests.RequestException:
+            up = False
+    _health_cache = (time.monotonic(), up)
+    return up
 
 _TOKEN_PURPOSE = b"click"
 

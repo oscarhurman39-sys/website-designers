@@ -135,6 +135,40 @@ def alert_needs_human(lead: dict, reason: str) -> None:
     )
 
 
+def record_payment(lead_id: int, session_id: Optional[str], amount_minor, source: str) -> bool:
+    """Promote a lead to 'won' for a settled Checkout session. Idempotent:
+    the status write is atomic against 'won', so the webhook and the
+    reconciliation poll can both see the same payment safely. A *different*
+    paid session for a lead already won is a double charge -- alert, never
+    silently swallow it. Returns True only on the first promotion."""
+    lead = db.get_lead(lead_id)
+    if lead is None:
+        return False
+    if not db.update_lead_status_unless(lead_id, "won", notes=f"Stripe {source}", unless_current=("won",)):
+        prior = lead.get("paid_session_id")
+        if session_id and prior and prior != session_id:
+            alert_needs_human(
+                lead,
+                f"A second paid Stripe session ({session_id}) arrived for a lead already paid via "
+                f"{prior}. This is a double charge: refund one from the Stripe dashboard.",
+            )
+        return False
+    fields: dict = {}
+    if isinstance(amount_minor, int):
+        fields["won_amount"] = amount_minor // 100
+    if session_id:
+        fields["paid_session_id"] = session_id
+    if fields:
+        db.update_lead_fields(lead_id, **fields)
+    banner = "*" * 70
+    print(
+        f"\n{banner}\nPAYMENT RECEIVED ({source}): {lead['business_name']} (lead {lead_id})\n"
+        f"Automated handover will run on the pipeline's next cycle (GitHub +\n"
+        f"Vercel invites). 'transfer {lead_id}' remains available as a manual override.\n{banner}\n"
+    )
+    return True
+
+
 # --- Email drafting (Hugging Face) --------------------------------------------
 
 def _hf_client() -> InferenceClient:
@@ -552,6 +586,10 @@ def _send_cold_email_impl(lead: dict) -> bool:
         )
         return False
     city = lead.get("location") or "your area"
+    # The raw URL is what gets validated above; the tracked one only replaces
+    # it in the copy when the redirect endpoint is confirmed reachable.
+    if config.CLICK_TRACKING_ENABLED and tracker.public_endpoint_up():
+        preview_link = tracker.create_click_link(lead["id"])
     body_with_link = _plain_text_body(lead["business_name"], preview_link, city)
 
     # Embed the cached preview screenshot inline (cid:) if design_agent.py
@@ -972,7 +1010,14 @@ def _run_negotiation_round(lead: dict, inbound_body: str, github_captured: bool 
     if lead["status"] == "won":
         _handle_won_reply(lead, github_captured)
         return
-    link_outstanding = lead["status"] == "payment_sent"
+    # A link is outstanding if the status says so OR a checkout URL was ever
+    # minted: keying off status alone let a COUNTER demote 'payment_sent' to
+    # 'negotiating', after which the next CLOSE minted a second live link.
+    link_outstanding = lead["status"] == "payment_sent" or bool(lead.get("checkout_url"))
+    if link_outstanding and decision == "COUNTER":
+        # Re-pricing a deal that already has a payable link would leave two
+        # live prices. Answer the message and re-send the existing link.
+        decision = "REPLY"
     # Band clamp, then cap at the standing quote: a price already offered to
     # this lead can never rise, so a hallucinated "CLOSE 5000" after we
     # quoted 600 closes at 600, not at the band ceiling.
@@ -1030,7 +1075,7 @@ def _run_negotiation_round(lead: dict, inbound_body: str, github_captured: bool 
             db.update_lead_fields(lead["id"], quoted_price_usd=price)
             if not db.update_lead_status_unless(
                 lead["id"], "negotiating", notes=f"Auto-counter at {price}",
-                unless_current=("negotiating", "won"),
+                unless_current=("negotiating", "won", "payment_sent"),
             ):
                 db.log_state_history(lead["id"], lead["status"], lead["status"],
                                      notes=f"Auto-counter at {price}")
@@ -1268,6 +1313,8 @@ def _handle_inbound_impl(lead: dict, msg) -> None:  # msg: email_utils.InboundEm
         # Guarded so a stray DSN can't demote a paid lead out of the handover queue.
         db.update_lead_status_unless(lead["id"], "bounced", notes="Bounce/DSN detected",
                                      unless_current=("won", "payment_sent"))
+        if lead.get("contact_email"):
+            db.suppress_email(lead["contact_email"])  # never re-source a dead address
         return
 
     classification = classify_reply(msg.subject, msg.body)
@@ -1373,6 +1420,23 @@ def _maybe_apply_client_assets(lead: dict, msg) -> None:
     )
 
 
+_EMAIL_IN_TEXT = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+
+
+def _lead_from_bounce(msg) -> Optional[dict]:
+    """The lead whose address a DSN reports as undeliverable, if any."""
+    seen: set[str] = set()
+    for addr in _EMAIL_IN_TEXT.findall(f"{msg.subject}\n{msg.body}"):
+        addr = addr.lower()
+        if addr in seen or addr == (msg.from_addr or "").lower():
+            continue
+        seen.add(addr)
+        lead = db.get_lead_by_email(addr)
+        if lead is not None:
+            return lead
+    return None
+
+
 def check_inbox() -> int:
     """Poll IMAP for unseen messages, classify, and act. Returns count processed."""
     processed = 0
@@ -1386,6 +1450,11 @@ def check_inbox() -> int:
         if db.message_id_seen(msg.message_id):
             continue  # already processed in a prior poll
         lead = db.get_lead_by_email(msg.from_addr)
+        if lead is None and compliance.is_bounce_message(msg.subject, msg.from_addr, msg.content_type):
+            # A delivery failure is sent by the receiving server, never by the
+            # prospect, so it can only be matched by the failed address in its
+            # body. Without this, no bounce was ever recorded or suppressed.
+            lead = _lead_from_bounce(msg)
         if lead is None:
             continue  # reply from an address we have no lead for; nothing to act on
         if not lead.get("sender_account") and getattr(msg, "account_user", ""):

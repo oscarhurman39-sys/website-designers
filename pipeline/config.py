@@ -84,6 +84,13 @@ DESIGN_TEMPLATE_STYLE: str = (os.getenv("DESIGN_TEMPLATE_STYLE", "").strip().low
 # `.strip() or default` (rather than getenv's own default) so an empty
 # `DB_PATH=` line in .env falls back too, not just a fully-absent key.
 DB_PATH: str = os.getenv("DB_PATH", "").strip() or str(Path(__file__).resolve().parent / "leads.db")
+# Daily online backups of DB_PATH (utils/db.backup_database), newest 7 kept.
+DB_BACKUP_DIR: str = os.getenv("DB_BACKUP_DIR", "").strip() or str(Path(__file__).resolve().parent / "backups")
+# Route the cold email's preview link through PUBLIC_BASE_URL/click so opens
+# are measured. Off by default: while PUBLIC_BASE_URL is an ngrok hostname the
+# tracked link is uglier and spammier than the vercel.app one, and if the
+# tunnel is down the link is dead. Turn on once a real domain fronts it.
+CLICK_TRACKING_ENABLED: bool = os.getenv("CLICK_TRACKING_ENABLED", "").strip().lower() in ("1", "true", "yes")
 PUBLIC_BASE_URL: str = (os.getenv("PUBLIC_BASE_URL", "").strip() or "http://localhost:5000").rstrip("/")
 # --- Currency ----------------------------------------------------------------
 # ONE source of truth for the money. Every price a prospect reads and every

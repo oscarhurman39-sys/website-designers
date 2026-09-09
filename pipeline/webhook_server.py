@@ -17,6 +17,7 @@ import stripe
 from flask import Flask, Response, abort, redirect, request, send_from_directory
 
 import config
+from agents import sales_agent
 from utils import compliance, db, screenshot, stripe_utils, tracker
 
 
@@ -108,19 +109,11 @@ def create_app() -> Flask:
             except (ValueError, TypeError, OverflowError):
                 return "Invalid lead metadata", 400
             if lead_id is not None:
-                lead = db.get_lead(lead_id)
-                # A retry must not overwrite recorded payment or trigger handover again.
-                if lead is not None and lead.get("status") != "won":
-                    db.update_lead_status(lead_id, "won", notes="Stripe checkout.session.completed")
-                    amount_minor = (event.get("data", {}).get("object", {}) or {}).get("amount_total")
-                    if isinstance(amount_minor, int):
-                        db.update_lead_fields(lead_id, won_amount=amount_minor // 100)
-                    banner = "*" * 70
-                    print(
-                        f"\n{banner}\nPAYMENT RECEIVED: {lead['business_name']} (lead {lead_id})\n"
-                        f"Automated handover will run on the pipeline's next cycle (GitHub +\n"
-                        f"Vercel invites). 'transfer {lead_id}' remains available as a manual override.\n{banner}\n"
-                    )
+                # Idempotent against replays; alerts on a second paid session.
+                sales_agent.record_payment(
+                    lead_id, session.get("id"), session.get("amount_total"),
+                    source="checkout.session.completed",
+                )
         return "", 200
 
     return app

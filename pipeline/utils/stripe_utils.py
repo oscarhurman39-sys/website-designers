@@ -56,6 +56,36 @@ def create_checkout_session(
     return session.url
 
 
+def key_is_live() -> Optional[bool]:
+    """True for a live key, False for test, None if it is neither (in which
+    case no payment may be trusted)."""
+    key = config.STRIPE_SECRET_KEY
+    if key.startswith(("sk_live_", "rk_live_")):
+        return True
+    if key.startswith(("sk_test_", "rk_test_")):
+        return False
+    return None
+
+
+def find_paid_session(lead_id: int) -> Optional[dict]:
+    """The webhook is the fast path to 'won'; this is the safety net for when
+    it is not listening (tunnel down, webhook process dead). Scans recent
+    completed Checkout sessions for one carrying this lead's metadata that
+    actually settled. Returns {id, amount_total} or None."""
+    expected_live = key_is_live()
+    if expected_live is None:
+        return None
+    sessions = stripe.checkout.Session.list(status="complete", limit=100)
+    for s in sessions.auto_paging_iter() if hasattr(sessions, "auto_paging_iter") else sessions:
+        meta = s.get("metadata", {}) or {}
+        if (str(meta.get("lead_id")) == str(lead_id)
+                and s.get("payment_status") == "paid"
+                and s.get("mode") == "payment"
+                and bool(s.get("livemode")) is expected_live):
+            return {"id": s.get("id"), "amount_total": s.get("amount_total")}
+    return None
+
+
 def verify_webhook_signature(payload: bytes, sig_header: str) -> stripe.Event:
     """Verify and construct a Stripe event from a raw webhook request body.
     Raises stripe.error.SignatureVerificationError if the signature is invalid."""

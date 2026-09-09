@@ -148,6 +148,9 @@ def init_db(db_path: Optional[str] = None) -> None:
         # actually paid (webhook_server), so niches can be ranked by revenue.
         _migrate_add_column(conn, "leads", "follow_up_sent_at", "TEXT")
         _migrate_add_column(conn, "leads", "won_amount", "INTEGER")
+        # The Stripe Checkout session that actually paid. A second paid
+        # session for the same lead is a double charge, not a replay.
+        _migrate_add_column(conn, "leads", "paid_session_id", "TEXT")
         # Persist acquisition quality so the sales queue can prefer clear website needs.
         _migrate_add_column(conn, "leads", "website_status", "TEXT")
         _migrate_add_column(conn, "leads", "site_score", "INTEGER")
@@ -171,7 +174,35 @@ def _connect(db_path: Optional[str] = None) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path or config.DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # Three processes write this file (main loop, webhook server, dashboard).
+    # WAL lets readers proceed during a write instead of hitting SQLITE_BUSY;
+    # the pragma is persistent in the file, so re-issuing it is a cheap no-op.
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 30000")
     return conn
+
+
+def backup_database(dest_dir: Optional[str] = None, keep: int = 7) -> Path:
+    """Consistent online copy of the live database via sqlite's backup API
+    (safe under WAL, unlike copying the file). Keeps the newest `keep`
+    copies. This file is the only record of who has paid; until this
+    existed there was no backup anywhere."""
+    target_dir = Path(dest_dir or config.DB_BACKUP_DIR)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    dest = target_dir / f"leads-{stamp}.db"
+    src = sqlite3.connect(config.DB_PATH, timeout=30)
+    try:
+        dst = sqlite3.connect(str(dest))
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+    for stale in sorted(target_dir.glob("leads-*.db"))[:-keep]:
+        stale.unlink(missing_ok=True)
+    return dest
 
 
 @contextmanager
