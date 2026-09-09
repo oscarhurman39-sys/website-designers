@@ -88,6 +88,17 @@ async def capture_screenshot(preview_url: str, lead_id: int) -> str:
     return str(path)
 
 
+# Contact map: Google's embed paints blank in headless Chromium, so every
+# cold-email screenshot used to carry a white box. templates/modern ships a
+# map-styled placeholder that only shows while <html data-screenshot> is set.
+SCREENSHOT_MODE_JS = "document.documentElement.setAttribute('data-screenshot', '1')"
+
+
+def mark_for_screenshot(page) -> None:
+    """Swap capture-hostile elements (the live map) for their placeholders."""
+    page.evaluate(SCREENSHOT_MODE_JS)
+
+
 def _looks_like_vercel_login_wall(page) -> bool:
     haystack = f"{page.title() or ''} {page.content() or ''}".lower()
     return any(marker in haystack for marker in _VERCEL_LOGIN_WALL_MARKERS)
@@ -143,6 +154,8 @@ def _capture_sync(preview_url: str, out_path: Path) -> None:
             # from the path's extension otherwise, and won't recognize the
             # ".png.tmp" temp suffix used here to avoid a partial/corrupt
             # file ever masquerading as a valid cache hit.
+            mark_for_screenshot(page)
+            page.wait_for_timeout(100)
             page.screenshot(path=str(tmp_path), full_page=True, type="png")
             tmp_path.replace(out_path)
         finally:

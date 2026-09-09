@@ -120,3 +120,29 @@ def test_service_icon_chip_has_a_visible_background():
     if 'id="services"' in html and "color-mix" not in html:
         pytest.skip("this lead did not draw the cards variant")
     assert "bg-[var(--accent)]/10" not in html
+
+
+# ---------------------------------------------------------------- contact map
+
+def test_contact_map_ships_the_live_embed_plus_a_screenshot_placeholder():
+    env = Environment(loader=FileSystemLoader(str(MODERN)), undefined=StrictUndefined,
+                      autoescape=select_autoescape(enabled_extensions=("html",)))
+    with_map = design_agent.build_context(_lead(address="1 High St, Oxted RH8 9AA"))
+    without = design_agent.build_context(_lead())
+    for variant in design_agent.BLOCK_VARIANTS["contact"]:
+        template = env.get_template(f"blocks/contact/{variant}.html")
+        html = template.render(**with_map)
+        assert "map-live" in html and "map-placeholder" in html
+        assert "Interactive map locating Acme Plumbing" in html
+        assert "map-" not in template.render(**without)
+    css = (MODERN / "style.css").read_text(encoding="utf-8")
+    assert "html[data-screenshot] .map-placeholder" in css and "html[data-screenshot] .map-live" in css
+
+
+def test_capture_flips_the_page_into_screenshot_mode():
+    from utils import screenshot
+    calls = []
+    class Page:
+        def evaluate(self, js): calls.append(js)
+    screenshot.mark_for_screenshot(Page())
+    assert calls == [screenshot.SCREENSHOT_MODE_JS] and "data-screenshot" in calls[0]

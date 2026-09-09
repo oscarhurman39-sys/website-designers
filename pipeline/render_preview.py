@@ -136,6 +136,10 @@ def _capture(p, url: str, slug: str, suffixes: list[str]) -> None:
             page.wait_for_timeout(1500)
             page.evaluate("window.scrollTo(0, 0)")
             page.wait_for_timeout(800)  # let the fade-up animation finish
+            # Same flip utils/screenshot.py makes before an emailed capture: the
+            # live map iframe paints blank headless, the placeholder does not.
+            page.evaluate("document.documentElement.setAttribute('data-screenshot', '1')")
+            page.wait_for_timeout(100)
             page.screenshot(path=str(OUT_DIR / f"{slug}{suffix}.png"), full_page=True)
             page.close()
     finally:

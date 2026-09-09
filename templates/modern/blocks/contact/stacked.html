@@ -25,8 +25,8 @@
       </div>
     </div>
     {% if map_embed_url %}
-    <div class="mt-8 overflow-hidden rounded-2xl border border-slate-200 shadow-sm">
-      <iframe src="{{ map_embed_url }}" class="h-[320px] w-full" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Map to {{ business_name }}"></iframe>
+    <div class="relative mt-8 h-[320px] overflow-hidden rounded-2xl border border-slate-200 shadow-sm">
+      {% include "blocks/contact/_map.html" %}
     </div>
     {% endif %}
   </div>
