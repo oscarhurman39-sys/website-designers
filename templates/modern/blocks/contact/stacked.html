@@ -1,0 +1,33 @@
+{# Contact "stacked": centred heading, detail cards in a row, map full-width below. #}
+<section id="contact" class="bg-slate-50 border-t border-slate-200">
+  <div class="max-w-6xl mx-auto px-6 py-20">
+    <div class="mx-auto max-w-2xl text-center">
+      <p class="text-sm font-semibold uppercase tracking-widest text-[var(--accent)]">Contact</p>
+      <h2 class="mt-2 text-3xl md:text-4xl font-extrabold tracking-tight text-slate-900">Get in touch</h2>
+      <p class="mt-4 text-slate-600">Call, email or drop in. We are happy to talk through what you need and give you a straight answer.</p>
+    </div>
+    <div class="mt-10 grid gap-5 sm:grid-cols-2 {% if phone and email %}lg:grid-cols-3{% endif %}">
+      {% if phone %}
+      <a href="tel:{{ phone_href }}" class="rounded-2xl bg-white p-6 shadow-sm border border-slate-200 hover:border-[var(--accent)] transition">
+        <p class="text-2xl">📞</p><p class="mt-3 text-xs uppercase tracking-widest text-slate-500">Phone</p>
+        <p class="mt-1 text-lg font-semibold text-slate-900">{{ phone }}</p>
+      </a>
+      {% endif %}
+      {% if email %}
+      <a href="mailto:{{ email }}" class="rounded-2xl bg-white p-6 shadow-sm border border-slate-200 hover:border-[var(--accent)] transition">
+        <p class="text-2xl">✉️</p><p class="mt-3 text-xs uppercase tracking-widest text-slate-500">Email</p>
+        <p class="mt-1 font-semibold text-slate-900 break-all">{{ email }}</p>
+      </a>
+      {% endif %}
+      <div class="rounded-2xl bg-white p-6 shadow-sm border border-slate-200">
+        <p class="text-2xl">📍</p><p class="mt-3 text-xs uppercase tracking-widest text-slate-500">Find us</p>
+        <p class="mt-1 font-semibold text-slate-900">{{ address or (location or city) }}</p>
+      </div>
+    </div>
+    {% if map_embed_url %}
+    <div class="mt-8 overflow-hidden rounded-2xl border border-slate-200 shadow-sm">
+      <iframe src="{{ map_embed_url }}" class="h-[320px] w-full" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Map to {{ business_name }}"></iframe>
+    </div>
+    {% endif %}
+  </div>
+</section>

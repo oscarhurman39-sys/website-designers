@@ -39,6 +39,42 @@ _AUTH_PAGE_MARKERS = (
 # reason previews looked like templates rather than websites.
 MODERN_TEMPLATE = "modern"
 
+# The modern template is assembled from interchangeable section blocks
+# (templates/modern/blocks/<section>/<variant>.html). Which variant each
+# lead gets, and the order of the middle sections, is seeded on the lead id
+# so a rebuild (client photos arriving mid-negotiation) never reshuffles a
+# page a prospect has already opened. Before this, two real emailed
+# previews measured 95.4% pixel-identical.
+BLOCK_VARIANTS: dict[str, tuple[str, ...]] = {
+    "hero": ("cover", "split", "band"),
+    "services": ("cards", "list", "tiles"),
+    "about": ("photos", "centered", "panel"),
+    "reviews": ("band", "card"),
+    "contact": ("split", "stacked"),
+}
+# Contact is always last; everything else can move.
+SECTION_ORDERS: tuple[tuple[str, ...], ...] = (
+    ("services", "about", "reviews", "contact"),
+    ("about", "services", "reviews", "contact"),
+    ("services", "reviews", "about", "contact"),
+)
+
+
+def choose_blocks(lead_id: int, has_own_photos: bool = False) -> tuple[dict[str, str], tuple[str, ...]]:
+    """Deterministic per-lead layout: one variant per section plus a section
+    order, from independent bytes of one hash. A lead that sent their own
+    photos always gets the photo-led about block -- their shopfront is the
+    thing that sells the site."""
+    digest = hashlib.sha256(f"blocks:{lead_id}".encode()).digest()
+    blocks = {
+        section: variants[digest[i] % len(variants)]
+        for i, (section, variants) in enumerate(BLOCK_VARIANTS.items())
+    }
+    if has_own_photos:
+        blocks["about"] = "photos"
+    order = SECTION_ORDERS[digest[len(BLOCK_VARIANTS)] % len(SECTION_ORDERS)]
+    return blocks, order
+
 # Minimum Google review count before the rating is shown on the page. A
 # 5.0 from three reviews reads as thin; from ten it reads as a real business.
 MIN_GOOGLE_REVIEWS_FOR_BADGE = 10
@@ -478,6 +514,7 @@ def build_context(lead: dict) -> dict:
     stock_gallery = [_unsplash(pid, 900, 700) for pid in theme.get("gallery", [])]
     hero_image = own_photos[0] if own_photos else get_hero_image_url(niche)
     gallery = (own_photos[1:3] + stock_gallery)[:2] if own_photos else stock_gallery
+    blocks, section_order = choose_blocks(lead["id"], has_own_photos=bool(own_photos))
     return {
         # --- modern template ---------------------------------------------
         "business_name": name,
@@ -500,6 +537,8 @@ def build_context(lead: dict) -> dict:
         "gallery_images": gallery,
         "logo_url": f"assets/{logo_path.name}" if logo_path else None,
         "own_photos": own_photos,
+        "blocks": blocks,
+        "section_order": section_order,
         "about": theme["about"].format(name=name, city=city),
         "service_items": [{"name": n, "blurb": b} for n, b in theme["services"]],
         "services_heading": theme.get("services_heading", "What we do"),
