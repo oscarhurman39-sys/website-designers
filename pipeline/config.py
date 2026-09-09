@@ -282,6 +282,15 @@ SOURCING_LOCATIONS: list[str] = _env_list(
 SOURCING_INTERVAL_SECONDS: int = 3600
 
 # --- Rate limiting (cold email deliverability safeguards) ------------------
+# Cold emails and follow-up reminders only leave inside this LOCAL-time
+# window on these weekdays (0 = Monday). A cold email that lands at 01:00
+# reads as automated spam and is deleted before it is read. Replies inside a
+# live negotiation are not gated: answering a prospect promptly is the point.
+SEND_WINDOW_START_HOUR: int = int(os.getenv("SEND_WINDOW_START_HOUR", "8") or 8)
+SEND_WINDOW_END_HOUR: int = int(os.getenv("SEND_WINDOW_END_HOUR", "18") or 18)
+SEND_WINDOW_DAYS: frozenset[int] = frozenset(
+    int(d) for d in (os.getenv("SEND_WINDOW_DAYS", "").strip() or "0,1,2,3,4").split(",") if d.strip()
+)
 EMAIL_MIN_DELAY_SECONDS: int = 120
 EMAIL_MAX_DELAY_SECONDS: int = 300
 EMAIL_MAX_PER_HOUR: int = 20

@@ -717,6 +717,14 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
         )
         return None
 
+    # A preview only earns its deploy if there is an address to send it to.
+    # SalesAgent would mark this lead lost at send time anyway; doing it here
+    # saves a GitHub repo and a Vercel project per unmailable lead -- 6 of 12
+    # sourced leads on the first live day were built and then never sent.
+    if not (lead.get("contact_email") or "").strip():
+        db.update_lead_status(lead["id"], "lost", notes="No contact email found; preview not built")
+        return None
+
     files = build_site_files(lead)
 
     _repo, repo_url, repo_full_name = github_api.create_repo_with_files(

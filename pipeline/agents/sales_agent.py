@@ -443,9 +443,19 @@ def _build_html_body(business_name: str, preview_link: str, city: str) -> str:
     return intro_html + image_html + draft_note_html + checklist_html + closing_html
 
 
+def _inside_send_window(local_now: datetime) -> bool:
+    """Business-hours gate for outbound cold email and follow-ups, in the
+    operator's local time. Takes the time explicitly so tests can pin it."""
+    if local_now.weekday() not in config.SEND_WINDOW_DAYS:
+        return False
+    return config.SEND_WINDOW_START_HOUR <= local_now.hour < config.SEND_WINDOW_END_HOUR
+
+
 def _can_send_now() -> bool:
     now = datetime.now(timezone.utc)
     if now < _next_send_allowed_at:
+        return False
+    if not _inside_send_window(now.astimezone()):
         return False
     if db.emails_sent_last_hour() >= config.EMAIL_MAX_PER_HOUR:
         return False
