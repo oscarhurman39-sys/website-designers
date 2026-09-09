@@ -173,3 +173,31 @@ def test_rendered_page_carries_this_business_accent():
     html = design_agent.render_template_files("plumber", ctx)["index.html"]
     assert f'--accent: {ctx["accent"]};' in html
     assert ctx["accent"] != design_agent.theme_for("plumber")["accent"]
+
+
+def test_accent_invariants_hold_across_many_names_and_niches():
+    """Brute force, because the failure mode here is statistical: measuring
+    contrast before rounding to 8-bit hex put roughly 1 in 250 businesses just
+    under the AA floor (4.48-4.50), which a handful of sample names missed."""
+    import colorsys
+    names = [f"{p} {s} {i}"
+             for p in ("Acme", "Harbour", "Copthorne", "Orca", "Emile & Sons")
+             for s in ("Plumbing", "Heating Ltd", "Services", "& Co", "24/7")
+             for i in range(8)]
+    failures = []
+    for niche in _ACCENT_NICHES:
+        base = design_agent.theme_for(niche)["accent"]
+        base_hue = _hue_deg(base)
+        for name in names:
+            accent, dark = design_agent.accent_pair(_lead(niche=niche, business_name=name))
+            rgb, rgb_dark = design_agent._hex_to_rgb(accent), design_agent._hex_to_rgb(dark)
+            if design_agent._contrast_with_white(rgb) < 4.5:
+                failures.append(f"{niche}/{name}: {accent} contrast too low")
+            if design_agent._relative_luminance(rgb_dark) >= design_agent._relative_luminance(rgb):
+                failures.append(f"{niche}/{name}: {dark} not darker than {accent}")
+            drift = abs((_hue_deg(accent) - base_hue + 180) % 360 - 180)
+            if drift > design_agent.ACCENT_HUE_SHIFT_DEG + 0.6:  # +0.6 for hex quantisation
+                failures.append(f"{niche}/{name}: hue drift {drift:.1f} deg")
+            if accent == base:
+                failures.append(f"{niche}/{name}: identical to the niche base colour")
+    assert not failures, f"{len(failures)} of {len(_ACCENT_NICHES) * len(names)}: {failures[:5]}"
