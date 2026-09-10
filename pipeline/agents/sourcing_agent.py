@@ -56,6 +56,43 @@ class PlacesAuthError(RuntimeError):
     project. Distinguished from transient failures so one run stops after the
     first such response rather than repeating it for every niche x location."""
 
+
+class PlacesQuotaError(RuntimeError):
+    """HTTP 429: the key's quota or rate limit is spent. Every further request
+    this run would fail the same way, and each one is still billed, so the
+    run stops instead of walking the rest of the grid."""
+
+
+class PlacesBudgetExhausted(RuntimeError):
+    """This run has made SOURCING_MAX_REQUESTS_PER_RUN Places requests."""
+
+
+class _RequestBudget:
+    """Hard cap on Places requests for one sourcing run.
+
+    The daily limit counts leads *inserted*, not API calls. Once most of the
+    niche x town grid has been sourced, a run can walk every bucket and find
+    nothing new -- and it did: with 328 buckets of up to three pages each,
+    the hourly run could spend close to a thousand billed Text Search
+    requests for zero leads. The budget makes the worst case a fixed,
+    known number per hour."""
+
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        self.spent = 0
+
+    def spend(self) -> None:
+        if self.limit > 0 and self.spent >= self.limit:
+            raise PlacesBudgetExhausted(
+                f"request budget of {self.limit} per run spent (SOURCING_MAX_REQUESTS_PER_RUN)"
+            )
+        self.spent += 1
+
+
+# The budget of the run in progress. Module-level so _search_page can charge
+# it without every caller threading it through the paging generator.
+_run_budget: Optional[_RequestBudget] = None
+
 # Hosts that Google lists as a business's "website" but which are really a
 # social profile or directory entry. These are high-intent leads because the
 # business has some online presence but not a proper owned site.
@@ -187,6 +224,8 @@ def _skip_reason(place: dict[str, Any]) -> Optional[str]:
 def _search_page(text_query: str, page_token: Optional[str] = None) -> dict[str, Any]:
     """One Text Search request. Raises on transport errors or a non-200
     reply, surfacing Google's own error message rather than the raw body."""
+    if _run_budget is not None:
+        _run_budget.spend()  # raises PlacesBudgetExhausted before a request is made
     body: dict[str, Any] = {"textQuery": text_query, "pageSize": PAGE_SIZE}
     if page_token:
         body["pageToken"] = page_token
@@ -209,6 +248,10 @@ def _search_page(text_query: str, page_token: Optional[str] = None) -> dict[str,
             # Key/project problem: every remaining query will fail the same
             # way, so abort the whole run instead of logging 40 identical lines.
             raise PlacesAuthError(f"Places API HTTP {resp.status_code}: {message}")
+        if resp.status_code == 429:
+            # Quota/rate limit spent: the rest of the grid would fail the same
+            # way, and every attempt is still billed.
+            raise PlacesQuotaError(f"Places API HTTP 429: {message}")
         raise RuntimeError(f"Places API HTTP {resp.status_code}: {message}")
     return resp.json()
 
@@ -300,6 +343,11 @@ def iter_candidates(limit: Optional[int] = None) -> Iterator[Candidate]:
     # day. A niche-major walk with no cap filled the whole daily limit from the
     # first search (20 plumbers in one town); this spreads a run across towns
     # and trades so the send queue -- and each town's cooldown -- stays varied.
+    # A fresh request budget per run: the walk below stops when it is spent,
+    # whether or not the lead limit has been reached.
+    global _run_budget
+    _run_budget = _RequestBudget(config.SOURCING_MAX_REQUESTS_PER_RUN)
+
     per_bucket = config.SOURCING_PER_BUCKET if config.SOURCING_PER_BUCKET > 0 else None
     buckets = [(niche, location) for location in config.SOURCING_LOCATIONS for niche in config.SOURCING_NICHES]
     if buckets:
@@ -334,7 +382,9 @@ def iter_candidates(limit: Optional[int] = None) -> Iterator[Candidate]:
                         return
                     if per_bucket is not None and taken >= per_bucket:
                         break  # next bucket; unread pages of this search are never fetched
-            except PlacesAuthError as exc:
+            except (PlacesAuthError, PlacesQuotaError, PlacesBudgetExhausted) as exc:
+                # Listed before the generic RuntimeError clause below, which
+                # they subclass: these end the run, not just this query.
                 print(f"[sourcing] Aborting run -- {exc}")
                 _print_skip_summary(skipped)
                 return
@@ -350,6 +400,9 @@ def _rotation_offset() -> int:
 
 
 def _print_skip_summary(skipped: dict[str, int]) -> None:
+    if _run_budget is not None:
+        cap = f" (cap {_run_budget.limit})" if _run_budget.limit > 0 else ""
+        print(f"[sourcing] Places requests this run: {_run_budget.spent}{cap}")
     if skipped:
         detail = ", ".join(f"{reason}: {n}" for reason, n in sorted(skipped.items()))
         print(f"[sourcing] Skipped -- {detail}")

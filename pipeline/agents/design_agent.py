@@ -8,7 +8,7 @@ import colorsys
 import hashlib
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote_plus, urlparse
@@ -740,6 +740,13 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
         db.update_lead_status(lead["id"], "lost", notes="No contact email found; preview not built")
         return None
 
+    # Built once already? Then this lead is back at 'researched' because its
+    # preview URL failed a check (or an operator retried it), not because it
+    # needs a second repo and a second Vercel project.
+    existing = db.get_website_by_lead(lead["id"])
+    if existing and existing.get("repo_full_name") and not existing.get("torn_down_at"):
+        return _refresh_existing_preview(lead, existing)
+
     files = build_site_files(lead)
 
     _repo, repo_url, repo_full_name = github_api.create_repo_with_files(
@@ -766,11 +773,66 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
     return db.get_website_by_lead(lead["id"]) if website_id else None
 
 
+def _refresh_existing_preview(lead: dict, website: dict) -> Optional[dict]:
+    """A 'researched' lead that already has a preview is back here because
+    the send-time check found its URL unreachable, or an operator retried it.
+    Building a second repo and Vercel project for it -- every 60 s cycle, for
+    as long as the URL stayed bad -- is what turned one slow deploy into
+    hundreds. Re-check the URL it already has; only if that still fails,
+    redeploy in place (same repo, same project, same URL)."""
+    preview_url = website.get("preview_url") or ""
+    try:
+        _validate_deployment_url({"url": preview_url, "ready_state": "READY"})
+    except RuntimeError as exc:
+        print(f"[design_agent] Existing preview for lead {lead['id']} failed its check ({exc}); "
+              "redeploying in place")
+        refreshed = rebuild_preview(lead)
+        if refreshed is None:
+            raise RuntimeError(f"lead {lead['id']} has a website row but no repo to redeploy from")
+        db.update_lead_status(lead["id"], "designed",
+                              notes=f"Preview redeployed in place: {refreshed.get('preview_url')}")
+        return refreshed
+    db.update_lead_status(lead["id"], "designed",
+                          notes=f"Existing preview re-checked, no rebuild needed: {preview_url}")
+    return db.get_website_by_lead(lead["id"])
+
+
+# A lead whose build failed is retried after this delay, not on the next
+# 60 s cycle: each attempt is a GitHub push, a Vercel deployment and a
+# browser screenshot, and a transient failure (a slow deploy, a login wall)
+# used to burn through Vercel's daily deployment quota in under two hours.
+# Process-local on purpose: a restart retrying once immediately is fine.
+_DESIGN_RETRY_DELAY = timedelta(hours=1)
+_design_next_attempt: dict[int, datetime] = {}
+_design_failures: dict[int, int] = {}
+_DESIGN_ALERT_AFTER = 2  # consecutive failures before a person is told
+
+
 def run() -> None:
     """Main entrypoint called by main.py: design a site for every
-    'researched' lead that has a matching template."""
+    'researched' lead that has a matching template. A lead whose build
+    fails is backed off for _DESIGN_RETRY_DELAY; a second failure in a row
+    alerts a human."""
+    now = datetime.now(timezone.utc)
     for lead in db.list_leads_by_status("researched"):
+        if _design_next_attempt.get(lead["id"], datetime.min.replace(tzinfo=timezone.utc)) > now:
+            continue
         try:
             process_lead(lead)
         except Exception as exc:  # noqa: BLE001 - one bad lead must not kill the batch
             db.log_state_history(lead["id"], "researched", "researched", notes=f"Design failed: {exc}")
+            _design_next_attempt[lead["id"]] = now + _DESIGN_RETRY_DELAY
+            failures = _design_failures.get(lead["id"], 0) + 1
+            _design_failures[lead["id"]] = failures
+            print(f"[design_agent] Design failed for lead {lead['id']} ({exc}); attempt {failures}, "
+                  f"next in {int(_DESIGN_RETRY_DELAY.total_seconds() // 60)} min")
+            if failures == _DESIGN_ALERT_AFTER:
+                from agents import sales_agent  # local import: sales_agent imports this module
+                sales_agent.alert_needs_human(
+                    lead,
+                    f"Preview build has failed {failures} times in a row ({exc}); retrying hourly. "
+                    "Check the Vercel/GitHub side, or mark the lead lost.",
+                )
+        else:
+            _design_next_attempt.pop(lead["id"], None)
+            _design_failures.pop(lead["id"], None)

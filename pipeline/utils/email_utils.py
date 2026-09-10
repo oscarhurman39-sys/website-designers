@@ -425,6 +425,45 @@ def _extract_body(msg: email.message.Message) -> tuple[str, str]:
         return payload.decode(charset, errors="replace"), msg.get_content_type()
 
 
+# --- Reply-quote stripping ------------------------------------------------------
+# Mail clients paste the message being answered underneath the reply. Every
+# email this pipeline sends ends in a CAN-SPAM footer whose last line is
+# "Unsubscribe: <link>", so a reply classified on its full text read our own
+# footer back as the prospect opting out: "Yes please, how do I pay?" with the
+# cold email quoted below it was marked lost and suppressed for life. Only the
+# prospect's own words may be classified, priced, or parsed for a username.
+_QUOTE_START_PATTERNS = (
+    # Gmail / Apple Mail / Thunderbird: "On Tue, 9 Sep 2026 at 18:07, Casey <x@y> wrote:"
+    # -- the header can wrap onto a second line, and "wrote:" ends its line.
+    re.compile(r"^On [^\n]{0,300}(?:\n[^\n]{0,200})?wrote:\s*$", re.MULTILINE),
+    # Zoho and friends: "---- On Tue, 09 Sep 2026 ... wrote ----"
+    re.compile(r"^-{2,}\s*On [^\n]{0,300}wrote\s*-{2,}\s*$", re.MULTILINE),
+    # Outlook: "-----Original Message-----", the underscore rule, or a bare
+    # From:/Sent:/To:/Subject: header block.
+    re.compile(r"^-{2,}\s*Original Message\s*-{2,}\s*$", re.MULTILINE | re.IGNORECASE),
+    re.compile(r"^_{5,}\s*$", re.MULTILINE),
+    re.compile(r"^From:[^\n]*\n(?:[^\n]*\n){0,3}?(?:Sent|Date|To|Subject):", re.MULTILINE),
+    # Our own footer reproduced without '>' marks (some clients strip them).
+    re.compile(r"^(?:You can opt out anytime|Unsubscribe:\s*https?://)", re.MULTILINE),
+)
+
+
+def strip_quoted_text(body: str) -> str:
+    """The prospect's own words: everything before the first quoted-reply
+    marker, minus any '>'-prefixed lines. A reply that is *nothing but* a
+    quote falls back to the full text, so it is still classified as
+    something rather than as an empty string."""
+    text = (body or "").replace("\r\n", "\n").replace("\r", "\n")
+    cut = len(text)
+    for pattern in _QUOTE_START_PATTERNS:
+        match = pattern.search(text)
+        if match and match.start() < cut:
+            cut = match.start()
+    own = "\n".join(line for line in text[:cut].split("\n") if not line.lstrip().startswith(">"))
+    own = own.strip()
+    return own if own else text.strip()
+
+
 def fetch_unseen_emails() -> list[InboundEmail]:
     """Poll EVERY configured mailbox (config.EMAIL_ACCOUNTS) for unseen
     messages and return the union, each tagged with the mailbox it arrived

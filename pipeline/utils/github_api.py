@@ -138,6 +138,20 @@ def get_authenticated_username() -> str:
     return _get_client().get_user().login
 
 
+def user_exists(github_username: str) -> bool:
+    """Whether `github_username` is a real GitHub account. Checked before a
+    username parsed out of a customer's reply is stored: an invite goes to
+    whoever owns that name, so a misparse must never reach the handover.
+    A 404 is a clean False; any other API failure is raised so the caller
+    treats the name as unverified rather than as confirmed."""
+    try:
+        return bool(_get_client().get_user(github_username).login)
+    except GithubException as exc:
+        if exc.status == 404:
+            return False
+        raise
+
+
 class RepoDeleteForbidden(RuntimeError):
     """GitHub refused a repo delete with 403.
 

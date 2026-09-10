@@ -31,7 +31,7 @@ import requests
 from huggingface_hub import InferenceClient
 
 import config
-from utils import assets, compliance, db, email_utils, mailboxes, screenshot, stripe_utils, tracer, tracker
+from utils import assets, compliance, db, email_utils, github_api, mailboxes, screenshot, stripe_utils, tracer, tracker
 # Shared with DesignAgent's post-deploy check so both sides agree on what an
 # "auth wall" looks like; the timeout is separate because this check runs on
 # the send path, right before an email goes out.
@@ -54,9 +54,12 @@ HF_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
 # a system that otherwise enforces hard per-hour/per-day caps from the DB.
 _next_send_allowed_at: datetime = datetime.min.replace(tzinfo=timezone.utc)
 
+# A bare "stop" is not an opt-out: "can you stop by the shop?" is a prospect
+# asking for a visit. Only the explicit stop-contacting phrasings count.
 _NEGATIVE_PATTERNS = (
-    r"\bunsubscribe\b", r"\bremove me\b", r"\bstop emailing\b", r"\bnot interested\b",
-    r"\bno thanks\b", r"\btake me off\b", r"\bdo not contact\b", r"\bstop\b",
+    r"\bunsubscribe\b", r"\bremove me\b", r"\bnot interested\b",
+    r"\bno thanks\b", r"\btake me off\b", r"\bdo not contact\b",
+    r"\bstop (?:emailing|contacting|sending|messaging|mailing)\b", r"\bplease stop\b",
 )
 _POSITIVE_PATTERNS = (
     r"\binterested\b", r"\btell me more\b", r"\bhow much\b", r"\bpricing\b", r"\bprice\b",
@@ -132,6 +135,20 @@ def alert_needs_human(lead: dict, reason: str) -> None:
     _slack_notify(
         f":warning: *NEEDS HUMAN ATTENTION*\n"
         f"*{lead['business_name']}* (lead id {lead['id']}): {reason}"
+    )
+
+
+def alert_negative_reply(lead: dict, own_words: str) -> None:
+    """A decline was acted on automatically (lost, goodbye sent, address
+    suppressed). The prospect's own words go in the alert so a person can
+    catch a keyword misfire and re-engage by hand."""
+    snippet = " ".join((own_words or "").split())[:200]
+    print(f"[sales_agent] Lead {lead['id']} ({lead['business_name']}) declined; marked lost and suppressed. "
+          f"Their words: {snippet!r}")
+    _slack_notify(
+        f":no_entry: *LEAD DECLINED* -- *{lead['business_name']}* (lead id {lead['id']}) is marked lost "
+        f"and their address is suppressed.\nTheir words: \"{snippet}\"\n"
+        "If that reads like a misfire, re-engage manually."
     )
 
 
@@ -359,6 +376,8 @@ def send_follow_up_if_due() -> Optional[int]:
     FOLLOW_UP_AFTER_DAYS after the cold email. Same thread, same mailbox,
     counts against the daily caps like any send. Returns the lead id."""
     if not config.FOLLOW_UP_ENABLED or not _can_send_now():
+        return None
+    if not _public_links_will_work():
         return None
     due = db.list_follow_up_due(config.FOLLOW_UP_AFTER_DAYS)
     if not due:
@@ -655,10 +674,42 @@ def _send_cold_email_impl(lead: dict) -> bool:
     return True
 
 
+# Live sends carry unsubscribe, click and screenshot links on PUBLIC_BASE_URL.
+# When nothing answers there, the unsubscribe link in a real email is dead on
+# arrival, so the loop must not send. The alert repeats at most hourly: a
+# tunnel that is down all night produces one message, not one per cycle.
+_PUBLIC_URL_ALERT_INTERVAL = timedelta(hours=1)
+_public_url_last_alert: Optional[datetime] = None
+
+
+def _public_links_will_work() -> bool:
+    """False, with an alert at most once an hour, when live sending is armed
+    and PUBLIC_BASE_URL/health does not answer. Dry runs are exempt: nothing
+    leaves, so nothing can carry a dead link."""
+    global _public_url_last_alert
+    if not config.ENABLE_LIVE_SEND or tracker.public_endpoint_up():
+        return True
+    now = datetime.now(timezone.utc)
+    if _public_url_last_alert is None or now - _public_url_last_alert >= _PUBLIC_URL_ALERT_INTERVAL:
+        _public_url_last_alert = now
+        banner = "!" * 70
+        print(f"\n{banner}\nSENDING PAUSED: {config.PUBLIC_BASE_URL}/health is not answering, so the "
+              "unsubscribe and preview links in a cold email would be dead. Run `python run.py "
+              f"serve-public`. Nothing is sent until it answers.\n{banner}\n")
+        _slack_notify(
+            f":rotating_light: *SENDING PAUSED* -- `{config.PUBLIC_BASE_URL}/health` is not answering, "
+            "so cold emails and follow-ups are held (their unsubscribe links would be dead). "
+            "Run `python run.py serve-public` on the pipeline PC."
+        )
+    return False
+
+
 def send_next_pending() -> Optional[int]:
     """Send at most one queued cold email, respecting rate limits. Returns
     the lead_id sent to, or None if nothing was sent this cycle."""
     if not _can_send_now():
+        return None
+    if not _public_links_will_work():
         return None
     for lead in db.list_sendable_leads_by_priority():
         if _cooldown_blocked_until(lead):
@@ -675,7 +726,10 @@ def classify_reply(subject: str, body: str) -> str:
     classification gates real actions -- unsubscribing someone, marking a
     lead bounced/lost -- so it needs to be fast, free, and 100% deterministic
     rather than dependent on a third-party inference API's uptime."""
-    text = f"{subject}\n{body}".lower()
+    # Only the prospect's own words. The quoted message underneath a reply is
+    # usually our own email, whose footer ends "Unsubscribe: <link>" -- read
+    # as part of the reply, every quoted "yes" was an opt-out.
+    text = f"{subject}\n{email_utils.strip_quoted_text(body)}".lower()
     if any(re.search(p, text) for p in _OOO_PATTERNS):
         return "out_of_office"
     if any(re.search(p, text) for p in _NEGATIVE_PATTERNS):
@@ -1115,25 +1169,53 @@ _GITHUB_USERNAME_PATTERNS = (
 
 # Placeholder/example slugs that must never be accepted as a real username --
 # chiefly the example our own ask email uses, which a quoted reply echoes
-# back. Inviting one of these as an *admin* collaborator would hand repo
-# control to an unrelated third party, so we reject them and escalate.
+# back -- plus the ordinary English the free-text pattern used to capture:
+# "GitHub: none - never used it" stored the username "none", and "I don't use
+# GitHub - is there another way?" stored "is". Inviting one of these as an
+# *admin* collaborator hands repo control to an unrelated third party, so
+# they are rejected and the reply escalated.
 _GITHUB_USERNAME_DENYLIST = frozenset({
     "yourname", "your-name", "username", "user", "example", "name", "login",
     "handle", "account", "settings", "notifications", "orgs", "sponsors",
+    # ordinary words that follow "github is" / "github:" in a real reply
+    "none", "nothing", "not", "never", "nope", "unknown", "unsure", "the", "and", "but",
+    "yes", "yeah", "sure", "okay", "please", "thanks", "thank", "sorry", "hello",
+    "there", "here", "this", "that", "what", "whats", "which", "where", "when", "how",
+    "why", "who", "dont", "cant", "wont", "have", "has", "had", "does", "did", "will",
+    "would", "could", "should", "just", "also", "mine", "ours", "your", "yours",
+    "email", "site", "website", "files", "code", "page", "link", "github", "git",
+    "profile", "admin", "test", "later", "soon", "today", "tomorrow", "coming",
+    "sending", "send", "sent", "one", "any", "some", "all", "new", "old", "own",
 })
+# "n/a" parses to "n" and "I don't..." to "I": GitHub allows such names, but
+# nothing that short is ever auto-invited -- a human sets it by hand.
+_GITHUB_USERNAME_MIN_LENGTH = 3
+
+# A reply saying there is no account to invite. The handover then needs a
+# human (send the files another way), not a guess at a username.
+_NO_GITHUB_ACCOUNT_RE = re.compile(
+    r"(?:don'?t|do not|never|haven'?t|not)\s+(?:have|got|use|used)\s+(?:a |an |any )?(?:github|account)"
+    r"|no (?:github )?account|not on github|what(?:'s| is) github|never used (?:it|github)",
+    re.IGNORECASE,
+)
 
 
 def extract_github_username(text: str) -> Optional[str]:
     """Conservatively pull a GitHub username out of free text: either a
     github.com/<user> link or an explicit 'github username: x' phrasing.
-    Placeholder/example slugs (including the one our own ask email shows,
-    which a quoted reply echoes back) are rejected. Anything fuzzier gets
-    escalated to a human instead of guessed at."""
+    Placeholder slugs, ordinary English words, anything under three
+    characters, and any reply that says the customer has no account are
+    rejected -- those go to a human instead of being guessed at. The result
+    is still only a *candidate*: _maybe_capture_github_username confirms the
+    account exists before anything is stored."""
+    text = text or ""
+    if _NO_GITHUB_ACCOUNT_RE.search(text):
+        return None
     for pattern in _GITHUB_USERNAME_PATTERNS:
-        match = pattern.search(text or "")
+        match = pattern.search(text)
         if match:
             candidate = match.group(1)
-            if candidate.lower() in _GITHUB_USERNAME_DENYLIST:
+            if len(candidate) < _GITHUB_USERNAME_MIN_LENGTH or candidate.lower() in _GITHUB_USERNAME_DENYLIST:
                 continue
             return candidate
     return None
@@ -1143,15 +1225,28 @@ def _maybe_capture_github_username(lead: dict, body: str) -> bool:
     """Store a GitHub username parsed from this reply, if we don't already have
     one. Returns True only when this call captured a new username -- callers use
     that to tell the expected handover handoff apart from other post-payment
-    replies that need a human."""
+    replies that need a human.
+
+    The parsed name is confirmed against GitHub first. main.py invites
+    whatever is stored here as an admin collaborator and tells the customer
+    the site is theirs, so a name that is not a real account -- or cannot be
+    verified right now -- is never stored; the reply is escalated instead."""
     if lead.get("github_username"):
         return False
     username = extract_github_username(body)
-    if username:
-        db.update_lead_fields(lead["id"], github_username=username)
-        print(f"[sales_agent] Captured GitHub username {username!r} for lead {lead['id']}")
-        return True
-    return False
+    if not username:
+        return False
+    try:
+        exists = github_api.user_exists(username)
+    except Exception as exc:  # noqa: BLE001 - API/network trouble: unverified, so not stored
+        print(f"[sales_agent] Could not verify GitHub username {username!r} for lead {lead['id']}: {exc}")
+        return False
+    if not exists:
+        print(f"[sales_agent] {username!r} is not an existing GitHub account; not stored for lead {lead['id']}")
+        return False
+    db.update_lead_fields(lead["id"], github_username=username)
+    print(f"[sales_agent] Captured GitHub username {username!r} for lead {lead['id']}")
+    return True
 
 
 def send_github_username_request(lead: dict) -> bool:
@@ -1327,13 +1422,19 @@ def _handle_inbound_impl(lead: dict, msg) -> None:  # msg: email_utils.InboundEm
             db.suppress_email(lead["contact_email"])  # never re-source a dead address
         return
 
+    # The prospect's own words. The full message (quoted history included) is
+    # what gets logged; everything that *acts* on the reply -- classification,
+    # the price the model sees, the username parser, the monthly-plan check --
+    # only ever sees what they typed. The quoted part is usually our own cold
+    # email, which mentions "£39/month" and ends "Unsubscribe: <link>".
+    own_words = email_utils.strip_quoted_text(msg.body)
     classification = classify_reply(msg.subject, msg.body)
     db.insert_email_thread(
         lead_id=lead["id"], direction="inbound", subject=msg.subject, body=msg.body,
         from_addr=msg.from_addr, to_addr=msg.to_addr, message_id=msg.message_id,
         classification=classification,
     )
-    github_captured = _maybe_capture_github_username(lead, msg.body)
+    github_captured = _maybe_capture_github_username(lead, own_words)
     _maybe_apply_client_assets(lead, msg)
 
     if classification == "negative":
@@ -1344,15 +1445,26 @@ def _handle_inbound_impl(lead: dict, msg) -> None:  # msg: email_utils.InboundEm
         # demoted -- 'stop' from a customer is support, not a lost sale.
         if db.update_lead_status_unless(
             lead["id"], "lost", notes="Replied negative",
-            unless_current=("won", "lost", "unsubscribed", "bounced"),
+            unless_current=("won", "payment_sent", "lost", "unsubscribed", "bounced"),
         ):
             _send_goodbye(lead)  # sent before suppression so the ack itself goes out
             db.suppress_email(lead.get("contact_email") or "")  # CAN-SPAM: honor the opt-out
+            alert_negative_reply(lead, own_words)
         else:
             current = (db.get_lead(lead["id"]) or lead)["status"]
-            if current == "won":
-                db.log_state_history(lead["id"], "won", "won", notes="Negative reply post-payment")
-                alert_needs_human(lead, "Paid customer sent a negative reply -- handle personally.")
+            if current in ("won", "payment_sent"):
+                # A paying customer, or one holding a checkout link, is never
+                # demoted or suppressed on a keyword match: "stop" from a
+                # customer is support, and "no" while a link is out may mean
+                # "not at that price". A person reads it.
+                db.log_state_history(lead["id"], current, current,
+                                     notes="Negative-looking reply from a paying customer")
+                alert_needs_human(
+                    lead,
+                    "Paid customer sent a negative reply -- handle personally." if current == "won"
+                    else "A customer with a checkout link out sent a negative-looking reply -- "
+                         "read it and reply personally.",
+                )
             # else already lost/unsubscribed/bounced: no repeat goodbye, no churn.
     elif classification == "out_of_office":
         db.log_state_history(lead["id"], lead["status"], lead["status"], notes="Out-of-office auto-reply")
@@ -1371,7 +1483,7 @@ def _handle_inbound_impl(lead: dict, msg) -> None:  # msg: email_utils.InboundEm
                 "review the thread and re-engage manually if appropriate.",
             )
             return
-        if _wants_subscription(msg.body):
+        if _wants_subscription(own_words):
             # Monthly plan isn't automated (no Stripe subscription flow yet):
             # acknowledge, hand to a human, and don't let the negotiator
             # close them at the one-off price.
@@ -1393,7 +1505,7 @@ def _handle_inbound_impl(lead: dict, msg) -> None:  # msg: email_utils.InboundEm
             unless_current=("negotiating", "payment_sent", "won", "lost", "bounced", "unsubscribed"),
         ):
             alert_positive_reply(lead)
-        _run_negotiation_round(lead, msg.body, github_captured)
+        _run_negotiation_round(lead, own_words, github_captured)
 
 
 def _maybe_apply_client_assets(lead: dict, msg) -> None:

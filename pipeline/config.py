@@ -260,6 +260,12 @@ SOURCING_DAILY_LIMIT: int = int(os.getenv("SOURCING_DAILY_LIMIT", "30") or 30)
 # every niche x town bucket round-robin, so a run spreads across many towns
 # and trades instead of filling the daily limit from the first search.
 SOURCING_PER_BUCKET: int = int(os.getenv("SOURCING_PER_BUCKET", "2") or 2)
+# Hard cap on Places API requests per sourcing run (0 = uncapped). The daily
+# limit above counts leads inserted, not API calls: once the niche x town grid
+# is mostly sourced, a run can walk every bucket and find nothing, so without
+# this the hourly run would spend hundreds of billed requests for zero leads.
+# A normal run needs well under 30 (two leads per bucket, one page each).
+SOURCING_MAX_REQUESTS_PER_RUN: int = int(os.getenv("SOURCING_MAX_REQUESTS_PER_RUN", "30") or 30)
 # Comma-separated; each entry must match a template folder under templates/.
 SOURCING_NICHES: list[str] = [
     niche.lower()
