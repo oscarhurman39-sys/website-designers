@@ -4,13 +4,49 @@ This document wires the enabled StarNet web-design skills into the seated Agency
 
 ## Current skill state
 
+Verified against StarNet's live state on 2026-09-09. StarNet keeps skills in two different places,
+and this document previously conflated them.
+
+**1. Catalog skills** — toggled in Abilities > Skills, recorded in `skillprefs.jsonl`. Enabled for
+this station right now:
+
 | Skill | Status | How it is used |
 |---|---|---|
-| Make a Plan | active | Required before non-trivial repo, template, schema, payment, deploy, or process changes. |
-| Creative Ideation | active | Used for bounded niche, offer, page-section, proof-asset, and outreach-angle ideas. |
-| Popular Web Designs | active | Used by design agents for self-contained concept/prototype directions only; not direct production edits. |
-| ASCII Art | active | Internal docs, logs, console labels, and operator morale only. |
-| website_designers_pipeline | withheld | Needs Commander approval in Abilities > Skills before agents may load it. Do not guess, mirror, or recreate it. |
+| Popular Web Designs | enabled | Design agents use it for self-contained concept/prototype directions only; not direct production edits. |
+| Marketing Plan | enabled | PROMO-MARKETER: channel, niche, and cadence planning. |
+| Landing Copy | enabled | Page and preview copy proposals. |
+| Email Sequence | enabled | Follow-up cadence proposals, inside the compliance rules. |
+| Code Review | enabled | FINN's review lane. |
+| Web Research | enabled | Lead and niche research. |
+
+**2. Agent-scoped learned skills** — written by StarNet's own `background-review` curator after real
+runs, recorded in `skills.jsonl` and scoped to one agentId. These were learned from work on this
+repo and are all `active`:
+
+| Skill | Agent | Covers |
+|---|---|---|
+| `website_designers_pipeline` | MASKY (`agent`) | Pipeline SOP, testing rules, negotiation guardrails. |
+| Lead scoring implementation and documentation alignment | FINN (`hello-3`) | Deterministic lead scoring without touching live sourcing/sending. |
+| Repo process safety skill wiring review | FINN (`hello-3`) | Reviewing agent/skill wiring for repo process safety. |
+| StarNet agency room staffing and connector readiness | FINN (`hello-3`) | Room staffing, connector props, safety gates. |
+| Website Agency Room Wiring and Go-Live Readiness | AGENCY-DESIGNER (`webdesigner`) | Room seating, role lanes, launch gates. |
+| Website Template Preview Conversion Review | AGENCY-DESIGNER (`webdesigner`) | Reviewing rendered previews for conversion and credibility. |
+| Sales Closing Terms and Reply Playbooks | AGENCY-NEGOTIATOR (`negotiator`) | Offer terms, negotiation ladders, payment/refund boundaries. |
+| Python Test Troubleshooting and Verification | AGENCY-NEGOTIATOR (`negotiator`) | Separating product failures from environment failures. |
+| Go-live review for autonomous cold-email sales pipelines | PROMO-MARKETER (`marketer`) | Pre-go-live review of sourcing, outbound, payment, handoff. |
+
+### Corrections to earlier versions of this document
+
+- `website_designers_pipeline` was described here as **withheld, pending Commander approval**. It is
+  not withheld — it is `state: active` on MASKY and has been for some time. Treat it as live.
+- "Make a Plan" and "ASCII Art" were listed as active skills. **Neither exists in StarNet's skill
+  store.** Planning discipline is a working practice, kept below under Agent wiring; it is not a
+  skill you can enable.
+- "Creative Ideation" was listed as an active skill. It is not a registered skill either. Where this
+  document says an agent "uses Creative Ideation", read it as the bounded-ideation practice
+  described under Agent wiring.
+
+Do not re-add a skill row to this document without checking it against StarNet's live state first.
 
 ## Global rule
 

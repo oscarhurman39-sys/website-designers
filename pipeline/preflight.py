@@ -26,6 +26,8 @@ sends are live.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import os
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -85,6 +87,57 @@ def _stripe_mode() -> str:
     if key.startswith(("sk_test_", "rk_test_")):
         return "test"
     return "unknown" if key else "missing"
+
+
+def _fingerprint(value: str) -> str:
+    """A short, non-reversible tag for a secret, so two keys can be compared in
+    output without either one ever being printed."""
+    value = (value or "").strip()
+    if not value:
+        return "empty"
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:8]
+
+
+def _stripe_key_origin() -> tuple[bool, str]:
+    """Did the Stripe secret in this process's environment come from `.env`?
+
+    config.py calls load_dotenv() without override=True, so a STRIPE_SECRET_KEY
+    already present in the environment SILENTLY WINS over the one in `.env`.
+    Anything that launches the pipeline can therefore hand it a different key
+    than the file this repo treats as the source of truth -- StarNet, for one,
+    injects its own stored service keys into the environment of commands it
+    runs. While the two copies happen to be identical this is invisible; rotate
+    one and not the other and it becomes real money settling into the wrong
+    account with every other switch in this report still green.
+
+    Compares os.environ against the raw `.env` file, which is where the hazard
+    actually lives. Deliberately NOT config.STRIPE_SECRET_KEY: that is derived
+    from the environment at import, and reading it here would make this check
+    fire on any test that substitutes a config value. Never returns key
+    material, only fingerprints.
+    """
+    env_value = (os.environ.get("STRIPE_SECRET_KEY") or "").strip()
+    try:
+        from dotenv import dotenv_values
+
+        file_value = (dotenv_values(config._ENV_PATH).get("STRIPE_SECRET_KEY") or "").strip()
+    except Exception as exc:  # an unreadable .env is not this check's blocker to raise
+        return True, f"origin unverified: could not read .env ({type(exc).__name__})"
+    if not env_value and not file_value:
+        return True, "no key set; nothing to compare"   # 'Stripe key mode' already blocks on this
+    if not file_value:
+        return False, (
+            f"the key in the environment (#{_fingerprint(env_value)}) did NOT come from .env -- "
+            ".env sets no STRIPE_SECRET_KEY"
+        )
+    if not env_value:
+        return True, f"from .env (#{_fingerprint(file_value)})"
+    if env_value != file_value:
+        return False, (
+            f"the process environment overrode .env: environment holds #{_fingerprint(env_value)}, "
+            f".env holds #{_fingerprint(file_value)} -- these are different keys"
+        )
+    return True, f"from .env (#{_fingerprint(env_value)})"
 
 
 def _probe_public_url(base_url: str) -> tuple[bool, str]:
@@ -434,6 +487,11 @@ def collect_checks(offline: bool = False) -> list[Check]:
         ))
     else:
         checks.append(Check("Stripe key mode", False, f"STRIPE_SECRET_KEY is {stripe_mode}"))
+    origin_ok, origin_detail = _stripe_key_origin()
+    checks.append(Check(
+        "Stripe key origin", origin_ok, origin_detail,
+        level=INFO if origin_ok else _escalate(armed),
+    ))
     secret_ok = config.STRIPE_WEBHOOK_SECRET.startswith("whsec_")
     checks.append(Check(
         "Stripe webhook secret", secret_ok,

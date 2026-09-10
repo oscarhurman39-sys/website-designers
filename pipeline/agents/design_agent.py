@@ -394,6 +394,20 @@ def lead_specialty(lead: dict) -> Optional[str]:
     return None
 
 
+def _neutral_modern_copy(theme: dict, name: str, city: str) -> dict:
+    """Build modern copy without inferring capabilities or guarantees."""
+    return {
+        "hero_tagline": f"{name} | {theme['label']} in {city}",
+        "about": f"Contact {name} to discuss your requirements in {city}.",
+        "service_items": [
+            {"name": service_name, "blurb": f"Ask about {service_name.lower()}."}
+            for service_name, _ in theme.get("services", [])
+        ],
+        "trust_line": "Contact the business directly",
+        "specialty": None,
+    }
+
+
 def _places_facts(lead: dict) -> dict:
     """Rating / review count / address for the lead. Prefers the dedicated
     columns; falls back to the JSON blob sourcing_agent stores in `notes`
@@ -515,6 +529,7 @@ def build_context(lead: dict) -> dict:
     hero_image = own_photos[0] if own_photos else get_hero_image_url(niche)
     gallery = (own_photos[1:3] + stock_gallery)[:2] if own_photos else stock_gallery
     blocks, section_order = choose_blocks(lead["id"], has_own_photos=bool(own_photos))
+    modern_copy = _neutral_modern_copy(theme, name, city)
     return {
         # --- modern template ---------------------------------------------
         "business_name": name,
@@ -532,20 +547,20 @@ def build_context(lead: dict) -> dict:
         "google_rating": rating,
         "google_reviews_count": facts["reviews"] if rating else None,
         "google_reviews_url": f"https://www.google.com/maps/search/{quote_plus(name + ' ' + city)}" if rating else None,
-        "hero_tagline": hero_tagline(lead),
+        "hero_tagline": modern_copy["hero_tagline"],
         "hero_image_url": hero_image,
         "gallery_images": gallery,
         "logo_url": f"assets/{logo_path.name}" if logo_path else None,
         "own_photos": own_photos,
         "blocks": blocks,
         "section_order": section_order,
-        "about": theme["about"].format(name=name, city=city),
-        "service_items": [{"name": n, "blurb": b} for n, b in theme["services"]],
+        "about": modern_copy["about"],
+        "service_items": modern_copy["service_items"],
         "services_heading": theme.get("services_heading", "What we do"),
         "cta_secondary": theme.get("cta_secondary", "Get a quote"),
-        "trust_line": theme.get("trust_line", "Friendly, reliable service"),
+        "trust_line": modern_copy["trust_line"],
         "testimonial": _real_testimonial(lead),
-        "specialty": lead_specialty(lead),
+        "specialty": modern_copy["specialty"],
         "nav": theme["nav"],
         # Only link to sections that will actually render for this lead.
         "nav_links": [

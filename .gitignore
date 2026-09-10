@@ -256,3 +256,8 @@ start_pipeline.ps1
 # Pre-launch database archives (cleanup-tests --reset) and .env backups
 pipeline/archive/
 .env.bak-*
+
+# Session scratch written by agent runs — not state, not a protocol (see AGENTS.md)
+.task-*.txt
+.batch_*.txt
+.batch_*.log

@@ -2,7 +2,7 @@
 
 This room owns the local-business website acquisition pipeline in this repo. The job is to find businesses with no site, a weak site, or a directory/Facebook-only presence; build a useful preview; contact them safely; handle replies; take payment; and hand over or host the finished site.
 
-Source of truth for current repo state: `docs/STATE_AND_PLAN.md`, then `README.md`, then `docs/PHOTOS_AND_LOGO_PLAYBOOK.md`. Active bounded work for the seated room agents is in `docs/AGENT_WORKBOARD.md`. StarNet skill wiring for those agents is in `docs/STARNET_SKILL_WIRING.md`.
+The standing contract StarNet loads automatically for every run in this folder is `AGENTS.md` at the repo root; this document is the long form of its room section. Source of truth for current repo state: `docs/STATE_AND_PLAN.md`, then `README.md`, then `docs/PHOTOS_AND_LOGO_PLAYBOOK.md`. Active bounded work for the seated room agents is in `docs/AGENT_WORKBOARD.md`. StarNet skill wiring for those agents is in `docs/STARNET_SKILL_WIRING.md`.
 
 ## Operating rule
 
@@ -11,6 +11,17 @@ MASKY is the overseer. FINN is the room lead for the website-designers repo. Eve
 Do not turn on live sourcing or live sending casually. The repo currently keeps real outbound activity behind `SOURCING_ENABLED=false` and `ENABLE_LIVE_SEND=false`; changing those is a go-live decision, not routine development. Enabled StarNet skills may create plans, concepts, prototypes, and QA checklists, but they do not override FINN's test gate or the go-live checklist.
 
 ## StarNet room crew
+
+These are real StarNet agents, not just names in this document. The display name and the StarNet
+`agentId` differ — when addressing an agent through StarNet's API, cron, or loops, the `agentId` is
+what identifies it. Verified against `agent.roster.json` on 2026-09-09.
+
+`MASKY=agent` · `FINN=hello-3` · `AGENCY-DESIGNER=webdesigner` · `PROMO-MARKETER=marketer`
+`AGENCY-NEGOTIATOR=negotiator` · `ENGINE-DBA=dbhelper` · `STUDIO-PRODUCER=producer`
+`LIL BEAR=hello` · `PIKACHU=hello-2` · `SPACEY=hello-4` · `ACCESSIBILITY CHECKER=a11y`
+
+Nine of the eleven run with executionProfile `trusted-project`, which scopes them to the agent
+workspace plus approved project folders. This repo is an approved (blessed) folder.
 
 | Agent | Role | Owns | Hands off to |
 |---|---|---|---|
@@ -24,6 +35,7 @@ Do not turn on live sourcing or live sending casually. The repo currently keeps 
 | LIL BEAR | QA / operator support | Smoke runs, checklist sweeps, plain-English docs, dashboard sanity checks, repetitive cleanup. | FINN for defects; MASKY for status. |
 | PIKACHU | Automation/integration support | Local scripts, future FL Studio/audio hook experiments, utility automation that does not belong to core pipeline agents. | FINN for repo changes; STUDIO-PRODUCER for audio/promo assets. |
 | SPACEY | Reserve product perspective | Keeps an eye on how this room can later connect to app-launch lessons from the botanical app without distracting current work. | MASKY only unless pulled in. |
+| ACCESSIBILITY CHECKER | Accessibility reviewer | Who a preview page locks out, and why: contrast, tap targets, semantics, keyboard and screen-reader paths. | AGENCY-DESIGNER for fixes; FINN for gating. |
 
 ## Repo-local subagent lanes already present
 
