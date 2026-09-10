@@ -505,12 +505,15 @@ deliberate.
 
 ### Always-on, the short version
 
+- **Headless (agents, routines):** `python run.py ops start` brings up the webhook
+  server, ngrok and the loop with no windows, logging to `pipeline/logs/`;
+  `ops status --json` is the machine-readable state; `ops stop` takes it down.
+  This is what StarNet agents use. See `docs/STARNET_INTEGRATION.md`.
 - **Desktop app:** `Casey Websites.exe` on the Desktop (source in
   `tools/control_panel.py`, rebuild with `toolsuild_control_panel.bat`) is
   one window with a button per command: start/stop everything, preflight,
-  dashboard, report, email preview, sourcing, checks. Each button runs the
-  documented command in its own console; the status row shows whether the
-  webhook server, ngrok and the loop are up.
+  dashboard, report, email preview, sourcing, checks. Start/stop/status go through `ops` (hidden); read-only buttons open one
+  console each. Only one copy of the panel can run at a time.
 
 - **Windows dev box:** run `.\install_autostart.ps1` once (PowerShell, repo
   root). It registers a logon task that runs `start_all.bat`, which opens the

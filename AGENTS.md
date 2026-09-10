@@ -39,10 +39,26 @@ Never edit a test to make it pass. If a test is wrong, say so and explain why.
     quick-test   loop        dashboard     test-email <addr>   cleanup-tests [--dry-run]
     source [--limit N] [--dry-run]         rebuild <lead_id>   report
     preflight [--offline]                  preview-email [--lead ID]
-    test-alert   serve-public [--status]
+    test-alert   serve-public [--status]   reviewed-batch ...
+    ops start|stop|restart|status [--json]|logs [webhook|ngrok|loop]
 
 `run.py` is a thin dispatcher — each mode runs as its own subprocess. Do not reimplement a mode
 in-process; call it.
+
+## Running the pipeline without a human at the keyboard
+
+`python run.py ops start` brings up the webhook server, the ngrok tunnel and the
+pipeline loop **hidden** (no console windows, logs in `pipeline/logs/`), and is
+idempotent. `ops status --json` is the machine-readable truth about what is up;
+exit code 0 means everything, including the public URL, is reachable. `ops stop`
+takes it all down. Never use `start_all.bat` from an agent run: it opens three
+windows on the Commander's screen. The Desktop app (`tools/control_panel.py`)
+calls the same `ops` commands, so agents and the Commander see one state.
+
+A daily agent shift is: `ops status --json` -> if not all up, `ops start` ->
+`preflight` -> read `report` and `ops logs loop` -> act within your lane ->
+hand back through FINN/MASKY. Details, ownership per StarNet agent, and the
+open questions are in `docs/STARNET_INTEGRATION.md`.
 
 ## Design work
 

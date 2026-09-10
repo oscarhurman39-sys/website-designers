@@ -51,6 +51,7 @@ Secrets live only in `.env` (gitignored). `.env.example` documents every key.
 ## 3. Commands
 
 ```
+python run.py ops start|stop|status [--json]|logs  # headless services, no windows (agents + Desktop app use this)
 python run.py preflight [--offline]         # go-live check: NO-GO / READY / GO, changes nothing
 python run.py preview-email [--lead ID]     # the exact cold email a lead would get; nothing sent
 python run.py test-alert                    # prove Slack alerts actually reach you

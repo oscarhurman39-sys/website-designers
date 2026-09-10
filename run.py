@@ -7,6 +7,7 @@
     python run.py cleanup-tests [--dry-run]  # delete test leads + their repos/projects
     python run.py report                     # per-niche funnel + revenue
     python run.py rebuild <lead_id>          # one-shot: pipeline/rebuild_preview.py
+    python run.py ops start|stop|restart|status [--json]|logs [name]   # headless services, no windows
     python run.py source [--limit N] [--dry-run]   # one-shot: pipeline/source_leads.py
     python run.py preflight [--offline]     # go-live readiness check; prints GO / READY / NO-GO
     python run.py preview-email [--lead ID] # print the exact cold email; nothing sent or written
@@ -104,6 +105,11 @@ def run_serve_public(extra_args: list[str]) -> int:
     )
 
 
+def run_ops(extra_args: list[str]) -> int:
+    # Headless service manager (tools/ops.py): start|stop|restart|status [--json]|logs. No windows.
+    return subprocess.call([sys.executable, str(REPO_ROOT / "tools" / "ops.py"), *extra_args], cwd=str(REPO_ROOT))
+
+
 def run_reviewed_batch(extra_args: list[str]) -> int:
     return subprocess.call(
         [sys.executable, str(PIPELINE_DIR / "reviewed_batch.py"), *extra_args], cwd=str(PIPELINE_DIR)
@@ -124,6 +130,7 @@ _MODES = {
     "test-alert": run_test_alert,
     "serve-public": run_serve_public,
     "reviewed-batch": run_reviewed_batch,
+    "ops": run_ops,
 }
 
 
