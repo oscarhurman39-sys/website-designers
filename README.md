@@ -505,6 +505,13 @@ deliberate.
 
 ### Always-on, the short version
 
+- **Desktop app:** `Casey Websites.exe` on the Desktop (source in
+  `tools/control_panel.py`, rebuild with `toolsuild_control_panel.bat`) is
+  one window with a button per command: start/stop everything, preflight,
+  dashboard, report, email preview, sourcing, checks. Each button runs the
+  documented command in its own console; the status row shows whether the
+  webhook server, ngrok and the loop are up.
+
 - **Windows dev box:** run `.\install_autostart.ps1` once (PowerShell, repo
   root). It registers a logon task that runs `start_all.bat`, which opens the
   webhook server, the ngrok tunnel and the `scheduler.py` supervisor (which
