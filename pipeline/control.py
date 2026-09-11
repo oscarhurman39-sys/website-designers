@@ -131,6 +131,7 @@ def classify(row: dict[str, Any], now: Optional[datetime] = None) -> dict[str, A
     elif status == "emailed":
         inbound = _parse_utc(row.get("last_inbound_at"))
         if inbound:
+            owner, agent_id = OWNER_BY_STATUS["replied"]
             severity = "blocked"
             next_action = "Process the recorded reply; this lead should no longer be parked as emailed"
             reason = "inbound mail exists without a state handoff"

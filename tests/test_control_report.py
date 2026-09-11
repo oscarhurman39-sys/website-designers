@@ -67,6 +67,8 @@ def test_inbound_still_parked_as_emailed_is_blocked(tmp_path, monkeypatch):
     _email(lead_id, "inbound", "-1 hour")
     item = control.classify(db.control_queue()[0], NOW)
     assert item["severity"] == "blocked"
+    assert item["owner"] == "AGENCY-NEGOTIATOR"
+    assert item["agent_id"] == "negotiator"
     assert "Process the recorded reply" in item["next_action"]
 
 
