@@ -156,6 +156,28 @@ def _sibling_files(db_path: Path) -> list[Path]:
     return [db_path] + [Path(f"{db_path}{suffix}") for suffix in ("-wal", "-shm", "-journal")]
 
 
+def _archive_screenshots(stamp: str, dry_run: bool = False) -> int:
+    """Move every cached preview screenshot into the archive alongside the
+    database. The cache is keyed by lead id and an empty database restarts
+    ids at 1, so a file left behind silently becomes the next lead's
+    "preview" -- it did: eight cold emails on 2026-09-09..11 carried July
+    test images (a Vercel login page, another business's site)."""
+    from utils import screenshot  # local: pulls in playwright, only needed here
+
+    shots = sorted(screenshot.SCREENSHOTS_DIR.glob("*.png"))
+    if not shots:
+        return 0
+    dest = ARCHIVE_DIR / f"screenshots-{stamp}"
+    if dry_run:
+        print(f"[reset] DRY RUN would move {len(shots)} cached screenshot(s) -> {dest}.")
+        return len(shots)
+    dest.mkdir(parents=True, exist_ok=True)
+    for path in shots:
+        shutil.move(str(path), str(dest / path.name))
+    print(f"[reset] Moved {len(shots)} cached screenshot(s) to {dest}.")
+    return len(shots)
+
+
 def reset_prelaunch(dry_run: bool = False) -> Optional[Path]:
     """Archive the whole database and start empty. Returns the archive path,
     or None when nothing was done (dry run, or a blocker)."""
@@ -182,6 +204,7 @@ def reset_prelaunch(dry_run: bool = False) -> Optional[Path]:
         print(f"[reset] DRY RUN would copy {db_path} -> {archive_db}, then start an empty database.")
         if traces.exists():
             print(f"[reset] DRY RUN would move {traces} -> {archive_traces}.")
+        _archive_screenshots(stamp, dry_run=True)
         return None
 
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
@@ -194,6 +217,7 @@ def reset_prelaunch(dry_run: bool = False) -> Optional[Path]:
         source.close()
     if traces.exists():
         shutil.move(str(traces), str(archive_traces))
+    _archive_screenshots(stamp)
     for path in _sibling_files(db_path):
         if path.exists():
             path.unlink()

@@ -312,6 +312,32 @@ def test_reset_archives_the_database_and_starts_empty(tmp_db, monkeypatch, tmp_p
     assert (archive_dir / archive.name.replace("leads-", "traces-").replace(".db", ".json")).exists()
 
 
+def test_reset_moves_cached_screenshots_into_the_archive(tmp_db, monkeypatch, tmp_path):
+    """An empty database restarts lead ids at 1, so a screenshot cache left
+    behind becomes the next lead's "preview" (it did, 2026-09-09..11)."""
+    from utils import screenshot
+
+    archive_dir = tmp_path / "archive"
+    monkeypatch.setattr(cleanup_tests, "ARCHIVE_DIR", archive_dir)
+    monkeypatch.setattr(config, "TRACES_PATH", str(tmp_path / "traces.json"))
+    shots = tmp_path / "screenshots"
+    shots.mkdir()
+    (shots / "43.png").write_bytes(b"login wall")
+    monkeypatch.setattr(screenshot, "SCREENSHOTS_DIR", shots)
+    lead = _make_lead("emailed", email_age_days=1)
+    db.mark_website_torn_down(db.get_website_by_lead(lead)["id"])
+
+    assert cleanup_tests.reset_prelaunch(dry_run=True) is None
+    assert (shots / "43.png").exists()  # dry run moves nothing
+
+    archive = cleanup_tests.reset_prelaunch()
+
+    assert archive is not None
+    assert not (shots / "43.png").exists()
+    moved = list(archive_dir.glob("screenshots-*/43.png"))
+    assert len(moved) == 1 and moved[0].read_bytes() == b"login wall"
+
+
 # --- A token without delete_repo must not stall the cleanup ----------------------
 
 

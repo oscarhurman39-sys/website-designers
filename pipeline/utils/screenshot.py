@@ -54,18 +54,26 @@ def screenshot_path(lead_id: int) -> Path:
     return SCREENSHOTS_DIR / f"{lead_id}.png"
 
 
-def capture_screenshot_sync(preview_url: str, lead_id: int) -> Path:
+def capture_screenshot_sync(preview_url: str, lead_id: int, fresh: bool = False) -> Path:
     """Capture a full-page screenshot of `preview_url` and save it to
     pipeline/screenshots/{lead_id}.png. Cached: if that file already
-    exists, returns it immediately without launching a browser.
+    exists, returns it immediately without launching a browser -- unless
+    `fresh` is true, which drops the cached file first.
 
-    Raises on failure (e.g. the preview isn't reachable yet, or no
-    Chromium is available) -- callers that consider a screenshot optional
-    (design_agent.py does) should catch and log rather than let this stop
-    an otherwise-successful deployment.
+    A NEW build must pass fresh=True. The cache is keyed by lead id only,
+    and after the 2026-09-07 database reset restarted ids at 1, leads 11-56
+    silently inherited July test images (a Vercel login page, another
+    business's site); eight cold emails went out carrying them.
+
+    Raises on failure (e.g. the preview isn't reachable yet, no Chromium,
+    or the page is a Vercel login wall) -- callers that consider a
+    screenshot optional (design_agent.py does) should catch and log rather
+    than let this stop an otherwise-successful deployment.
     """
     out_path = screenshot_path(lead_id)
-    if out_path.exists():
+    if fresh:
+        invalidate(lead_id)
+    elif out_path.exists():
         return out_path
 
     SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -139,11 +147,15 @@ def _capture_sync(preview_url: str, out_path: Path) -> None:
                 page.goto(preview_url, wait_until="load", timeout=_PAGE_LOAD_TIMEOUT_MS)
                 page.wait_for_timeout(500)
                 if _looks_like_vercel_login_wall(page):
-                    print(
-                        f"[screenshot] {preview_url} is still showing a Vercel login wall "
-                        "after one retry -- deployment protection is likely still enabled "
-                        "for this project. Check Vercel dashboard -> project -> Settings -> "
-                        "Deployment Protection."
+                    # Raise rather than save: a cached login page would be
+                    # embedded in the cold email as the lead's "preview".
+                    # Without an image the email is sent plain-text, which
+                    # is the lesser harm.
+                    raise RuntimeError(
+                        f"{preview_url} is still showing a Vercel login wall after one retry -- "
+                        "deployment protection is likely still enabled for this project "
+                        "(Vercel -> project -> Settings -> Deployment Protection). Not saving "
+                        "a login page as the preview screenshot."
                     )
 
             # Write to a temp path first and rename, so a crash mid-capture

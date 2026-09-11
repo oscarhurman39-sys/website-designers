@@ -651,9 +651,11 @@ def rebuild_preview(lead: dict) -> Optional[dict]:
     return db.get_website_by_lead(lead["id"])
 
 
-def _capture_and_publish_screenshot(lead_id: int, preview_url: str) -> tuple[str, str]:
+def _capture_and_publish_screenshot(lead_id: int, preview_url: str, fresh: bool = False) -> tuple[str, str]:
     """Capture (or reuse a cached) screenshot of the freshly-deployed
-    preview. Returns (public_screenshot_url, local_screenshot_path) -- the
+    preview; `fresh=True` (a brand-new build) drops any cached file first
+    so a stale image from an earlier lead with the same id can never be
+    emailed. Returns (public_screenshot_url, local_screenshot_path) -- the
     former is what gets linked/displayed, the latter is what sales_agent.py
     actually reads bytes from for the CID attachment. A screenshot is a
     nice-to-have for the cold email, not a requirement for a successful
@@ -662,7 +664,7 @@ def _capture_and_publish_screenshot(lead_id: int, preview_url: str) -> tuple[str
     proceeds with both empty rather than losing the deploy that already
     succeeded."""
     try:
-        local_path = screenshot.capture_screenshot_sync(preview_url, lead_id)
+        local_path = screenshot.capture_screenshot_sync(preview_url, lead_id, fresh=fresh)
     except Exception as exc:  # noqa: BLE001 - screenshot capture must never fail a successful deploy
         print(f"[design_agent] Screenshot capture failed for lead {lead_id}, continuing without one: {exc}")
         return "", ""
@@ -757,7 +759,9 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
     )
     preview_url = _validate_deployment_url(deployment)
 
-    screenshot_url, screenshot_path = _capture_and_publish_screenshot(lead["id"], preview_url)
+    # fresh=True: this is a new website row, so whatever is cached under
+    # this lead id belongs to an earlier database's lead, not this one.
+    screenshot_url, screenshot_path = _capture_and_publish_screenshot(lead["id"], preview_url, fresh=True)
 
     website_id = db.insert_website(
         lead_id=lead["id"],
