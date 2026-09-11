@@ -261,3 +261,7 @@ pipeline/archive/
 .task-*.txt
 .batch_*.txt
 .batch_*.log
+
+# StarNet away-workshop drop zone: patches + deliverable.json per run. StarNet's
+# "Keep" applies them from here; they are not source and must not dirty the tree.
+workshop/
