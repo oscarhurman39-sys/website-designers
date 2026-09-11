@@ -1,5 +1,6 @@
 """Flask app serving these public-facing routes:
 
+  GET  /health                             -- liveness probe used by preflight / uptime checks
   GET  /click?lead_id=<id>&token=<token>   -- click-tracking redirect to the preview site
   GET  /unsubscribe/<token>                -- one-click CAN-SPAM unsubscribe
   GET  /screenshots/<lead_id>.png          -- serves a cached preview screenshot
@@ -16,11 +17,19 @@ import stripe
 from flask import Flask, Response, abort, redirect, request, send_from_directory
 
 import config
+from agents import sales_agent
 from utils import compliance, db, screenshot, stripe_utils, tracker
 
 
 def create_app() -> Flask:
     app = Flask(__name__)
+
+    @app.route("/health", methods=["GET"])
+    def health() -> tuple[dict, int]:
+        """Liveness only: proves this app is the thing answering at
+        PUBLIC_BASE_URL (ngrok's own offline page answers 404 to everything).
+        Deliberately reveals nothing about configuration or data."""
+        return {"ok": True, "service": "website-designers-webhook"}, 200
 
     @app.route("/click", methods=["GET"])
     def click_redirect() -> Response:
@@ -38,6 +47,18 @@ def create_app() -> Flask:
         lead = compliance.process_unsubscribe(token)
         if lead is None:
             return "<h1>Invalid or expired unsubscribe link.</h1>", 404
+        # `lead` holds the status from *before* suppression. A paid lead
+        # ('won'/'payment_sent') keeps its status (see db.mark_unsubscribed) so
+        # its handover isn't lost, but a human must know their comms are now
+        # suppressed -- the automated handover confirmation email can't reach them.
+        if lead.get("status") in ("won", "payment_sent"):
+            from agents import sales_agent  # local import: heavy module, keep startup light
+            sales_agent.alert_needs_human(
+                lead,
+                "A PAID lead just unsubscribed. Their status is preserved so the handover "
+                "still runs, but automated emails to them are now suppressed -- complete the "
+                "handover (GitHub/Vercel invite, domain) and follow up personally.",
+            )
         return (
             "<h1>You've been unsubscribed.</h1>"
             f"<p>{lead['business_name']} will not receive any further emails from us. Sorry for the bother.</p>",
@@ -56,7 +77,7 @@ def create_app() -> Flask:
 
     @app.route("/payment-success", methods=["GET"])
     def payment_success() -> tuple[str, int]:
-        return "<h1>Payment received -- thank you!</h1><p>We'll be in touch shortly.</p>", 200
+        return "<h1>Thanks for checking out.</h1><p>Payment is confirmed separately by our payment provider. We'll be in touch after confirmation.</p>", 200
 
     @app.route("/payment-cancelled", methods=["GET"])
     def payment_cancelled() -> tuple[str, int]:
@@ -72,17 +93,27 @@ def create_app() -> Flask:
             abort(400)
 
         if event["type"] == "checkout.session.completed":
-            lead_id = stripe_utils.extract_lead_id(event)
+            session = event.get("data", {}).get("object", {}) or {}
+            # A completed checkout is not necessarily a settled payment.
+            # Test events must never fulfil orders under a live API key.
+            key = config.STRIPE_SECRET_KEY
+            expected_live = True if key.startswith(("sk_live_", "rk_live_")) else (
+                False if key.startswith(("sk_test_", "rk_test_")) else None
+            )
+            if (expected_live is None or event.get("livemode") is not expected_live
+                    or session.get("payment_status") != "paid"
+                    or session.get("mode") != "payment"):
+                return "", 200
+            try:
+                lead_id = stripe_utils.extract_lead_id(event)
+            except (ValueError, TypeError, OverflowError):
+                return "Invalid lead metadata", 400
             if lead_id is not None:
-                lead = db.get_lead(lead_id)
-                if lead is not None:
-                    db.update_lead_status(lead_id, "won", notes="Stripe checkout.session.completed")
-                    banner = "*" * 70
-                    print(
-                        f"\n{banner}\nPAYMENT RECEIVED: {lead['business_name']} (lead {lead_id})\n"
-                        f"Run 'transfer {lead_id}' in the pipeline console to hand over the "
-                        f"GitHub repo and Vercel project.\n{banner}\n"
-                    )
+                # Idempotent against replays; alerts on a second paid session.
+                sales_agent.record_payment(
+                    lead_id, session.get("id"), session.get("amount_total"),
+                    source="checkout.session.completed",
+                )
         return "", 200
 
     return app

@@ -11,10 +11,25 @@ from typing import Optional
 
 from github import Github, GithubException
 from github.Repository import Repository
+from urllib3.util.retry import Retry
 
 import config
 
 _client: Optional[Github] = None
+
+# Transport-level retry (3 attempts, 2s/4s exponential backoff) for every
+# GitHub API call made through this client. This is deliberately done here
+# rather than with utils/retry.py's function decorator: urllib3's Retry
+# understands idempotency -- non-idempotent POSTs (create repo, create file)
+# are only retried when the connection failed before the request reached
+# the server, never after an ambiguous response, so a retry can't create
+# duplicate repos/commits. GETs/DELETEs also retry on 429/5xx responses.
+_RETRY = Retry(
+    total=3,
+    backoff_factor=2,
+    status_forcelist=(429, 500, 502, 503, 504),
+    respect_retry_after_header=True,
+)
 
 
 def _get_client() -> Github:
@@ -22,7 +37,7 @@ def _get_client() -> Github:
     if _client is None:
         if not config.GITHUB_TOKEN:
             raise RuntimeError("GITHUB_TOKEN is not configured.")
-        _client = Github(config.GITHUB_TOKEN)
+        _client = Github(config.GITHUB_TOKEN, retry=_RETRY)
     return _client
 
 
@@ -54,15 +69,39 @@ def create_repo(repo_name: str, private: bool = True, description: str = "") -> 
         raise
 
 
-def push_files(repo: Repository, files: dict[str, str], commit_message: str = "Initial preview site") -> None:
-    """Create each file in `files` (path -> text content) in a single-ish batch.
+def push_files(repo: Repository, files: dict, commit_message: str = "Initial preview site") -> None:
+    """Create each file in `files` (path -> str or bytes content) in a single-ish
+    batch. PyGithub base64-encodes bytes itself, so client photos/logos
+    (utils/assets.py) go through the same call as index.html.
 
     PyGithub's Contents API creates one commit per file (there is no native
     multi-file commit helper), which is fine for a handful of small template
     files like index.html/style.css.
+
+    If a file already exists (422 -- e.g. a retried deploy after Vercel
+    failed once, where create_repo idempotently returned the existing repo),
+    update it in place instead of raising: a single transient failure
+    downstream must never permanently brick the lead's retry loop here.
     """
     for path, content in files.items():
-        repo.create_file(path=path, message=f"{commit_message}: {path}", content=content)
+        try:
+            repo.create_file(path=path, message=f"{commit_message}: {path}", content=content)
+        except GithubException as exc:
+            if exc.status == 422:
+                existing = repo.get_contents(path)
+                repo.update_file(
+                    path=path,
+                    message=f"{commit_message}: {path}",
+                    content=content,
+                    sha=existing.sha,
+                )
+            else:
+                raise
+
+
+def get_repo(repo_full_name: str) -> Repository:
+    """An existing preview repo, for a rebuild (design_agent.rebuild_preview)."""
+    return _get_client().get_repo(repo_full_name)
 
 
 def create_repo_with_files(
@@ -99,10 +138,53 @@ def get_authenticated_username() -> str:
     return _get_client().get_user().login
 
 
+def user_exists(github_username: str) -> bool:
+    """Whether `github_username` is a real GitHub account. Checked before a
+    username parsed out of a customer's reply is stored: an invite goes to
+    whoever owns that name, so a misparse must never reach the handover.
+    A 404 is a clean False; any other API failure is raised so the caller
+    treats the name as unverified rather than as confirmed."""
+    try:
+        return bool(_get_client().get_user(github_username).login)
+    except GithubException as exc:
+        if exc.status == 404:
+            return False
+        raise
+
+
+class RepoDeleteForbidden(RuntimeError):
+    """GitHub refused a repo delete with 403.
+
+    In practice this always means the personal access token carries the
+    `repo` scope but not `delete_repo` -- GitHub words it "Must have admin
+    rights to Repository" even when the token's owner *is* the owner. It is
+    a token-scope problem, not a data problem, so callers can treat the repo
+    as "left behind" and carry on rather than failing the whole batch.
+    """
+
+    def __init__(self, repo_full_name: str):
+        super().__init__(
+            f"Not allowed to delete {repo_full_name}: GITHUB_TOKEN needs the 'delete_repo' scope "
+            "(github.com/settings/tokens -> edit the token -> tick delete_repo)."
+        )
+        self.repo_full_name = repo_full_name
+
+
 def delete_repo(repo_full_name: str) -> None:
-    """Permanently delete a repo. Destructive and irreversible -- used only
-    by the opt-in integration test (tests/test_pipeline_real.py) to clean
-    up the throwaway repo it creates, never by the normal pipeline flow."""
+    """Permanently delete a repo. Destructive and irreversible -- used by
+    utils/teardown.py (expired previews), cleanup_tests.py (throwaway test
+    leads) and the opt-in integration test; never by the normal lead flow.
+    A missing repo (404) is treated as success so retries and re-runs are
+    idempotent, matching vercel_api.delete_project. A 403 raises
+    RepoDeleteForbidden so callers can tell "token lacks delete_repo" apart
+    from a genuine API failure worth retrying."""
     client = _get_client()
-    repo = client.get_repo(repo_full_name)
-    repo.delete()
+    try:
+        repo = client.get_repo(repo_full_name)
+        repo.delete()
+    except GithubException as exc:
+        if exc.status == 404:
+            return
+        if exc.status == 403:
+            raise RepoDeleteForbidden(repo_full_name) from exc
+        raise

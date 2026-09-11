@@ -49,6 +49,9 @@ coverage.xml
 *.py.cover
 .hypothesis/
 .pytest_cache/
+.pytest-tmp/
+.pytest_tmp/
+.pytest_tmp_money/
 cover/
 
 # Translations
@@ -234,3 +237,38 @@ pipeline/.scheduler.pid
 pipeline/scheduler.log
 pipeline/screenshots/
 
+
+# Claude Code agent worktrees
+.claude/worktrees/
+
+# local template renders (pipeline/render_preview.py)
+pipeline/out/
+
+# client photos/logos received by email (utils/assets.py)
+pipeline/assets/
+
+# Local dev convenience script (ngrok + webhook_server.py + dashboard.py
+# one-shot startup) -- machine-specific (hardcodes assumptions about your
+# local venv/ngrok setup), not meant to be shared via git. See README.md
+# "Quick start (local dev, Windows)" for how to create your own copy.
+start_pipeline.ps1
+
+# Pre-launch database archives (cleanup-tests --reset) and .env backups
+pipeline/archive/
+.env.bak-*
+
+# Session scratch written by agent runs — not state, not a protocol (see AGENTS.md)
+.task-*.txt
+.batch_*.txt
+.batch_*.log
+
+# StarNet away-workshop drop zone: patches + deliverable.json per run. StarNet's
+# "Keep" applies them from here; they are not source and must not dirty the tree.
+workshop/
+
+# Generated evidence from `run.py offline-readiness` (tests + offline preflight)
+# and `run.py ops run-now-proof` -- local reports, not source.
+reports/
+pipeline/proofs/
+pipeline/leads.db-shm
+pipeline/leads.db-wal

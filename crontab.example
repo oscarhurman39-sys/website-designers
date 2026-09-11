@@ -10,11 +10,10 @@
 # scheduled re-execution.
 #
 # LIMITATION: main.py started this way has no attached terminal, so the
-# human-in-the-loop console commands (takeover / payment ready / transfer)
-# are not usable against it. Use this cron fallback for hosts where you
-# can't keep a long-lived tmux/screen session running, and plan to attach a
-# separate interactive session (tmux/screen, same command) when you
-# actually need to run an operator command.
+# optional console commands (transfer / status / pause / resume) are not
+# usable against it. The sell/negotiate/close/handover flow is fully
+# automated and needs no terminal; attach a separate interactive session
+# (tmux/screen, same command) only when you want a manual override.
 #
 # Setup:
 #   1. Adjust the paths below to your actual clone location and venv.

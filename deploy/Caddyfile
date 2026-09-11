@@ -1,0 +1,8 @@
+# Reverse proxy with automatic Let's Encrypt TLS for the webhook server.
+# 1. At Porkbun add an A record: track.caseywebsites.com -> <VPS IP>
+# 2. sudo cp deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy
+# 3. Set PUBLIC_BASE_URL=https://track.caseywebsites.com in .env and restart the
+#    pipeline service; update the Stripe webhook endpoint to the new URL.
+track.caseywebsites.com {
+    reverse_proxy 127.0.0.1:5000
+}

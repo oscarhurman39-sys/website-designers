@@ -1,0 +1,22 @@
+{# Contact "split": details on the left, map on the right when we have an address. #}
+<section id="contact" class="max-w-6xl mx-auto px-6 py-20 grid gap-12 {% if map_embed_url %}md:grid-cols-2{% endif %}">
+  <div>
+    <p class="text-sm font-semibold uppercase tracking-widest text-[var(--accent)]">Contact</p>
+    <h2 class="mt-2 text-3xl md:text-4xl font-extrabold tracking-tight text-slate-900">Get in touch</h2>
+    <p class="mt-4 text-slate-600">Call, email or drop in. We are happy to talk through what you need and give you a straight answer.</p>
+    <dl class="mt-8 space-y-5 text-slate-700">
+      {% if phone %}
+      <div class="flex gap-4"><dt class="w-8 text-xl">📞</dt><dd><a href="tel:{{ phone_href }}" class="text-lg font-semibold text-slate-900 hover:text-[var(--accent)]">{{ phone }}</a></dd></div>
+      {% endif %}
+      {% if email %}
+      <div class="flex gap-4"><dt class="w-8 text-xl">✉️</dt><dd><a href="mailto:{{ email }}" class="font-medium hover:text-[var(--accent)]">{{ email }}</a></dd></div>
+      {% endif %}
+      <div class="flex gap-4"><dt class="w-8 text-xl">📍</dt><dd>{{ address or (location or city) }}</dd></div>
+    </dl>
+  </div>
+  {% if map_embed_url %}
+  <div class="relative overflow-hidden rounded-2xl border border-slate-200 shadow-sm min-h-[280px]">
+    {% include "blocks/contact/_map.html" %}
+  </div>
+  {% endif %}
+</section>
