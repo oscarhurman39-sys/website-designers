@@ -43,9 +43,9 @@ A cold-email pipeline for selling pre-built websites to local businesses.
 | Database | **Empty and ready (reset 2026-09-07).** The 75 test leads and 58 test previews are archived in `pipeline/archive/leads-20260907T155834Z.db`; every Vercel preview project is deleted. Current repo state should still be checked with `python run.py preflight --offline` before any batch. |
 | GitHub | New classic token with `repo` + `delete_repo` (2026-09-07, old one retired). The 46 leftover test repos are deleted; the account holds no preview repos. Preflight now reports the token's scopes on its own line. |
 | Slack | **Working (2026-09-07).** Bot `casey_alerts` in workspace OSCAR posts to `#leads`; a real test alert was received. `run.py test-alert` re-proves it any time. The app-level (`xapp-`) token is kept commented in `.env` for StarNet's Slack channel, which needs both tokens; the pipeline uses only the bot token. |
-| Live sending | `ENABLE_LIVE_SEND=false`. This is the hard safety gate for real emails to real strangers and must stay false until Oscar reviews a batch himself. Every send is a logged dry run until flipped for that reviewed batch. |
-| Sourcing | `SOURCING_ENABLED=false`. This is also a hard safety gate. Run `run.py source --dry-run --limit 10` first, then `run.py source --limit N` by hand only when Oscar wants leads inserted. |
-| Caps | `EMAIL_MAX_PER_DAY=10`, `EMAIL_MAX_PER_DAY_PER_ACCOUNT=10` (week one per `WARMUP.md`); do not raise them without Oscar saying so in the current conversation. Preflight warns above 10. |
+| Live sending | **`ENABLE_LIVE_SEND=true` since 2026-09-09** (Oscar's decision). Real cold emails go to real strangers: 12 sent by 2026-09-11. Flipping it back is Oscar's call alone. |
+| Sourcing | **`SOURCING_ENABLED=true`**, `SOURCING_DAILY_LIMIT=12`, `SOURCING_MAX_REQUESTS_PER_RUN` budgeted. Roughly half of sourced leads have a scrapable email. |
+| Caps | `EMAIL_MAX_PER_DAY=15`, `EMAIL_MAX_PER_DAY_PER_ACCOUNT=15` (raised from 10 on 2026-09-11 by Oscar, week two of `WARMUP.md`). Only Oscar raises these, in the conversation where he says so. |
 | Preflight | READY (dry run) on 2026-09-07. As of the latest repo notes, the public URL is still down unless `start_public.bat`/`start_all.bat` or the VPS is running. `python run.py preflight --offline` is the local safety check; `python run.py preflight` is required before arming live sending. |
 
 Secrets live only in `.env` (gitignored). `.env.example` documents every key.
