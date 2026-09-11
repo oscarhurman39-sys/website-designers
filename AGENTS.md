@@ -38,7 +38,7 @@ Never edit a test to make it pass. If a test is wrong, say so and explain why.
 
     quick-test   loop        dashboard     test-email <addr>   cleanup-tests [--dry-run]
     source [--limit N] [--dry-run]         rebuild <lead_id>   report
-    control [--json] [--all]
+    control [--json] [--all] [--agent-id AGENT_ID]
     preflight [--offline]                  preview-email [--lead ID]
     test-alert   serve-public [--status]   reviewed-batch ...
     ops start|stop|restart|status [--json]|logs [webhook|ngrok|loop]

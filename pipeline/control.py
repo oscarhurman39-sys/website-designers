@@ -5,10 +5,12 @@ Usage:
     python run.py control
     python run.py control --all
     python run.py control --json
+    python run.py control --json --agent-id negotiator
 
 The command assigns every open lead state to one StarNet room owner, names
 the next action, and raises stale/inconsistent work to the top. It never
 changes a lead, sends mail, deploys a preview, or touches a safety flag.
+Use ``--agent-id`` when a StarNet agent needs only its assigned queue.
 """
 from __future__ import annotations
 
