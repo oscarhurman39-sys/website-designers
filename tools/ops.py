@@ -4,6 +4,7 @@
     python run.py ops stop             # stop the three cleanly (by PID file)
     python run.py ops restart
     python run.py ops status [--json]  # what is up; exit 0 only if everything is
+    python run.py ops run-now-proof --offline  # write a local proof report; runs nothing external
     python run.py ops logs [name]      # tail pipeline/logs/<name>.log (webhook|ngrok|loop)
 
 This is the entry point StarNet agents and the desktop app both use. Every
@@ -17,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -31,6 +33,7 @@ RUN = PIPELINE / ".run"            # one PID file per service
 PY = REPO / "venv" / "Scripts" / "python.exe"
 WEBHOOK_PORT = 5000
 NGROK_API = 4040
+PROOF_DIR = PIPELINE / "proofs"
 
 SERVICES = {
     # name: (command, cwd, port that proves it is up or None)
@@ -253,12 +256,75 @@ def logs(name: str, lines: int) -> int:
     return 0
 
 
+
+def _repo_command(*parts: str) -> str:
+    """Return a copy/pasteable repo-root command for proof reports."""
+    if os.name == "nt":
+        return " ".join(parts)
+    return " ".join(shlex.quote(p) for p in parts)
+
+
+def run_now_proof(offline: bool) -> int:
+    """Write a local RUN NOW proof report without running the pipeline.
+
+    This is deliberately a proof-of-intent command: it records the exact safe,
+    local checks an operator would run for a daily sales-pipeline proof, plus
+    the safety gates that keep sourcing, sending, publishing and spending off.
+    It does not call sourcing, email, Vercel, Stripe, Slack or any public URL.
+    """
+    if not offline:
+        print("Refusing to write a RUN NOW proof without --offline.")
+        print("Usage: python run.py ops run-now-proof --offline")
+        return 2
+
+    PROOF_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    path = PROOF_DIR / f"run-now-proof-{stamp}.md"
+    checks = [
+        ("Full local test suite", _repo_command(r"venv\Scripts\python.exe", "-m", "pytest", "-q")),
+        ("Offline preflight", _repo_command("python", "run.py", "preflight", "--offline")),
+        ("Headless service status", _repo_command("python", "run.py", "ops", "status", "--json")),
+        ("Latest loop log tail", _repo_command("python", "run.py", "ops", "logs", "loop", "-n", "80")),
+    ]
+    lines = [
+        "# RUN NOW proof report",
+        "",
+        f"Written: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Repo: {REPO}",
+        "Mode: offline proof only",
+        "",
+        "## Safety statement",
+        "",
+        "This command did not source leads, send emails, publish previews, contact Stripe, or spend money.",
+        "It only wrote this local report listing the checks that prove the daily sales pipeline locally.",
+        "",
+        "## Checks this RUN NOW proof would run",
+        "",
+    ]
+    for index, (label, command) in enumerate(checks, start=1):
+        lines.extend([f"{index}. **{label}**", "", "   ```", f"   {command}", "   ```", ""])
+
+    lines.extend([
+        "## Required gates for live work",
+        "",
+        "- `ENABLE_LIVE_SEND` must remain false until Oscar reviews and arms a batch.",
+        "- `SOURCING_ENABLED` must remain false unless Oscar explicitly asks to insert leads.",
+        "- Stripe keys, webhook secrets, email caps and mailbox warm-up settings are not touched by this proof.",
+        "",
+    ])
+    path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"RUN NOW proof written: {path.relative_to(REPO)}")
+    print("No sourcing, sending, publishing, Stripe call, or spend was performed.")
+    return 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("start"); sub.add_parser("stop"); sub.add_parser("restart")
     st = sub.add_parser("status"); st.add_argument("--json", action="store_true")
     lg = sub.add_parser("logs"); lg.add_argument("name", nargs="?", default="loop", choices=sorted(SERVICES)); lg.add_argument("-n", type=int, default=40)
+    proof = sub.add_parser("run-now-proof"); proof.add_argument("--offline", action="store_true", required=True)
     args = parser.parse_args(argv)
     if args.cmd == "start":
         return start()
@@ -270,6 +336,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         s = status(); _print_status(s, args.json); return 0 if s["all_up"] else 1
     if args.cmd == "logs":
         return logs(args.name, args.n)
+    if args.cmd == "run-now-proof":
+        return run_now_proof(args.offline)
     return 2
 
 

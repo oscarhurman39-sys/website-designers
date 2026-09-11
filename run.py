@@ -15,6 +15,7 @@
     python run.py test-alert                # post one test alert to the Slack channel
     python run.py serve-public [--status]   # bring PUBLIC_BASE_URL up, or report why it is not
     python run.py reviewed-batch --prepare --lead ID [--lead ID...]
+    python run.py offline-readiness         # tests + offline preflight with a timestamped proof report
 
 Each mode runs as its own subprocess, not imported in-process -- this is a
 thin dispatcher, not a reimplementation. That matters because `loop` reads
@@ -26,8 +27,10 @@ state.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -122,6 +125,91 @@ def run_reviewed_batch(extra_args: list[str]) -> int:
     )
 
 
+def _local_python() -> str:
+    """Prefer the repo venv on Windows, then fall back to this interpreter."""
+    venv_python = REPO_ROOT / "venv" / "Scripts" / "python.exe"
+    if venv_python.exists():
+        return str(venv_python)
+    return sys.executable
+
+
+def _append_command_report(report_lines: list[str], title: str, cmd: list[str], result: subprocess.CompletedProcess[str]) -> None:
+    report_lines.append(f"## {title}")
+    report_lines.append("")
+    report_lines.append("Command:")
+    report_lines.append("```text")
+    report_lines.append(" ".join(cmd))
+    report_lines.append("```")
+    report_lines.append("")
+    report_lines.append(f"Exit code: {result.returncode}")
+    report_lines.append("")
+    report_lines.append("Output:")
+    report_lines.append("```text")
+    output = ((result.stdout or "") + (result.stderr or "")).strip()
+    report_lines.append(output if output else "<no output>")
+    report_lines.append("```")
+    report_lines.append("")
+
+
+def run_offline_readiness(extra_args: list[str]) -> int:
+    """Run the Windows-safe offline readiness proof and save the evidence."""
+    if extra_args:
+        print("Usage: python run.py offline-readiness")
+        return 1
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    reports_dir = REPO_ROOT / "reports"
+    reports_dir.mkdir(exist_ok=True)
+    report_path = reports_dir / f"offline-readiness-{timestamp}.md"
+
+    tmp_dir = REPO_ROOT / ".pytest-tmp"
+    tmp_dir.mkdir(exist_ok=True)
+    env = os.environ.copy()
+    env["TMP"] = str(tmp_dir)
+    env["TEMP"] = str(tmp_dir)
+
+    python_exe = _local_python()
+    checks: list[tuple[str, list[str]]] = [
+        ("Full pytest suite", [python_exe, "-m", "pytest", "-q"]),
+        ("Offline preflight", [python_exe, str(REPO_ROOT / "run.py"), "preflight", "--offline"]),
+    ]
+
+    report_lines = [
+        "# Offline readiness proof",
+        "",
+        f"Created: {datetime.now().isoformat(timespec='seconds')}",
+        f"Repo: {REPO_ROOT}",
+        f"Python: {python_exe}",
+        f"TMP/TEMP: {tmp_dir}",
+        "",
+        "This local proof runs the Windows-safe test command, then the offline preflight.",
+        "No sourcing, email, payment, publishing, or prospect contact is triggered.",
+        "",
+    ]
+
+    failures = 0
+    for title, cmd in checks:
+        print(f"Running {title}...")
+        result = subprocess.run(
+            cmd,
+            cwd=str(REPO_ROOT),
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        _append_command_report(report_lines, title, cmd, result)
+        if result.returncode != 0:
+            failures += 1
+
+    status = "PASS" if failures == 0 else "FAIL"
+    report_lines.insert(2, f"Status: {status}")
+    report_lines.insert(3, "")
+    report_path.write_text("\n".join(report_lines), encoding="utf-8")
+    print(f"Offline readiness report written to {report_path}")
+    return 0 if failures == 0 else 1
+
+
 _MODES = {
     "quick-test": run_quick_test,
     "loop": run_loop,
@@ -137,6 +225,7 @@ _MODES = {
     "test-alert": run_test_alert,
     "serve-public": run_serve_public,
     "reviewed-batch": run_reviewed_batch,
+    "offline-readiness": run_offline_readiness,
     "ops": run_ops,
 }
 

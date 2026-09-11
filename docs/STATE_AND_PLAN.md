@@ -57,6 +57,7 @@ python run.py ops start|stop|status [--json]|logs  # headless services, no windo
 python run.py preflight [--offline]         # go-live check: NO-GO / READY / GO, changes nothing
 python run.py preview-email [--lead ID]     # the exact cold email a lead would get; nothing sent
 python run.py test-alert                    # prove Slack alerts actually reach you
+python run.py ops run-now-proof --offline   # write a local proof report listing safe daily checks; changes no pipeline state
 python run.py serve-public [--status]       # bring PUBLIC_BASE_URL up, or say why it is not
 python run.py source --dry-run --limit 10   # preview what sourcing would add
 python run.py source --limit 10             # insert 10 real leads only after reviewing the dry run
