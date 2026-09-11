@@ -23,6 +23,7 @@ from __future__ import annotations
 import html as html_module
 import random
 import re
+import smtplib
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlparse
@@ -31,7 +32,9 @@ import requests
 from huggingface_hub import InferenceClient
 
 import config
-from utils import assets, compliance, db, email_utils, github_api, mailboxes, screenshot, stripe_utils, tracer, tracker
+from utils import (
+    assets, compliance, db, email_utils, email_verify, github_api, mailboxes, screenshot, stripe_utils, tracer, tracker,
+)
 # Shared with DesignAgent's post-deploy check so both sides agree on what an
 # "auth wall" looks like; the timeout is separate because this check runs on
 # the send path, right before an email goes out.
@@ -590,10 +593,17 @@ def send_cold_email(lead: dict) -> bool:
 def _send_cold_email_impl(lead: dict) -> bool:
     global _next_send_allowed_at
 
-    email_addr = lead.get("contact_email") or ""
+    email_addr = (lead.get("contact_email") or "").strip()
     if not email_addr or db.is_unsubscribed(email_addr):
         db.update_lead_status(lead["id"], "unsubscribed" if db.is_unsubscribed(email_addr) else "lost",
                                notes="No usable email at send time")
+        return False
+    if not email_verify.verify_email(email_addr):
+        # A site builder's empty mailto: ("null", "undefined") stored as the
+        # contact. The SMTP server refuses it with 553 every cycle and, since
+        # that raised, nothing queued behind it was ever tried (lead 55,
+        # 2026-09-11). It is a fact about this lead: record it and move on.
+        db.update_lead_status(lead["id"], "lost", notes=f"Contact email is not a valid address: {email_addr!r}")
         return False
 
     # One cold email per niche+town per OUTREACH_COOLDOWN_DAYS. Same contract as
@@ -637,16 +647,25 @@ def _send_cold_email_impl(lead: dict) -> bool:
     if account is None:
         return False
 
-    message_id = _send_via_configured_transport(
-        to_addr=email_addr,
-        subject=subject,
-        body_text=body_with_link,
-        lead_id=lead["id"],
-        body_html=body_html,
-        inline_image_path=inline_image_path,
-        inline_image_cid=_SCREENSHOT_CID,
-        account=account,
-    )
+    try:
+        message_id = _send_via_configured_transport(
+            to_addr=email_addr,
+            subject=subject,
+            body_text=body_with_link,
+            lead_id=lead["id"],
+            body_html=body_html,
+            inline_image_path=inline_image_path,
+            inline_image_cid=_SCREENSHOT_CID,
+            account=account,
+        )
+    except smtplib.SMTPRecipientsRefused as exc:
+        # The server rejected THIS recipient (no such domain or user). That
+        # is about the lead, not the mailbox, so record it on the lead and
+        # let send_next_pending try the next one. Auth and connection errors
+        # still raise: retrying every queued lead against a broken mailbox
+        # inside one cycle is how a sending account gets locked.
+        db.update_lead_status(lead["id"], "bounced", notes=f"Recipient refused by SMTP server: {exc}")
+        return False
     db.insert_email_thread(
         lead_id=lead["id"],
         direction="outbound",

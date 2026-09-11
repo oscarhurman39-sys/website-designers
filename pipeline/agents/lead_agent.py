@@ -19,7 +19,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from utils import db, retry, tracer
+from utils import db, email_verify, retry, tracer
 
 USER_AGENT = "ColdEmailSalesPipelineBot/1.0 (+mailto:contact@example.com)"
 REQUEST_TIMEOUT = 10
@@ -210,14 +210,25 @@ def _decode_cloudflare_email(cfemail_hex: str) -> Optional[str]:
         return None
 
 
+def _usable_address(addr: Optional[str]) -> bool:
+    """A decoded or mailto: address counts as a contact only if it is shaped
+    like one and is not a known filler. Site builders emit `mailto:null` /
+    `mailto:undefined` when the owner never filled the field in; storing
+    that as the contact email put an unsendable lead at the head of the
+    send queue (lead 55, 2026-09-11)."""
+    if not addr or not email_verify.verify_email(addr):
+        return False
+    return not any(bad in addr.lower() for bad in _EMAIL_BLOCKLIST_SUBSTR)
+
+
 def _extract_email(soup: BeautifulSoup) -> Optional[str]:
     for el in soup.select("[data-cfemail]"):
         decoded = _decode_cloudflare_email(el["data-cfemail"])
-        if decoded and not any(bad in decoded.lower() for bad in _EMAIL_BLOCKLIST_SUBSTR):
+        if _usable_address(decoded):
             return decoded
     for a in soup.select("a[href^=mailto]"):
         addr = a["href"].split("mailto:")[-1].split("?")[0].strip()
-        if addr and not any(bad in addr.lower() for bad in _EMAIL_BLOCKLIST_SUBSTR):
+        if _usable_address(addr):
             return addr
     text = soup.get_text(" ")
     for match in _EMAIL_RE.findall(text):
