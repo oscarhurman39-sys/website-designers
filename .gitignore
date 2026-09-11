@@ -265,3 +265,8 @@ pipeline/archive/
 # StarNet away-workshop drop zone: patches + deliverable.json per run. StarNet's
 # "Keep" applies them from here; they are not source and must not dirty the tree.
 workshop/
+
+# Generated evidence from `run.py offline-readiness` (tests + offline preflight)
+# and `run.py ops run-now-proof` -- local reports, not source.
+reports/
+pipeline/proofs/

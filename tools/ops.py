@@ -269,8 +269,8 @@ def run_now_proof(offline: bool) -> int:
 
     This is deliberately a proof-of-intent command: it records the exact safe,
     local checks an operator would run for a daily sales-pipeline proof, plus
-    the safety gates that keep sourcing, sending, publishing and spending off.
-    It does not call sourcing, email, Vercel, Stripe, Slack or any public URL.
+    the Commander-owned switches as they stand right now. It does not call
+    sourcing, email, Vercel, Stripe, Slack or any public URL.
     """
     if not offline:
         print("Refusing to write a RUN NOW proof without --offline.")
@@ -304,12 +304,19 @@ def run_now_proof(offline: bool) -> int:
     for index, (label, command) in enumerate(checks, start=1):
         lines.extend([f"{index}. **{label}**", "", "   ```", f"   {command}", "   ```", ""])
 
+    # Report the switches as they ARE (read from .env through config), not as
+    # a claim about how they should be. The first version said both must
+    # "remain false" while both had been true for two days, and agents read
+    # these reports as ground truth.
+    sys.path.insert(0, str(PIPELINE))
+    import config  # noqa: E402
     lines.extend([
-        "## Required gates for live work",
+        "## Live switches at the time of this report (Commander-owned; this command changes none of them)",
         "",
-        "- `ENABLE_LIVE_SEND` must remain false until Oscar reviews and arms a batch.",
-        "- `SOURCING_ENABLED` must remain false unless Oscar explicitly asks to insert leads.",
-        "- Stripe keys, webhook secrets, email caps and mailbox warm-up settings are not touched by this proof.",
+        f"- `ENABLE_LIVE_SEND={'true' if config.ENABLE_LIVE_SEND else 'false'}`",
+        f"- `SOURCING_ENABLED={'true' if config.SOURCING_ENABLED else 'false'}`",
+        f"- `EMAIL_MAX_PER_DAY={config.EMAIL_MAX_PER_DAY}`, `EMAIL_MAX_PER_DAY_PER_ACCOUNT={config.EMAIL_MAX_PER_DAY_PER_ACCOUNT}`",
+        "- Stripe keys, webhook secrets and mailbox settings are not read or touched by this proof.",
         "",
     ])
     path.write_text("\n".join(lines), encoding="utf-8")
