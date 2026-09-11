@@ -103,3 +103,13 @@ def test_unknown_status_is_visible_as_unassigned():
     assert item["owner"] == "UNASSIGNED"
     assert item["severity"] == "on_track"
     assert item["stage_age"] == "unknown"
+
+
+def test_report_can_be_filtered_to_one_starnet_agent(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "leads.db"))
+    db.init_db()
+    _lead("new", "Marketer work")
+    _lead("researched", "Designer work")
+    report = control.build_report(agent_id="webdesigner", now=NOW)
+    assert [item["business"] for item in report["leads"]] == ["Designer work"]
+    assert report["owners"] == {"AGENCY-DESIGNER": 1}

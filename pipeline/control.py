@@ -233,7 +233,11 @@ def classify(row: dict[str, Any], now: Optional[datetime] = None) -> dict[str, A
     }
 
 
-def build_report(include_all: bool = False, now: Optional[datetime] = None) -> dict[str, Any]:
+def build_report(
+    include_all: bool = False,
+    now: Optional[datetime] = None,
+    agent_id: Optional[str] = None,
+) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
     items = [classify(row, now) for row in db.control_queue()]
     if not include_all:
@@ -242,6 +246,8 @@ def build_report(include_all: bool = False, now: Optional[datetime] = None) -> d
             for item in items
             if item["status"] not in TERMINAL_STATUSES and item["severity"] != "complete"
         ]
+    if agent_id:
+        items = [item for item in items if item["agent_id"] == agent_id]
     items.sort(
         key=lambda item: (
             SEVERITY_ORDER.get(item["severity"], 99),
@@ -294,8 +300,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="include closed-lost, unsubscribed and completed handovers",
     )
     parser.add_argument("--json", action="store_true", help="emit stable machine-readable JSON")
+    parser.add_argument(
+        "--agent-id",
+        help="only show work assigned to one StarNet agent id",
+    )
     args = parser.parse_args(argv)
-    report = build_report(include_all=args.all)
+    report = build_report(include_all=args.all, agent_id=args.agent_id)
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
