@@ -41,7 +41,11 @@ SERVICES = {
 
 _HIDDEN = 0
 if sys.platform == "win32":
-    _HIDDEN = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "DETACHED_PROCESS", 0)
+    # CREATE_NO_WINDOW only: the service keeps a *hidden* console that its own
+    # child processes inherit. DETACHED_PROCESS gave it no console at all, so
+    # every helper it spawned (Flask reloader, main.py workers) popped up a
+    # visible black window on the Commander's screen.
+    _HIDDEN = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
 
 
 # --- helpers --------------------------------------------------------------------
