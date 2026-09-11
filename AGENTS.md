@@ -38,6 +38,7 @@ Never edit a test to make it pass. If a test is wrong, say so and explain why.
 
     quick-test   loop        dashboard     test-email <addr>   cleanup-tests [--dry-run]
     source [--limit N] [--dry-run]         rebuild <lead_id>   report
+    control [--json] [--all]
     preflight [--offline]                  preview-email [--lead ID]
     test-alert   serve-public [--status]   reviewed-batch ...
     ops start|stop|restart|status [--json]|logs [webhook|ngrok|loop]
@@ -56,7 +57,7 @@ windows on the Commander's screen. The Desktop app (`tools/control_panel.py`)
 calls the same `ops` commands, so agents and the Commander see one state.
 
 A daily agent shift is: `ops status --json` -> if not all up, `ops start` ->
-`preflight` -> read `report` and `ops logs loop` -> act within your lane ->
+`preflight` -> read `control`, `report` and `ops logs loop` -> act within your lane ->
 hand back through FINN/MASKY. Details, ownership per StarNet agent, and the
 open questions are in `docs/STARNET_INTEGRATION.md`.
 

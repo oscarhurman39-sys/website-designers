@@ -6,6 +6,7 @@
     python run.py test-email <email>   # one-shot: pipeline/test_email.py
     python run.py cleanup-tests [--dry-run]  # delete test leads + their repos/projects
     python run.py report                     # per-niche funnel + revenue
+    python run.py control [--json] [--all]    # read-only agent ownership + stalled-work board
     python run.py rebuild <lead_id>          # one-shot: pipeline/rebuild_preview.py
     python run.py ops start|stop|restart|status [--json]|logs [name]   # headless services, no windows
     python run.py source [--limit N] [--dry-run]   # one-shot: pipeline/source_leads.py
@@ -68,6 +69,11 @@ def run_report(extra_args: list[str]) -> int:
     return subprocess.call([sys.executable, str(PIPELINE_DIR / "report.py"), *extra_args], cwd=str(PIPELINE_DIR))
 
 
+def run_control(extra_args: list[str]) -> int:
+    # Read-only operating board: owner, next action, stage age and exceptions.
+    return subprocess.call([sys.executable, str(PIPELINE_DIR / "control.py"), *extra_args], cwd=str(PIPELINE_DIR))
+
+
 def run_rebuild(extra_args: list[str]) -> int:
     # Re-render + redeploy one lead's preview in place (after new photos/logo or a template change).
     return subprocess.call(
@@ -125,6 +131,7 @@ _MODES = {
     "source": run_source,
     "rebuild": run_rebuild,
     "report": run_report,
+    "control": run_control,
     "preflight": run_preflight,
     "preview-email": run_preview_email,
     "test-alert": run_test_alert,

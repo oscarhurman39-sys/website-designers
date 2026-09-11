@@ -520,6 +520,66 @@ def count_sourced_leads_today() -> int:
         return int(row["n"])
 
 
+def control_queue() -> list[dict[str, Any]]:
+    """Return the durable facts needed by the read-only agent control board.
+
+    Policy such as owners, SLAs and next-action wording stays in control.py;
+    this query only joins each lead to its latest state, email activity and
+    website handover record.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            WITH latest_state AS (
+                SELECT sh.lead_id, sh.timestamp AS state_changed_at, sh.notes AS state_notes
+                FROM state_history sh
+                JOIN (
+                    SELECT lead_id, MAX(id) AS id
+                    FROM state_history
+                    GROUP BY lead_id
+                ) latest ON latest.id = sh.id
+            ),
+            email_activity AS (
+                SELECT
+                    lead_id,
+                    MIN(CASE WHEN direction = 'outbound' THEN timestamp END) AS first_outbound_at,
+                    MAX(CASE WHEN direction = 'outbound' THEN timestamp END) AS last_outbound_at,
+                    MAX(CASE WHEN direction = 'inbound' THEN timestamp END) AS last_inbound_at,
+                    MAX(timestamp) AS last_email_at
+                FROM email_threads
+                GROUP BY lead_id
+            ),
+            latest_website AS (
+                SELECT w.*
+                FROM websites w
+                JOIN (
+                    SELECT lead_id, MAX(id) AS id
+                    FROM websites
+                    GROUP BY lead_id
+                ) latest ON latest.id = w.id
+            )
+            SELECT
+                l.*,
+                COALESCE(ls.state_changed_at, l.created_at) AS state_changed_at,
+                ls.state_notes,
+                ea.first_outbound_at,
+                ea.last_outbound_at,
+                ea.last_inbound_at,
+                ea.last_email_at,
+                lw.id AS website_id,
+                lw.preview_url,
+                lw.transferred,
+                lw.torn_down_at
+            FROM leads l
+            LEFT JOIN latest_state ls ON ls.lead_id = l.id
+            LEFT JOIN email_activity ea ON ea.lead_id = l.id
+            LEFT JOIN latest_website lw ON lw.lead_id = l.id
+            ORDER BY l.id ASC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
 # --- Email threads -------------------------------------------------------------
 
 def insert_email_thread(

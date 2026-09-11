@@ -33,15 +33,21 @@ wants visible console windows. Agents must not use them.
 ```
 1. ops status --json            -> if not all_up: ops start; if still not: report and stop
 2. preflight                    -> NO-GO: report the failing line, do nothing else
-3. report                       -> funnel per niche (leads / emailed / replied / won / revenue)
-4. ops logs loop -n 80          -> errors, alerts, anything "needs a human"
-5. lane work (section 3)        -> only within your lane, only through run.py or code + tests
-6. handoff (AGENTS.md format)   -> to FINN/MASKY; decisions needed -> the Commander
+3. control                      -> owner, next action, stage age, stalled/inconsistent work
+4. report                       -> funnel per niche (leads / emailed / replied / won / revenue)
+5. ops logs loop -n 80          -> errors, alerts, anything "needs a human"
+6. lane work (section 3)        -> take only rows owned by your lane; code still goes through FINN
+7. handoff (AGENTS.md format)   -> to FINN/MASKY; decisions needed -> the Commander
 ```
 
-Expected runtime for steps 1-4: under two minutes. Nothing in the shift
+Expected runtime for steps 1-5: under two minutes. Nothing in the shift
 flips `ENABLE_LIVE_SEND`, `SOURCING_ENABLED`, or Stripe mode. Those remain
 Commander-only, by hand, in `.env`.
+
+`control --json` is the machine-readable assignment contract. Severity sorts
+`blocked` -> `action_due` -> `stalled` -> `watch` -> `on_track`; agents work
+the highest row assigned to their `agent_id`, then run the command again.
+Terminal lost/unsubscribed records are hidden unless `--all` is requested.
 
 ## 3. Who holds what
 

@@ -420,6 +420,8 @@ Start with the repo's read-only preflight check:
 ```bash
 python run.py preflight            # probes the public URL and logs in to the mailbox
 python run.py preflight --offline  # config, database and copy checks only
+python run.py control              # owner, next action, age and stalled reason for every open lead
+python run.py control --json       # the same board for agents/automation
 ```
 
 It prints one line per check and ends with `NO-GO` (a blocker), `READY (dry
@@ -446,6 +448,14 @@ proves the channel is reachable:
 ```bash
 python run.py test-alert
 ```
+
+**Agent control board.** `python run.py control` is the read-only operating
+queue shared by the room. It maps each live lead state to one accountable
+StarNet agent, names the next action, shows the age of the current stage, and
+sorts inconsistent, due and stalled work above waiting work. `--json` provides
+stable machine-readable output; `--all` also includes closed-lost,
+unsubscribed and completed-handover records. The command does not update a
+lead, send mail, deploy a preview or change any `.env` gate.
 
 **Keeping the public URL up.** Every unsubscribe, click-tracking and Stripe
 link resolves against `PUBLIC_BASE_URL`, so those links are dead whenever the
