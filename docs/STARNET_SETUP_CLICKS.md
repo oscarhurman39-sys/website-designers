@@ -25,7 +25,7 @@ Open **Daily Sales Pipeline** -> RESCHEDULE (or edit). Set:
 - Agent: **MASKY**
 - Model: pick **gpt-5.6-luna under the GPT / CODEX header** from the dropdown
   (Home, then Down; never type an id). Not the one under OPENAI API.
-- Schedule: cron `30 8 * * *` (08:30 every day, Europe/London)
+- Schedule: cron `15 19 * * *` (19:15 every day, Europe/London; the Commander is at the PC from about 19:15)
 - Delivery: the chat session you want the report in. Re-save from that
   session if it says "origin delivery has no captured channel target".
 - Prompt: paste exactly this.
@@ -85,4 +85,4 @@ How you change things: edit the template or a theme entry, run  venv\Scripts\pyt
 
 WORK -> AUTOMATION -> Daily Sales Pipeline -> RUN NOW, once, while you watch
 COMMS. A good run ends with a handoff that quotes the preflight verdict and
-the report table. Then it fires itself at 08:30 every day.
+the report table. Then it fires itself at 19:15 every day.
