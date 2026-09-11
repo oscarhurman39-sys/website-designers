@@ -1,10 +1,12 @@
 # State of the system and the plan forward
 
-Written 2026-09-05 for whoever operates this repo next, human or agent. Read
+Written 2026-09-10 for whoever operates this repo next, human or agent. Read
 this first, then `README.md`, then `docs/PHOTOS_AND_LOGO_PLAYBOOK.md`.
 Branch: `claude/website-preview-email-upgrade-nz0s8a` (includes everything on
-`main` plus the work below). Tests: `venv\Scripts\python.exe -m pytest -q`
-(105 pass). Nothing has been sent to a real prospect yet.
+`main` plus the work below). Latest recorded full-suite baseline is
+`set TMP=%CD%\.pytest-tmp`, `set TEMP=%CD%\.pytest-tmp`, then
+`venv\Scripts\python.exe -m pytest -q` (136 pass, 4 skipped on 2026-09-08).
+Nothing has been sent to a real prospect yet.
 
 ## 1. What the system does today
 
@@ -36,15 +38,15 @@ A cold-email pipeline for selling pre-built websites to local businesses.
 |---|---|
 | Mail | Zoho Mail Lite (paid to 2027-09), smtppro/imappro.zoho.eu, IMAP on, DNS (MX/SPF/DKIM/DMARC) verified. Login test passes. |
 | Public URL | ngrok static domain -> `webhook_server.py` :5000, only while `start_all.bat` (or `install_autostart.ps1`'s logon task) is running. VPS setup ready in `deploy/`. |
-| Stripe | **LIVE keys since 2026-09-06**, live webhook endpoint at the ngrok URL with its signing secret in `.env`. A YES reply creates a real, payable checkout. The endpoint dies if `PUBLIC_BASE_URL` changes. |
+| Stripe | **LIVE keys since 2026-09-06**, live webhook endpoint at the ngrok URL with its signing secret in `.env`. A YES reply can create a real, payable checkout once live sending is armed. The endpoint dies if `PUBLIC_BASE_URL` changes. Do not edit Stripe keys or webhook secrets without Oscar saying so in the current conversation. |
 | Google Places | New key, Places API (New) enabled, verified. `run.py source --dry-run --limit 10` works (2026-09-07). |
-| Database | **Empty and ready (reset 2026-09-07).** The 75 test leads and 58 test previews are archived in `pipeline/archive/leads-20260907T155834Z.db`; every Vercel preview project is deleted. |
+| Database | **Empty and ready (reset 2026-09-07).** The 75 test leads and 58 test previews are archived in `pipeline/archive/leads-20260907T155834Z.db`; every Vercel preview project is deleted. Current repo state should still be checked with `python run.py preflight --offline` before any batch. |
 | GitHub | New classic token with `repo` + `delete_repo` (2026-09-07, old one retired). The 46 leftover test repos are deleted; the account holds no preview repos. Preflight now reports the token's scopes on its own line. |
 | Slack | **Working (2026-09-07).** Bot `casey_alerts` in workspace OSCAR posts to `#leads`; a real test alert was received. `run.py test-alert` re-proves it any time. The app-level (`xapp-`) token is kept commented in `.env` for StarNet's Slack channel, which needs both tokens; the pipeline uses only the bot token. |
-| Live sending | `ENABLE_LIVE_SEND=false`. Found `=true` on 2026-09-07 with the test DB and the public URL down; set back. Every send is a logged dry run until flipped for a reviewed batch. |
-| Sourcing | `SOURCING_ENABLED=false`. Run `run.py source --limit N` by hand first. |
-| Caps | `EMAIL_MAX_PER_DAY=10`, `EMAIL_MAX_PER_DAY_PER_ACCOUNT=10` (week one per `WARMUP.md`); preflight warns above 10. |
-| Preflight | READY (dry run) on 2026-09-07. One warning remains: the public URL is down until `start_public.bat` runs. Everything else (config, GitHub scopes, mailbox, Stripe, Slack, empty DB, renders) passes. |
+| Live sending | `ENABLE_LIVE_SEND=false`. This is the hard safety gate for real emails to real strangers and must stay false until Oscar reviews a batch himself. Every send is a logged dry run until flipped for that reviewed batch. |
+| Sourcing | `SOURCING_ENABLED=false`. This is also a hard safety gate. Run `run.py source --dry-run --limit 10` first, then `run.py source --limit N` by hand only when Oscar wants leads inserted. |
+| Caps | `EMAIL_MAX_PER_DAY=10`, `EMAIL_MAX_PER_DAY_PER_ACCOUNT=10` (week one per `WARMUP.md`); do not raise them without Oscar saying so in the current conversation. Preflight warns above 10. |
+| Preflight | READY (dry run) on 2026-09-07. As of the latest repo notes, the public URL is still down unless `start_public.bat`/`start_all.bat` or the VPS is running. `python run.py preflight --offline` is the local safety check; `python run.py preflight` is required before arming live sending. |
 
 Secrets live only in `.env` (gitignored). `.env.example` documents every key.
 
@@ -57,7 +59,7 @@ python run.py preview-email [--lead ID]     # the exact cold email a lead would 
 python run.py test-alert                    # prove Slack alerts actually reach you
 python run.py serve-public [--status]       # bring PUBLIC_BASE_URL up, or say why it is not
 python run.py source --dry-run --limit 10   # preview what sourcing would add
-python run.py source --limit 10             # insert 10 real leads
+python run.py source --limit 10             # insert 10 real leads only after reviewing the dry run
 python run.py loop                          # the pipeline (research/design/send/replies)
 python run.py dashboard                     # Streamlit view of leads and threads
 python run.py test-email you@x.com          # end-to-end on a dummy lead
@@ -261,16 +263,18 @@ My take for Claude: keep improving toward a watched first batch, not toward more
 ### What I would improve next, in order
 
 1. **Fix the stale sourcing/readme wording.** `pipeline/agents/sourcing_agent.py` can now keep no-site/platform-only leads when `SOURCING_REQUIRE_WEBSITE=false`, but `README.md` still says sourcing inserts businesses that already have a website and skips platform/directory listings. That doc is now half-wrong and could make the next agent operate the old strategy by mistake.
-2. **Add a preflight command for go-live.** Claude should add one command, probably `python run.py preflight`, that prints a hard yes/no for: config valid, `ENABLE_LIVE_SEND`, `SOURCING_ENABLED`, Stripe key mode vs webhook expectation, public URL not localhost, DB contains test leads, mailbox cap, and whether recent renders exist. Right now that knowledge is scattered across docs and human memory.
-3. **Clean or quarantine test artefacts before any first batch.** `git status --short` shows generated test assets/traces under `pipeline/assets/` and `.pytest-tmp/` style paths. They may be harmless, but they make it harder to see real work in the repo. Claude should either gitignore/remove generated assets or deliberately document why they are fixtures.
-4. **Make `SOURCING_REQUIRE_WEBSITE` decision explicit in docs and config comments.** The code default still keeps no-website leads out unless the flag is flipped. That is safe, but it means the shiny `none/platform_only` scoring path is mostly dormant until an operator deliberately changes sourcing rules or imports those leads another way.
-5. **Render audit before copy tinkering.** The template is the pitch. Do not spend another cycle polishing email copy until `python pipeline/render_preview.py` has been reviewed for desktop/tablet/mobile and defects are filed by niche. If the page looks generic, the rest of the funnel is just well-instrumented spam.
+2. **Keep preflight boring and current.** `python run.py preflight --offline` is now the local go-live checker, and `python run.py preflight` adds the live public URL probe. If this file, README, `.env.example`, or the runbook drift away from the checker, fix the docs or the checker in the same patch.
+3. **Keep the working tree clean before any first batch.** Recent night-shift context reports local edits in `.env.example`, `README.md`, `docs/AGENCY_SALES_SYSTEM.md`, and `tests/test_design_context.py`, plus `.batch_read.txt` and `.task-handover.txt`. Review those changes before launch so generated/operator notes do not hide real safety changes.
+4. **Keep `SOURCING_REQUIRE_WEBSITE` explicit in docs and config comments.** The code default still keeps no-website leads out unless the flag is flipped. That is safe, but it means the shiny `none/platform_only` scoring path is mostly dormant until an operator deliberately changes sourcing rules or imports those leads another way.
+5. **Render audit before copy tinkering.** The template is the pitch. Do not spend another cycle polishing email copy until `python pipeline/render_preview.py --all-widths` has been reviewed for desktop/tablet/mobile and defects are filed by niche. If the page looks generic, the rest of the funnel is just well-instrumented spam.
 6. **Add owned-site quality scoring only after the render audit.** The current score handles `none` and `platform_only`; owned sites still need cheap checks such as HTTPS, viewport meta, title, stale copyright, weight, mobile screenshot, and obvious placeholder/ancient design signals. That should be a small tested slice, not a giant crawler.
 7. **Keep subscriptions human-only until Stripe Billing is explicitly built.** The copy offers £39/month and the agent escalates monthly interest. That is the right interim move. Do not fake subscription automation with one-off Checkout sessions.
 
 ### Verification note from StarNet
 
 I inspected the repo and ran `venv\\Scripts\\python.exe -m pytest -q`. The suite did not prove green in this run because pytest hit a Windows temp-folder permission problem before many fixture-based tests could start: `PermissionError: [WinError 5] Access is denied: C:\\Users\\Oscar's PC\\AppData\\Local\\Temp\\pytest-of-Oscar's PC`. That looks environmental, not a code assertion failure. I then reran the most relevant targeted tests with `TMP` and `TEMP` pointed at `.pytest-tmp`: `venv\\Scripts\\python.exe -m pytest tests/test_sourcing_agent.py tests/test_operator_decisions.py tests/test_stripe_money_pipe.py -q`, and that command exited 0. Re-run the full suite with a repo-local temp base before treating the whole current tree as verified.
+
+Later repo state records the full suite as green with repo-local temp dirs: `set TMP=%CD%\.pytest-tmp`, `set TEMP=%CD%\.pytest-tmp`, then `venv\Scripts\python.exe -m pytest -q` produced 136 pass, 4 skipped on 2026-09-08. Any new code/doc patch should still re-run that command plus `python run.py preflight --offline` before being called done.
 
 ### Claude should not change these without Commander confirmation
 
@@ -289,20 +293,25 @@ test name in the DB plus `--reset`, `teardown.py --all`,
 `render_preview.py --all-widths`. `ENABLE_LIVE_SEND` set back to false; caps
 set to 10/day. Full suite green with the repo-local temp dirs.
 
+Live-readiness state as of 2026-09-10: this runbook is still the operating order, but the safety gates are intentionally not armed. Stripe is live, the mailbox is verified, Slack alerts work, the database is recorded empty, and render review has been recorded. The public URL is not assumed up unless `start_public.bat`, `start_all.bat`, or the VPS is actually running. `ENABLE_LIVE_SEND=false` and `SOURCING_ENABLED=false` remain the correct resting state.
+
 First real batch, in order. Every step is a command that already exists:
 
 1. ~~Reset the database.~~ **Done 2026-09-07**: all previews torn down, 75 test
    leads archived, `leads.db` empty, all 46 leftover GitHub repos deleted once
    the token gained `delete_repo`.
-2. `start_public.bat` (or the VPS) and keep it up: `python run.py preflight`
-   must show `public URL reachable: OK`.
-3. `python run.py source --limit 10` (or hand-enter leads), then
+2. Check the local safety state first: `python run.py preflight --offline`
+   should show no blockers before any lead is sourced or any gate is armed.
+3. `start_public.bat` (or `start_all.bat`, or the VPS) and keep it up:
+   `python run.py preflight` must show `public URL reachable: OK`.
+4. `python run.py source --dry-run --limit 10`, review the businesses, then
+   `python run.py source --limit 10` (or hand-enter leads), then
    `python run.py loop` with `ENABLE_LIVE_SEND=false` until the 10 previews
    are built; check `pipeline/out/*.png` renders and each lead's preview URL.
-4. `python run.py preview-email --lead <id> --check-link` for each lead.
-5. Flip `ENABLE_LIVE_SEND=true`, run `python run.py preflight` again (it must
+5. `python run.py preview-email --lead <id> --check-link` for each lead.
+6. Flip `ENABLE_LIVE_SEND=true`, run `python run.py preflight` again (it must
    say `GO (ARMED)`), start the loop, watch Slack alerts and the dashboard.
-6. After ten real outcomes, change copy/price/niche/towns from data, not taste.
+7. After ten real outcomes, change copy/price/niche/towns from data, not taste.
 
 ## 10. StarNet station, rewired 2026-09-08
 

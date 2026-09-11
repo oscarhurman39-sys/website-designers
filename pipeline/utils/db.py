@@ -276,6 +276,36 @@ def list_sendable_leads_by_priority() -> list[dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
+def duplicate_preview_risks(lead: dict[str, Any]) -> list[dict[str, Any]]:
+    """Existing, still-live previews in this lead's trade + town + template
+    bucket. A local operator warning only: it never blocks the queue. The
+    risk is two plumbers in Crawley receiving the same mock-site structure
+    and comparing notes. websites.template_niche is the bucket the prospect
+    actually got (the lead niche in modern mode, the folder name in legacy)."""
+    lead_id = lead.get("id")
+    niche = (lead.get("niche") or "").strip()
+    location = (lead.get("location") or "").strip()
+    if not niche:
+        return []
+    template_niche = niche
+    if getattr(config, "DESIGN_TEMPLATE_STYLE", "modern") == "legacy":
+        template_root = Path(__file__).resolve().parents[2] / "templates"
+        if not (template_root / niche).is_dir():
+            template_niche = "default"
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT l.id AS lead_id, l.business_name, l.niche, COALESCE(l.location, '') AS location, "
+            "w.template_niche, w.preview_url, w.created_at "
+            "FROM websites w JOIN leads l ON l.id = w.lead_id "
+            "WHERE l.id != ? AND l.niche = ? COLLATE NOCASE "
+            "AND COALESCE(l.location, '') = ? COLLATE NOCASE "
+            "AND w.template_niche = ? COLLATE NOCASE AND w.torn_down_at IS NULL "
+            "ORDER BY w.created_at DESC, l.id DESC",
+            (lead_id, niche, location, template_niche),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def last_cold_email_at(niche: str, location: Optional[str], within_days: int) -> Optional[str]:
     """Timestamp of the most recent COLD email to any lead in this
     (niche, town) bucket inside the window, or None.

@@ -55,6 +55,16 @@ def _selected(ids: list[int]) -> list[dict]:
     return result
 
 
+def _warn_duplicate_preview_risk(lead: dict) -> None:
+    """Operator warning before one town/trade/template bucket is reused."""
+    for risk in db.duplicate_preview_risks(lead):
+        print(
+            "[reviewed-batch] WARNING: duplicate preview risk before lead "
+            f"{lead['id']}: lead {risk['lead_id']} ({risk['business_name']}) already used "
+            f"{risk['template_niche']} for {risk['niche']} in {risk['location']}"
+        )
+
+
 def prepare(ids: list[int]) -> int:
     _require_paused()
     leads = _selected(ids)
@@ -65,10 +75,12 @@ def prepare(ids: list[int]) -> int:
             lead_agent.research_lead(current)
             current = db.get_lead(lead["id"])
         if current["status"] == "researched":
+            _warn_duplicate_preview_risk(current)
             if design_agent.process_lead(current) is None:
                 raise BatchError(f"lead {lead['id']} could not be designed")
             prepared += 1
         elif current["status"] == "designed":
+            _warn_duplicate_preview_risk(current)
             prepared += 1
         else:
             raise BatchError(f"lead {lead['id']} is {current['status']!r}, not new/researched/designed")
