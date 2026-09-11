@@ -118,7 +118,13 @@ default `SOURCING_LOCATIONS` are all further out than that.
 ```bash
 python run.py source --dry-run      # print what would be inserted, write nothing
 python run.py source --limit 10     # insert up to 10 leads now
+python run.py preview-audit --limit 10  # offline audit of up to 10 active previews
 ```
+
+`preview-audit` is read-only and offline. It checks active preview records for
+a usable preview URL, repository URL, local screenshot, contact email, repository
+handoff name, and Vercel project id. It never sends email, calls a deployment
+service, or changes the database.
 
 Needs `GOOGLE_PLACES_API_KEY` in `.env` (with "Places API (New)" enabled
 on the key). The orchestrator loop runs the same step once an hour when

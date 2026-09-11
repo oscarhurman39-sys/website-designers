@@ -12,6 +12,7 @@
     python run.py source [--limit N] [--dry-run]   # one-shot: pipeline/source_leads.py
     python run.py preflight [--offline]     # go-live readiness check; prints GO / READY / NO-GO
     python run.py preview-email [--lead ID] # print the exact cold email; nothing sent or written
+    python run.py preview-audit [--limit 10] # offline audit of active previews; nothing sent
     python run.py test-alert                # post one test alert to the Slack channel
     python run.py serve-public [--status]   # bring PUBLIC_BASE_URL up, or report why it is not
     python run.py reviewed-batch --prepare --lead ID [--lead ID...]
@@ -99,6 +100,12 @@ def run_preflight(extra_args: list[str]) -> int:
 def run_preview_email(extra_args: list[str]) -> int:
     return subprocess.call(
         [sys.executable, str(PIPELINE_DIR / "preview_email.py"), *extra_args], cwd=str(PIPELINE_DIR)
+    )
+
+
+def run_preview_audit(extra_args: list[str]) -> int:
+    return subprocess.call(
+        [sys.executable, str(PIPELINE_DIR / "preview_audit.py"), *extra_args], cwd=str(PIPELINE_DIR)
     )
 
 
@@ -222,6 +229,7 @@ _MODES = {
     "control": run_control,
     "preflight": run_preflight,
     "preview-email": run_preview_email,
+    "preview-audit": run_preview_audit,
     "test-alert": run_test_alert,
     "serve-public": run_serve_public,
     "reviewed-batch": run_reviewed_batch,

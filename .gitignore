@@ -270,3 +270,5 @@ workshop/
 # and `run.py ops run-now-proof` -- local reports, not source.
 reports/
 pipeline/proofs/
+pipeline/leads.db-shm
+pipeline/leads.db-wal
