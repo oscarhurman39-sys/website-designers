@@ -8,7 +8,7 @@ The standing contract StarNet loads automatically for every run in this folder i
 
 MASKY is the overseer. FINN is the room lead for the website-designers repo. Every other agent works a named lane and hands work back through FINN/MASKY instead of making broad cross-lane changes alone.
 
-Do not turn on live sourcing or live sending casually. The repo currently keeps real outbound activity behind `SOURCING_ENABLED=false` and `ENABLE_LIVE_SEND=false`; changing those is a go-live decision, not routine development. Enabled StarNet skills may create plans, concepts, prototypes, and QA checklists, but they do not override FINN's test gate or the go-live checklist.
+Live sourcing and live sending are now enabled by the Commander, but they are still Commander-owned switches. Agents may operate inside the current caps, but must not raise outbound volume, change `.env`, touch Stripe settings, or burn send slots on duplicate-looking previews. Enabled StarNet skills may create plans, concepts, prototypes, and QA checklists, but they do not override FINN's test gate, the warm-up limits, or the go-live checklist.
 
 ## StarNet room crew
 
@@ -25,17 +25,34 @@ workspace plus approved project folders. This repo is an approved (blessed) fold
 
 | Agent | Role | Owns | Hands off to |
 |---|---|---|---|
-| MASKY | Overseer / coordinator | Breaks work into lanes, keeps the room moving, records decisions, checks that work matches the business goal. | FINN for repo execution, specialists for lane work. |
-| FINN | Website-designers room lead | Repo-level direction, implementation order, reviews, tests, and merge readiness. Keeps `docs/STATE_AND_PLAN.md` honest. | MASKY for commander-facing decisions; ENGINE-DBA for schema; AGENCY-DESIGNER for templates; PROMO-MARKETER for sourcing; AGENCY-NEGOTIATOR for replies/pricing. |
-| AGENCY-DESIGNER | Preview-site owner | Template quality, niche layouts, photo/logo handling, local render checks, conversion clarity on preview pages. | FINN for code changes; STUDIO-PRODUCER for assets; PROMO-MARKETER for offer positioning. |
-| PROMO-MARKETER | Lead sourcing and outbound strategy | Niches, towns, lead scoring, follow-up cadence, channel choice, warm-up plan, and wording angles for businesses with no/poor sites. | ENGINE-DBA for scoring fields; AGENCY-NEGOTIATOR for sales objections; FINN for implementation. |
-| AGENCY-NEGOTIATOR | Replies, pricing, and close owner | Negotiation bands, reply playbooks, refund/dispute stance, close logic, and when to escalate to a human. | ENGINE-DBA for deal state; PROMO-MARKETER for follow-ups; FINN for code guardrails. |
-| ENGINE-DBA | Pipeline data owner | SQLite schema, lead statuses, lead_score/website_status/contact_channel fields, query safety, migrations, dashboard data. | FINN before schema edits; PROMO-MARKETER for scoring logic; AGENCY-NEGOTIATOR for sales states. |
-| STUDIO-PRODUCER | Proof and promo package owner | Before/after screenshots, short demo clips, client-facing promo snippets, reusable visual/audio assets for the offer. | AGENCY-DESIGNER for page visuals; PROMO-MARKETER for channel packaging. |
-| LIL BEAR | QA / operator support | Smoke runs, checklist sweeps, plain-English docs, dashboard sanity checks, repetitive cleanup. | FINN for defects; MASKY for status. |
-| PIKACHU | Automation/integration support | Local scripts, future FL Studio/audio hook experiments, utility automation that does not belong to core pipeline agents. | FINN for repo changes; STUDIO-PRODUCER for audio/promo assets. |
-| SPACEY | Reserve product perspective | Keeps an eye on how this room can later connect to app-launch lessons from the botanical app without distracting current work. | MASKY only unless pulled in. |
-| ACCESSIBILITY CHECKER | Accessibility reviewer | Who a preview page locks out, and why: contrast, tap targets, semantics, keyboard and screen-reader paths. | AGENCY-DESIGNER for fixes; FINN for gating. |
+| MASKY | Overseer / coordinator | Breaks live revenue work into lanes, keeps agents out of each other's way, records Commander decisions, and checks whether the work brings a paying client closer. | FINN for repo execution; specialists for lane work; Commander for switches, prices, spend and outbound-volume decisions. |
+| FINN | Website-designers room lead | The live pipeline gate: implementation order, reviews, tests, preflight, loop readiness, send-slot discipline, and `docs/STATE_AND_PLAN.md` truth. | MASKY for commander-facing decisions; ENGINE-DBA for schema/control data; AGENCY-DESIGNER for preview holds; PROMO-MARKETER for sourcing spread; AGENCY-NEGOTIATOR for replies/pricing. |
+| AGENCY-DESIGNER | Preview-site owner | Business-specific previews, template quality, render checks, photo/logo handling, truthful page content, and duplicate-preview holds before emails go out. | FINN for code changes; ACCESSIBILITY CHECKER for page blockers; STUDIO-PRODUCER for proof assets; PROMO-MARKETER for positioning. |
+| PROMO-MARKETER | Lead sourcing and outbound strategy | Southern UK town/niche spread, lead scoring, follow-up cadence, channel choice, warm-up plan, and wording angles for businesses with no/poor sites. | FINN for implementation; ENGINE-DBA for scoring/report fields; AGENCY-DESIGNER for preview uniqueness; AGENCY-NEGOTIATOR for objections. |
+| AGENCY-NEGOTIATOR | Replies, pricing, and close owner | Live reply triage, negotiation bands, reply playbooks, refund/dispute stance, Stripe-checkout close path, and human escalation. | ENGINE-DBA for deal state; SUPPORT AGENT for customer-care drafts; PROMO-MARKETER for follow-ups; FINN for guardrails. |
+| ENGINE-DBA | Pipeline data owner | SQLite schema, queue truth, lead statuses, lead_score/website_status/contact_channel fields, same-town/same-niche visibility, query safety, migrations, dashboard data. | FINN before schema edits; PROMO-MARKETER for scoring logic; AGENCY-NEGOTIATOR for sales states. |
+| STUDIO-PRODUCER | Proof and promo package owner | Evidence-backed before/after screenshots, short walkthrough clips, client-facing proof snippets, and reusable assets based only on real current previews. | AGENCY-DESIGNER for page visuals; PROMO-MARKETER for channel packaging. |
+| LIL BEAR | QA / operator support | Daily smoke checks, command checklists, dashboard sanity checks, stale-doc catches, and plain-English handoffs for Oscar. | FINN for defects; MASKY for status. |
+| PIKACHU | Controller automation | Small tools around `python run.py ops`, `control`, `report`, logs and Casey Websites.exe's underlying command surface; no second controller and no `.env` edits. | FINN for repo changes; MASKY for station automation; STUDIO-PRODUCER for audio/promo assets. |
+| SPACEY | Product perspective | Buyer-journey judgement: whether the offer, preview, email and checkout make sense to a non-technical local business owner. | MASKY only unless pulled in. |
+| ACCESSIBILITY CHECKER | Accessibility reviewer | Who a preview page locks out, and why: contrast, tap targets, semantics, keyboard and screen-reader paths, especially on phone width before live sends. | AGENCY-DESIGNER for fixes; FINN for gating. |
+
+## Daily Agency entry ritual
+
+Every agent entering this room reads the same live state before touching its lane:
+
+```bat
+python run.py ops status --json
+python run.py preflight
+python run.py control --json
+python run.py report
+```
+
+The Desktop controller (`Casey Websites.exe`, built from `tools/control_panel.py`) uses the same `run.py ops` surface. It is the human steering wheel; agents should normally use the quiet command surface underneath it. If the public URL is down, FINN or LIL BEAR may run `python run.py ops start` and re-check before reporting.
+
+## Live-send discipline
+
+The room is allowed to work because live sending is enabled, not because it is allowed to be stupid. Spend today's send capacity on varied, reviewed, business-specific previews across the south of the UK. Hold same-town/same-niche clusters until AGENCY-DESIGNER confirms each preview is materially different and PROMO-MARKETER confirms the batch will not look like a local spam blast.
 
 ## Repo-local subagent lanes already present
 
