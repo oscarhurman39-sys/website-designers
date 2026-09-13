@@ -63,11 +63,25 @@ def _fake_post(pages_by_query: dict[str, list[list[dict[str, Any]]]]) -> Callabl
 # already uses gitignored throwaway *.db files (see conftest.py), and the
 # system temp dir isn't writable in every environment this runs in.
 _TEST_DB = Path(__file__).resolve().parent / "leads.sourcing-test.db"
+_SQLITE_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
+
+
+def _test_db_files() -> list[Path]:
+    return [_TEST_DB] + [Path(f"{_TEST_DB}{suffix}") for suffix in _SQLITE_SIDECAR_SUFFIXES]
+
+
+def _remove_test_db() -> None:
+    # db.py opens every connection in WAL mode. A clean run removes the
+    # -wal/-shm files when its last connection closes, but a run killed
+    # mid-test leaves them behind, and deleting only the .db never cleared
+    # them (they sat in `git status` as untracked files).
+    for path in _test_db_files():
+        path.unlink(missing_ok=True)
 
 
 @pytest.fixture
 def sourcing_env(monkeypatch):
-    _TEST_DB.unlink(missing_ok=True)
+    _remove_test_db()
     monkeypatch.setattr(config, "DB_PATH", str(_TEST_DB))
     monkeypatch.setattr(config, "GOOGLE_PLACES_API_KEY", "test-key")
     monkeypatch.setattr(config, "SOURCING_NICHES", ["plumber"])
@@ -78,7 +92,16 @@ def sourcing_env(monkeypatch):
     monkeypatch.setattr(sourcing_agent.tracer, "run_traced", lambda **kwargs: kwargs["fn"]())
     db.init_db()
     yield
-    _TEST_DB.unlink(missing_ok=True)
+    _remove_test_db()
+
+
+def test_remove_test_db_clears_sqlite_sidecars_left_by_a_killed_run():
+    for path in _test_db_files():
+        path.write_bytes(b"left behind by an interrupted run")
+
+    _remove_test_db()
+
+    assert [path.name for path in _test_db_files() if path.exists()] == []
 
 
 def _use_api(monkeypatch, pages_by_query):
