@@ -1,12 +1,18 @@
 # State of the system and the plan forward
 
-Written 2026-09-10 for whoever operates this repo next, human or agent. Read
-this first, then `README.md`, then `docs/PHOTOS_AND_LOGO_PLAYBOOK.md`.
-Branch: `claude/website-preview-email-upgrade-nz0s8a` (includes everything on
-`main` plus the work below). Latest recorded full-suite baseline is
-`set TMP=%CD%\.pytest-tmp`, `set TEMP=%CD%\.pytest-tmp`, then
-`venv\Scripts\python.exe -m pytest -q` (136 pass, 4 skipped on 2026-09-08).
-Nothing has been sent to a real prospect yet.
+Written 2026-09-10, resynced with the live system on 2026-09-14, for whoever
+operates this repo next, human or agent. Read this first, then `README.md`, then
+`docs/PHOTOS_AND_LOGO_PLAYBOOK.md`. The pipeline runs from the checkout at
+`D:\projects\website-designers`; check `git branch --show-current` there rather
+than trusting a branch name written here (StarNet loops have moved it before).
+Full-suite baseline: 355 passed, 4 skipped on 2026-09-14, run as
+`venv\Scripts\python.exe -m pytest -q --basetemp=.pytest_tmp\<name>` with
+`TMP`/`TEMP` pointed at a repo-local folder (plain pytest hits a Windows temp
+permission error on this PC).
+
+**Live since 2026-09-09.** 13 cold emails have gone to real prospects
+(2026-09-08..11), 0 replies and 0 sales so far. Sections 6b and 9 below are the
+pre-launch plan and are kept as history; section 2 is the current state.
 
 ## 1. What the system does today
 
@@ -37,16 +43,18 @@ A cold-email pipeline for selling pre-built websites to local businesses.
 | Piece | State |
 |---|---|
 | Mail | Zoho Mail Lite (paid to 2027-09), smtppro/imappro.zoho.eu, IMAP on, DNS (MX/SPF/DKIM/DMARC) verified. Login test passes. |
-| Public URL | ngrok static domain -> `webhook_server.py` :5000, only while `start_all.bat` (or `install_autostart.ps1`'s logon task) is running. VPS setup ready in `deploy/`. |
+| Public URL | ngrok static domain -> `webhook_server.py` :5000. Started headless (no console windows) with `python run.py ops start`, checked with `python run.py ops status --json`; `start_all.bat` still works but opens windows. It exists only while the PC is on. VPS setup ready in `deploy/`. |
+| Uptime | **The pipeline only runs while this PC is on.** On 2026-09-12..14 the PC was on roughly 18:00-00:30 and the loop started ~19:15, so with the old 08:00-18:00 Mon-Fri window nothing sent from 2026-09-11 to 2026-09-14 while 36 leads sat designed. |
 | Stripe | **LIVE keys since 2026-09-06**, live webhook endpoint at the ngrok URL with its signing secret in `.env`. A YES reply can create a real, payable checkout once live sending is armed. The endpoint dies if `PUBLIC_BASE_URL` changes. Do not edit Stripe keys or webhook secrets without Oscar saying so in the current conversation. |
 | Google Places | New key, Places API (New) enabled, verified. `run.py source --dry-run --limit 10` works (2026-09-07). |
-| Database | **Empty and ready (reset 2026-09-07).** The 75 test leads and 58 test previews are archived in `pipeline/archive/leads-20260907T155834Z.db`; every Vercel preview project is deleted. Current repo state should still be checked with `python run.py preflight --offline` before any batch. |
+| Database | Real data since the 2026-09-07 reset (the 75 test leads are archived in `pipeline/archive/leads-20260907T155834Z.db`). On 2026-09-14: 92 leads -- 36 `designed` (preview built, waiting to send), 12 `emailed`, 44 `lost` (mostly no contact email found); 57 previews live. |
 | GitHub | New classic token with `repo` + `delete_repo` (2026-09-07, old one retired). The 46 leftover test repos are deleted; the account holds no preview repos. Preflight now reports the token's scopes on its own line. |
 | Slack | **Working (2026-09-07).** Bot `casey_alerts` in workspace OSCAR posts to `#leads`; a real test alert was received. `run.py test-alert` re-proves it any time. The app-level (`xapp-`) token is kept commented in `.env` for StarNet's Slack channel, which needs both tokens; the pipeline uses only the bot token. |
-| Live sending | **`ENABLE_LIVE_SEND=true` since 2026-09-09** (Oscar's decision). Real cold emails go to real strangers: 12 sent by 2026-09-11. Flipping it back is Oscar's call alone. |
+| Live sending | **`ENABLE_LIVE_SEND=true` since 2026-09-09** (Oscar's decision). Real cold emails go to real strangers: 13 sent by 2026-09-11. On 2026-09-14 the 9 leads whose first email carried a stale screenshot (a Vercel login page; a test cafe site for lead 22) got a one-off correction via `pipeline/resend_preview.py`, logged as `classification='resend_preview'`. Flipping live sending back is Oscar's call alone. |
 | Sourcing | **`SOURCING_ENABLED=true`**, `SOURCING_DAILY_LIMIT=12`, `SOURCING_MAX_REQUESTS_PER_RUN` budgeted. Roughly half of sourced leads have a scrapable email. |
-| Caps | `EMAIL_MAX_PER_DAY=15`, `EMAIL_MAX_PER_DAY_PER_ACCOUNT=15` (raised from 10 on 2026-09-11 by Oscar, week two of `WARMUP.md`). Only Oscar raises these, in the conversation where he says so. |
-| Preflight | READY (dry run) on 2026-09-07. As of the latest repo notes, the public URL is still down unless `start_public.bat`/`start_all.bat` or the VPS is running. `python run.py preflight --offline` is the local safety check; `python run.py preflight` is required before arming live sending. |
+| Caps | `EMAIL_MAX_PER_DAY=15`, `EMAIL_MAX_PER_DAY_PER_ACCOUNT=15` (raised from 10 on 2026-09-11 by Oscar; kept at 15 on 2026-09-14 by Oscar), plus a hard-coded 20/hour and 2-5 min gap. `OUTREACH_COOLDOWN_DAYS=5` (one cold email per niche+town per 5 days). Zoho's terms ban automated bulk mail and blocks come without warning, which is why the cap stays low. Only Oscar changes these, in the conversation where he says so. |
+| Send window | `SEND_WINDOW_START_HOUR=8`, `SEND_WINDOW_END_HOUR=22`, `SEND_WINDOW_DAYS=0,1,2,3,4,5,6` (every day, 08:00-22:00 local) since 2026-09-14, Oscar's decision, to match when the PC is actually on. The code default is 08:00-18:00 Mon-Fri. |
+| Preflight | `python run.py preflight --offline` on 2026-09-14: **GO (ARMED)**, 0 blockers, warnings for sourcing running unattended while armed and caps above the week-one 10. `python run.py preflight` adds the live public-URL, mailbox-login and GitHub probes. |
 
 Secrets live only in `.env` (gitignored). `.env.example` documents every key.
 
@@ -71,7 +79,7 @@ python run.py cleanup-tests --reset         # pre-launch: archive the whole DB t
 python pipeline/render_preview.py --all-widths  # render every niche at desktop/tablet/phone into pipeline/out
 python pipeline/utils/teardown.py --dry-run # what the 7-day teardown would remove
 python pipeline/utils/teardown.py --all     # pre-launch: tear down every deployed preview (run before --reset)
-start_all.bat                               # webhook server + ngrok + pipeline supervisor
+start_all.bat                               # same services as `ops start`, but in console windows
 ```
 
 Go-live checklist is in `README.md`.
@@ -192,9 +200,9 @@ Answers to these change what gets built next. Reply in this file or in a
 | Kent + Sussex first | `SOURCING_LOCATIONS` = 26 towns across Kent, East and West Sussex; 6-mile Oxted exclusion stays |
 | One follow-up email | `sales_agent.send_follow_up_if_due()` in the main loop: 3 days after the cold email, silent leads only, once, counts against send caps |
 | Money-back + free edits | `GUARANTEE_DAYS=14`, `FREE_EDITS_DAYS=30` in every cold email, follow-up and the negotiation prompt |
-| Commander reviews visuals before launch | `ENABLE_LIVE_SEND=false`, `SOURCING_ENABLED=false` unchanged. Renders: `python pipeline/render_preview.py` -> `pipeline/out/*.png` |
+| Commander reviews visuals before launch | Done; superseded on 2026-09-09 when both `ENABLE_LIVE_SEND` and `SOURCING_ENABLED` were set to true. Renders: `python pipeline/render_preview.py` -> `pipeline/out/*.png` |
 
-## 6b. Five questions StarNet should confirm before the first live batch
+## 6b. Five questions StarNet should confirm before the first live batch (historical: the first live batch went out 2026-09-09)
 
 1. **Which mailbox and how many a day?** Confirm the loop will run from
    casey@caseywebsites.com only, `EMAIL_MAX_PER_DAY_PER_ACCOUNT` set to 10 for
@@ -245,8 +253,10 @@ This wiring changes agent process only. It does not enable live sourcing, live s
 - `run.py source --limit 10` fills the batch from the first niche x town
   combination (10 Crawley plumbers on 2026-09-07). A spread across niches and
   towns needs a round-robin in `sourcing_agent`, or several small runs.
-- The public URL only exists while `start_public.bat` / `start_all.bat` (or
-  the VPS in `deploy/`) is running. Preflight probes `/health` and reports it.
+- The public URL and the loop only exist while this PC is on and
+  `python run.py ops start` (or `start_all.bat`, or the VPS in `deploy/`) is
+  running. Every sent email's unsubscribe link and the Stripe webhook depend on
+  it. Preflight probes `/health` and reports it.
 - The Gmail connector in this workspace lacks read permission, so inbox
   placement of test sends was not verified from here.
 
@@ -276,13 +286,12 @@ My take for Claude: keep improving toward a watched first batch, not toward more
 
 I inspected the repo and ran `venv\\Scripts\\python.exe -m pytest -q`. The suite did not prove green in this run because pytest hit a Windows temp-folder permission problem before many fixture-based tests could start: `PermissionError: [WinError 5] Access is denied: C:\\Users\\Oscar's PC\\AppData\\Local\\Temp\\pytest-of-Oscar's PC`. That looks environmental, not a code assertion failure. I then reran the most relevant targeted tests with `TMP` and `TEMP` pointed at `.pytest-tmp`: `venv\\Scripts\\python.exe -m pytest tests/test_sourcing_agent.py tests/test_operator_decisions.py tests/test_stripe_money_pipe.py -q`, and that command exited 0. Re-run the full suite with a repo-local temp base before treating the whole current tree as verified.
 
-Later repo state records the full suite as green with repo-local temp dirs: `set TMP=%CD%\.pytest-tmp`, `set TEMP=%CD%\.pytest-tmp`, then `venv\Scripts\python.exe -m pytest -q` produced 136 pass, 4 skipped on 2026-09-08. Any new code/doc patch should still re-run that command plus `python run.py preflight --offline` before being called done.
+Current baseline is at the top of this file (355 passed, 4 skipped on 2026-09-14). Any new code/doc patch should re-run the full suite plus `python run.py preflight --offline` before being called done.
 
 ### Claude should not change these without Commander confirmation
 
-- Do not flip `ENABLE_LIVE_SEND=true`.
-- Do not flip `SOURCING_ENABLED=true`.
-- Do not swap Stripe into live mode or create live payment/webhook assumptions silently.
+- `ENABLE_LIVE_SEND` and `SOURCING_ENABLED` have both been `true` since 2026-09-09 (Oscar's decision). Do not flip either one, in either direction.
+- Do not change the Stripe keys or webhook secrets (live since 2026-09-06).
 - Do not increase outbound volume or add more mailboxes as a code default.
 - Do not turn the £39/month option into automatic subscription billing until Stripe Billing has its own tested implementation.
 
@@ -295,9 +304,11 @@ test name in the DB plus `--reset`, `teardown.py --all`,
 `render_preview.py --all-widths`. `ENABLE_LIVE_SEND` set back to false; caps
 set to 10/day. Full suite green with the repo-local temp dirs.
 
-Live-readiness state as of 2026-09-10: this runbook is still the operating order, but the safety gates are intentionally not armed. Stripe is live, the mailbox is verified, Slack alerts work, the database is recorded empty, and render review has been recorded. The public URL is not assumed up unless `start_public.bat`, `start_all.bat`, or the VPS is actually running. `ENABLE_LIVE_SEND=false` and `SOURCING_ENABLED=false` remain the correct resting state.
+**Historical.** This runbook was followed and the first real batch went out on
+2026-09-09; both gates have been armed since. Kept for the reasoning behind the
+order, not as instructions. Current state is section 2.
 
-First real batch, in order. Every step is a command that already exists:
+First real batch, in order (completed):
 
 1. ~~Reset the database.~~ **Done 2026-09-07**: all previews torn down, 75 test
    leads archived, `leads.db` empty, all 46 leftover GitHub repos deleted once
@@ -353,3 +364,23 @@ contain `"halted": false`, so check `cron.halt.json` and `loops.halt.json`
 directly rather than trusting that line. And in the model dropdown there are
 two entries reading `gpt 5.5`: the one under the **GPT / CODEX** group header is
 the unmetered lane, the lowercase one under **OPENAI API** is the metered one.
+
+## 11. Night-shift patches, 2026-09-14
+
+- **25 MASKY patch deliverables were reviewed; 5 landed, 20 were dropped.** The
+  landed ones were rewritten by hand (commits 7319a7f, 2f1d469): offline
+  preflight/readiness tests and the resend script's live-send guard. Dropped
+  ones were already in the code, stale status snapshots, built on invented
+  function names, or harmful (a duplicate-preview block raised after the GitHub
+  repo and Vercel project already existed, orphaning both and retrying hourly).
+- **Patch deliverables must be unified diffs with `targetRoot` in
+  `deliverable.json`.** 16 of the 25 were in the V4A `*** Begin Patch` format
+  (what StarNet's own `fs.patch` tool uses), which `git apply` cannot read.
+  `D:\projects\starnet-local-patches\hooks\patch-format-guard.js` is a StarNet
+  `pre_tool_call` hook that refuses to save either mistake; it lives outside
+  `D:\StarNet` so app updates don't remove it.
+- **StarNet's Apply was hand-patched in the installed app (0.11.2)** so it takes
+  `targetRoot` from the run's own record and commits the patch on a new branch
+  in a temporary worktree, instead of checking out a branch in this live
+  checkout. An app update overwrites that; originals and diffs are in
+  `D:\projects\starnet-local-patches\2026-09-14-apply-fix\`.

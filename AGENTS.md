@@ -34,6 +34,22 @@ until the relevant tests pass and, for anything touching sourcing, sending, paym
 
 Never edit a test to make it pass. If a test is wrong, say so and explain why.
 
+## Patch deliverables (night shift / workshop builds)
+
+A change you can't make in this repo directly is delivered as a patch the Commander applies. It is
+only usable if `git apply` accepts it:
+
+- **Unified diff only.** `diff --git a/<path> b/<path>`, `--- a/<path>` / `+++ b/<path>` headers
+  (`/dev/null` for a new file) and `@@ -old,count +new,count @@` hunks. Never the V4A
+  `*** Begin Patch` / `*** Update File:` format your `fs.patch` tool uses -- `git apply` cannot read
+  it. 16 of 25 patches on 2026-09-14 were in that format and none could be applied.
+- **`deliverable.json` names `"kind": "patch"` and `"targetRoot": "D:\\projects\\website-designers"`.**
+- **Base every hunk on the current file**, not a snapshot from an earlier run, and use only
+  functions, DB columns and config names that exist in the code today. If you have a shell, prove
+  it with `git apply --check <patch>` from the repo root.
+- **Check it isn't already done.** Search `git log` and the code first; most rejected patches
+  duplicated work that had already landed.
+
 ## The run.py surface — the only supported entry points
 
     quick-test   loop        dashboard     test-email <addr>   cleanup-tests [--dry-run]
