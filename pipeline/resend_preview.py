@@ -36,16 +36,17 @@ from agents import sales_agent as sa  # noqa: E402
 
 AFFECTED_LEAD_IDS = [22, 26, 27, 30, 37, 40, 43, 45, 56]
 CLASSIFICATION = "resend_preview"
-NOTE = "Preview re-sent with the correct screenshot (first email carried a stale login-page image)"
+NOTE = "Preview re-sent with the correct screenshot (first email carried a stale image)"
 _WAIT_POLL_SECONDS = 30
 _MAX_WAIT_MINUTES = 90
 
 
 def _correction_line() -> str:
+    # Worded for every affected lead: eight got a Vercel login page, but lead
+    # 22 got a test cafe site, so "it showed a login screen" would be wrong.
     return (
-        "Quick correction -- the picture in my last email was wrong. It showed a "
-        "login screen instead of your site, my mistake. Here's what the draft "
-        "actually looks like:"
+        "Quick correction -- the picture in my last email was wrong, it wasn't "
+        "your site. My mistake. Here's what the draft actually looks like:"
     )
 
 
