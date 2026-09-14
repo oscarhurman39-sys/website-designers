@@ -4,17 +4,25 @@ facts differently depending on ENABLE_LIVE_SEND, never touch the network in
 monkeypatched; nothing here connects anywhere."""
 from __future__ import annotations
 
+import imaplib
+import smtplib
+import socket
 import sqlite3
 import time
 from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+import requests
 
 import config
 import preflight
 import webhook_server
 from agents import sales_agent
+
+# Captured before the env fixture stubs it, so the missing-database test can
+# exercise the real guard.
+_REAL_TEST_LEADS = preflight._test_leads
 
 
 @pytest.fixture
@@ -130,6 +138,62 @@ def test_offline_skips_every_network_probe(env, monkeypatch):
     assert checks["public URL reachable"].ok and "skipped" in checks["public URL reachable"].detail
     assert checks["mailbox login"].ok and "skipped" in checks["mailbox login"].detail
     assert checks["GitHub token"].ok and "skipped" in checks["GitHub token"].detail
+
+
+def test_main_offline_flag_reaches_every_probe_and_touches_no_transport(env, monkeypatch, capsys):
+    # `run.py preflight --offline` goes through main()'s argparse. If the flag
+    # stopped reaching collect_checks, an offline run would log in to the real
+    # mailboxes and GitHub, so every probe AND every transport raises here.
+    def boom(*args, **kwargs):
+        raise AssertionError("network touched in --offline mode")
+
+    monkeypatch.setattr(config, "ENABLE_LIVE_SEND", True)
+    monkeypatch.setattr(config, "SLACK_BOT_TOKEN", "xoxb-1234-5678-abcdefghijkl")
+    for owner, name in (
+        (preflight, "_probe_public_url"), (preflight, "_mailbox_problem"), (preflight, "_github_token_state"),
+        (requests, "get"), (requests, "post"), (smtplib, "SMTP"), (smtplib, "SMTP_SSL"),
+        (imaplib, "IMAP4_SSL"), (socket, "create_connection"),
+    ):
+        monkeypatch.setattr(owner, name, boom)
+
+    assert preflight.main(["--offline"]) == 0
+    out = capsys.readouterr().out
+    for line in (
+        "public URL reachable: skipped (--offline)",
+        "mailbox login: skipped (--offline)",
+        "GitHub token: skipped (--offline)",
+        "not verified: --offline",
+    ):
+        assert line in out, line
+
+
+def test_offline_preflight_never_creates_a_missing_database(env, monkeypatch, tmp_path):
+    missing = tmp_path / "missing.db"
+    monkeypatch.setattr(config, "DB_PATH", str(missing))
+
+    checks = _by_name(preflight.collect_checks(offline=True))
+
+    assert not checks["database"].ok and checks["database"].level == preflight.WARN
+    assert "test leads in active DB" not in checks
+    assert _REAL_TEST_LEADS() is None
+    assert not missing.exists()  # sqlite3.connect would have created it
+
+
+def test_daily_caps_above_week_one_warn_but_never_block(env, monkeypatch):
+    week_one = preflight.WEEK_ONE_DAILY_CAP
+    assert _by_name(preflight.collect_checks())["daily email caps"].ok
+
+    monkeypatch.setattr(config, "EMAIL_MAX_PER_DAY", week_one + 1)
+    caps = _by_name(preflight.collect_checks())["daily email caps"]
+    assert not caps.ok and caps.level == preflight.WARN
+
+    monkeypatch.setattr(config, "EMAIL_MAX_PER_DAY", week_one)
+    monkeypatch.setattr(config, "EMAIL_MAX_PER_DAY_PER_ACCOUNT", week_one + 1)
+    caps = _by_name(preflight.collect_checks())["daily email caps"]
+    assert not caps.ok and caps.level == preflight.WARN
+
+    monkeypatch.setattr(config, "ENABLE_LIVE_SEND", True)
+    assert preflight.main([]) == 0
 
 
 def test_cold_email_content_check_catches_stale_copy(env, monkeypatch):
