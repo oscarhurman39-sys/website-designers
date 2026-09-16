@@ -6,6 +6,7 @@ IDs supplied on the command line.  The normal loop must be paused first.
 from __future__ import annotations
 
 import argparse
+import json
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -65,7 +66,15 @@ def _warn_duplicate_preview_risk(lead: dict) -> None:
         )
 
 
-def prepare(ids: list[int]) -> int:
+def _require_agent_id(agent_id: str) -> str:
+    value = (agent_id or "").strip()
+    if not value:
+        raise BatchError("--agent-id is required")
+    return value
+
+
+def prepare(ids: list[int], agent_id: str | None = None) -> int:
+    agent_id = (agent_id or "").strip()
     _require_paused()
     leads = _selected(ids)
     prepared = 0
@@ -73,14 +82,20 @@ def prepare(ids: list[int]) -> int:
         current = db.get_lead(lead["id"])
         if current["status"] == "new":
             lead_agent.research_lead(current)
+            if agent_id:
+                db.log_state_history(lead["id"], "new", "researched", "reviewed-batch prepare", agent_id=agent_id)
             current = db.get_lead(lead["id"])
         if current["status"] == "researched":
             _warn_duplicate_preview_risk(current)
             if design_agent.process_lead(current) is None:
                 raise BatchError(f"lead {lead['id']} could not be designed")
+            if agent_id:
+                db.log_state_history(lead["id"], "researched", "designed", "reviewed-batch prepare", agent_id=agent_id)
             prepared += 1
         elif current["status"] == "designed":
             _warn_duplicate_preview_risk(current)
+            if agent_id:
+                db.log_state_history(lead["id"], "designed", "designed", "reviewed-batch prepare reviewed", agent_id=agent_id)
             prepared += 1
         else:
             raise BatchError(f"lead {lead['id']} is {current['status']!r}, not new/researched/designed")
@@ -91,6 +106,8 @@ def _sendable(lead: dict) -> bool:
     email = (lead.get("contact_email") or "").strip()
     return (
         lead.get("status") == "designed"
+        and not lead.get("held_by")
+        and not lead.get("held_at")
         and bool(email)
         and not lead.get("unsubscribed")
         and not db.is_unsubscribed(email)
@@ -98,7 +115,8 @@ def _sendable(lead: dict) -> bool:
     )
 
 
-def send(ids: list[int], max_seconds: int = 600) -> int:
+def send(ids: list[int], max_seconds: int = 600, agent_id: str | None = None) -> int:
+    agent_id = (agent_id or "").strip()
     _require_paused()
     if not config.ENABLE_LIVE_SEND:
         raise BatchError("--send requires ENABLE_LIVE_SEND=true")
@@ -122,6 +140,8 @@ def send(ids: list[int], max_seconds: int = 600) -> int:
         if time.monotonic() >= deadline:
             return sent
         if sales_agent.send_cold_email(lead):
+            if agent_id:
+                db.log_state_history(lead_id, "designed", "emailed", "reviewed-batch send", agent_id=agent_id)
             sent += 1
     return sent
 
@@ -132,16 +152,18 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--prepare", action="store_true")
     mode.add_argument("--send", action="store_true")
     parser.add_argument("--lead", action="append", type=int, required=True)
+    parser.add_argument("--agent-id", required=True)
     parser.add_argument("--max-seconds", type=int, default=600)
     args = parser.parse_args(argv)
     try:
+        _require_agent_id(args.agent_id)
         with batch_lock():
-            count = prepare(args.lead) if args.prepare else send(args.lead, args.max_seconds)
-        print(f"reviewed-batch: {'prepared' if args.prepare else 'sent'} {count}")
+            count = prepare(args.lead, args.agent_id) if args.prepare else send(args.lead, args.max_seconds, args.agent_id)
+        print(json.dumps({"ok": True, "action": "prepare" if args.prepare else "send", "agent_id": args.agent_id, "lead_ids": args.lead, "count": count}, sort_keys=True))
         return 0
     except BatchError as exc:
-        print(f"reviewed-batch: {exc}")
-        return 2
+        print(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True))
+        return 1
 
 
 if __name__ == "__main__":

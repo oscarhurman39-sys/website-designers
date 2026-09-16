@@ -118,6 +118,10 @@ def classify(row: dict[str, Any], now: Optional[datetime] = None) -> dict[str, A
     if status == "new":
         next_action = "Research the business and verify a usable contact route"
         reason = "waiting for lead research"
+    elif row.get("held_by") or row.get("held_at"):
+        severity = "blocked"
+        next_action = f"Held by {row.get('held_by') or 'unknown'}; release before automated sending"
+        reason = "lead is under an explicit StarNet hold"
     elif status == "researched":
         next_action = "Build and validate the preview at desktop and mobile widths"
         reason = "research is ready for design"
@@ -232,6 +236,8 @@ def classify(row: dict[str, Any], now: Optional[datetime] = None) -> dict[str, A
         "stage_age": _fmt_age(age),
         "next_action": next_action,
         "reason": reason,
+        "held_by": row.get("held_by"),
+        "held_at": row.get("held_at"),
     }
 
 
