@@ -19,7 +19,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from utils import db, tracer
+from utils import db, email_verify, retry, tracer
 
 USER_AGENT = "ColdEmailSalesPipelineBot/1.0 (+mailto:contact@example.com)"
 REQUEST_TIMEOUT = 10
@@ -31,6 +31,29 @@ _EMAIL_BLOCKLIST_SUBSTR = ("example.com", "sentry.io", "wixpress.com", "godaddy.
 
 _TESTIMONIAL_HINTS = ("testimonial", "review", "quote", "client-says")
 _PAIN_POINT_HINTS = ("blog", "news", "about", "why-", "services")
+
+# Domains that constantly outrank a thin/nonexistent business site in local
+# search but aren't a site the business actually owns -- a social profile,
+# directory listing, or delivery-platform page. Treating one of these as
+# "website_url" would (a) make the cold email's "you only have a Google
+# listing" claim false, and (b) send us scraping a JS-heavy platform page
+# for contact info that was never going to be there. See find_business_website().
+_NON_BUSINESS_DOMAINS = (
+    "facebook.com", "instagram.com", "twitter.com", "x.com", "linkedin.com",
+    "youtube.com", "pinterest.com", "threads.net", "tiktok.com",
+    "yelp.com", "yelp.co.uk", "tripadvisor.com", "tripadvisor.co.uk",
+    "yell.com", "thomsonlocal.com", "checkatrade.com", "trustpilot.com",
+    "bark.com", "google.com", "maps.app.goo.gl", "business.site",
+    "justeat.co.uk", "just-eat.co.uk", "ubereats.com", "deliveroo.co.uk",
+    "opentable.com", "booksy.com", "treatwell.co.uk", "fresha.com",
+    "wixpress.com", "duckduckgo.com",
+)
+
+# Cap on how many non-blocklisted search results find_business_website()
+# will actually fetch-and-verify before giving up -- keeps a "no real
+# website" lead from triggering a long chain of fetches against unrelated
+# same-industry sites DuckDuckGo happened to rank nearby.
+_MAX_CANDIDATES_CHECKED = 5
 
 
 @dataclass
@@ -83,27 +106,78 @@ def _robots_allows(url: str) -> bool:
     return parser.can_fetch(USER_AGENT, url)
 
 
+def _is_business_site_url(url: str) -> bool:
+    """False for known social-media/directory/aggregator domains (see
+    _NON_BUSINESS_DOMAINS) and anything with no discernible host at all."""
+    netloc = urlparse(url).netloc.lower()
+    if not netloc:
+        return False
+    return not any(netloc == d or netloc.endswith("." + d) for d in _NON_BUSINESS_DOMAINS)
+
+
+_GENERIC_NAME_WORDS = {"ltd", "limited", "llc", "inc", "co", "company", "the", "and"}
+
+
+def _mentions_business(soup: BeautifulSoup, business_name: str) -> bool:
+    """Loose check that a fetched page is plausibly this business's own
+    site, not an unrelated same-industry site DuckDuckGo happened to rank
+    nearby -- at least one significant word of the business name (skipping
+    generic suffixes like 'ltd') must appear in the page title or text."""
+    words = [w.strip(".,&").lower() for w in business_name.split()]
+    significant = [w for w in words if w and w not in _GENERIC_NAME_WORDS and len(w) > 2]
+    if not significant:
+        return True  # nothing meaningful to check against -- don't block on it
+    title_text = soup.title.get_text() if soup.title else ""
+    haystack = f"{title_text} {soup.get_text(' ')}".lower()
+    return any(word in haystack for word in significant)
+
+
+_ddg_search_retry = retry.with_retries(retriable=(requests.RequestException,), label="lead_agent.ddg_search")
+
+
+@_ddg_search_retry
+def _ddg_search(query: str) -> requests.Response:
+    resp = requests.get(
+        "https://html.duckduckgo.com/html/", params={"q": query}, headers=REQUEST_HEADERS, timeout=REQUEST_TIMEOUT
+    )
+    resp.raise_for_status()
+    return resp
+
+
 def find_business_website(business_name: str, location: str) -> Optional[str]:
     """Best-effort discovery of a business's website via DuckDuckGo's
-    no-JS HTML endpoint (no API key required). Returns the first plausible
-    result URL, or None.
+    no-JS HTML endpoint (no API key required).
+
+    Skips social-media/directory/aggregator results outright (see
+    _is_business_site_url) rather than returning the first non-DuckDuckGo
+    link blindly -- those show up constantly for small local businesses and
+    aren't a site they own. Of the remaining candidates (checked up to
+    _MAX_CANDIDATES_CHECKED), only returns one whose fetched homepage
+    plausibly mentions the business (see _mentions_business), so a
+    same-industry site that just happens to rank nearby doesn't get mistaken
+    for this business's own site. Returns None if nothing found or nothing
+    validates -- which downstream is exactly "no website", the same claim
+    the cold email's opening line makes.
     """
     query = f"{business_name} {location}"
-    search_url = "https://html.duckduckgo.com/html/"
-    if not _robots_allows(search_url):
+    if not _robots_allows("https://html.duckduckgo.com/html/"):
         return None
     try:
-        resp = requests.get(
-            search_url, params={"q": query}, headers=REQUEST_HEADERS, timeout=REQUEST_TIMEOUT
-        )
-        resp.raise_for_status()
+        resp = _ddg_search(query)
     except requests.RequestException:
         return None
 
     soup = BeautifulSoup(resp.text, "html.parser")
+    checked = 0
     for link in soup.select("a.result__a"):
         href = link.get("href", "")
-        if href and "duckduckgo.com" not in href:
+        if not href or not _is_business_site_url(href):
+            continue
+        if checked >= _MAX_CANDIDATES_CHECKED:
+            break
+        checked += 1
+        candidate = _fetch(href)
+        if candidate is not None and _mentions_business(candidate, business_name):
             return href
     return None
 
@@ -119,10 +193,42 @@ def _fetch(url: str) -> Optional[BeautifulSoup]:
     return BeautifulSoup(resp.text, "html.parser")
 
 
+def _decode_cloudflare_email(cfemail_hex: str) -> Optional[str]:
+    """Decode Cloudflare's automatic email-obfuscation encoding
+    (the `data-cfemail` attribute Cloudflare's free tier injects on every
+    mailto: link and visible email address). Extremely common on small
+    business sites -- without this, _extract_email() silently finds
+    nothing on any Cloudflare-protected page, even when a real address is
+    right there on the screen. XOR cipher, first hex byte is the key."""
+    try:
+        key = int(cfemail_hex[:2], 16)
+        return "".join(
+            chr(int(cfemail_hex[i:i + 2], 16) ^ key)
+            for i in range(2, len(cfemail_hex), 2)
+        )
+    except (ValueError, IndexError):
+        return None
+
+
+def _usable_address(addr: Optional[str]) -> bool:
+    """A decoded or mailto: address counts as a contact only if it is shaped
+    like one and is not a known filler. Site builders emit `mailto:null` /
+    `mailto:undefined` when the owner never filled the field in; storing
+    that as the contact email put an unsendable lead at the head of the
+    send queue (lead 55, 2026-09-11)."""
+    if not addr or not email_verify.verify_email(addr):
+        return False
+    return not any(bad in addr.lower() for bad in _EMAIL_BLOCKLIST_SUBSTR)
+
+
 def _extract_email(soup: BeautifulSoup) -> Optional[str]:
+    for el in soup.select("[data-cfemail]"):
+        decoded = _decode_cloudflare_email(el["data-cfemail"])
+        if _usable_address(decoded):
+            return decoded
     for a in soup.select("a[href^=mailto]"):
         addr = a["href"].split("mailto:")[-1].split("?")[0].strip()
-        if addr and not any(bad in addr.lower() for bad in _EMAIL_BLOCKLIST_SUBSTR):
+        if _usable_address(addr):
             return addr
     text = soup.get_text(" ")
     for match in _EMAIL_RE.findall(text):
@@ -177,16 +283,33 @@ def research_lead(lead: dict) -> None:
 
 
 def _research_lead_impl(lead: dict) -> None:
+    """Best-effort research: a lead always has at least a business_name/
+    niche/location (required at insert time), so there is never a case
+    where "absolutely nothing" is known about it. Research failures
+    (no website found, fetch blocked, no contact email discovered) push the
+    lead forward to 'researched' with whatever partial data is available,
+    rather than marking it 'lost' -- DesignAgent can build a site from
+    name/niche/location alone, and SalesAgent (the actual point where a
+    missing contact_email becomes fatal) is the correct place to mark a
+    lead 'lost', not here."""
     lead_id = lead["id"]
-    website_url = find_business_website(lead["business_name"], lead["location"] or "")
+    # Sourced leads arrive with the website Google lists for them; only fall
+    # back to a DuckDuckGo search when we have nothing (manual/CSV leads).
+    website_url = (lead.get("website_url") or "").strip() or find_business_website(
+        lead["business_name"], lead["location"] or ""
+    )
 
     if not website_url:
-        db.update_lead_status(lead_id, "lost", notes="No website found during research")
+        db.update_lead_status(lead_id, "researched", notes="No website found during research; proceeding with name/niche/location only")
         return
 
     homepage = _fetch(website_url)
     if homepage is None:
-        db.update_lead_status(lead_id, "lost", notes=f"Could not fetch website (robots.txt or network): {website_url}")
+        db.update_lead_fields(lead_id, website_url=website_url)
+        db.update_lead_status(
+            lead_id, "researched",
+            notes=f"Could not fetch website (robots.txt or network): {website_url}; proceeding without scraped data",
+        )
         return
 
     email_addr = _extract_email(homepage)
@@ -203,20 +326,16 @@ def _research_lead_impl(lead: dict) -> None:
                 testimonial = testimonial or _extract_testimonial(subpage)
                 pain_point = pain_point or _extract_pain_point(subpage, subpage_url)
 
-    if not email_addr:
-        db.update_lead_fields(lead_id, website_url=website_url, scraped_info=homepage.get_text(" ", strip=True)[:2000])
-        db.update_lead_status(lead_id, "lost", notes="Website found but no contact email discovered")
-        return
-
     db.update_lead_fields(
         lead_id,
         website_url=website_url,
-        contact_email=email_addr,
+        contact_email=email_addr or "",
         pain_point=pain_point or "",
         testimonial=testimonial or "",
         scraped_info=homepage.get_text(" ", strip=True)[:2000],
     )
-    db.update_lead_status(lead_id, "researched", notes="Research complete")
+    notes = "Research complete" if email_addr else "Website found but no contact email discovered; proceeding without one"
+    db.update_lead_status(lead_id, "researched", notes=notes)
 
 
 def run(csv_path: Optional[str] = None) -> None:

@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ business_name }} | {{ niche_label }} in {{ city }}</title>
+  <meta name="description" content="{{ business_name }} - {{ niche_label }} in {{ city }}. {{ hero_tagline }}.">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="bg-white text-slate-800 antialiased" style="--accent: {{ accent }}; --accent-dark: {{ accent_dark }};">
+
+  {# --- Top strip: only when there is a real fact to show ------------------ #}
+  {% if google_rating or phone %}
+  <div class="bg-[var(--accent-dark)] text-white text-sm">
+    <div class="max-w-6xl mx-auto px-6 py-2 flex items-center justify-between gap-4">
+      <span>
+        {% if google_rating %}
+          <span class="text-amber-300">★★★★★</span>
+          <span class="font-semibold ml-1">{{ "%.1f"|format(google_rating) }}</span>
+          <span class="opacity-80">from {{ google_reviews_count }} Google reviews</span>
+        {% else %}
+          <span class="opacity-80">{{ niche_label }} · {{ city }}</span>
+        {% endif %}
+      </span>
+      {% if phone %}
+      <a href="tel:{{ phone_href }}" class="font-semibold hover:underline whitespace-nowrap">📞 {{ phone }}</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {# --- Nav ------------------------------------------------------------------ #}
+  <header class="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-slate-200">
+    <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+      <a href="#top" class="flex items-center gap-2 text-lg font-extrabold tracking-tight text-slate-900">
+        {% if logo_url %}<img src="{{ logo_url }}" alt="{{ business_name }}" class="h-10 w-auto max-w-[200px] object-contain">{% else %}<span class="text-[var(--accent)]">{{ icon }}</span> {{ business_name }}{% endif %}
+      </a>
+      <nav class="hidden md:flex gap-7 text-sm font-medium text-slate-600">
+        {% for label, anchor in nav_links %}
+        <a href="#{{ anchor }}" class="hover:text-[var(--accent)]">{{ label }}</a>
+        {% endfor %}
+      </nav>
+      {% if phone %}
+      <a href="tel:{{ phone_href }}" class="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white shadow-sm hover:opacity-90 transition">
+        Call now
+      </a>
+      {% else %}
+      <a href="#contact" class="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white shadow-sm hover:opacity-90 transition">
+        Get in touch
+      </a>
+      {% endif %}
+    </div>
+  </header>
+
+  {# --- Hero: one of blocks/hero/*.html, chosen per lead ---------------------- #}
+  {% include "blocks/hero/" ~ blocks.hero ~ ".html" %}
+
+  {# --- Trust strip ----------------------------------------------------------- #}
+  <section class="border-b border-slate-200 bg-slate-50">
+    <div class="max-w-6xl mx-auto px-6 py-6 grid gap-6 sm:grid-cols-3 text-sm">
+      <div class="flex items-start gap-3">
+        <span class="mt-0.5 text-[var(--accent)] text-xl">📍</span>
+        <div><p class="font-semibold text-slate-900">Local to {{ city }}</p><p class="text-slate-600">{{ address or (location or city) }}</p></div>
+      </div>
+      <div class="flex items-start gap-3">
+        <span class="mt-0.5 text-[var(--accent)] text-xl">{{ icon }}</span>
+        <div><p class="font-semibold text-slate-900">{{ niche_label }}</p><p class="text-slate-600">{{ trust_line }}</p></div>
+      </div>
+      <div class="flex items-start gap-3">
+        <span class="mt-0.5 text-[var(--accent)] text-xl">{% if google_rating %}⭐{% else %}💬{% endif %}</span>
+        <div>
+          {% if google_rating %}
+          <p class="font-semibold text-slate-900">Rated {{ "%.1f"|format(google_rating) }} on Google</p><p class="text-slate-600">{{ google_reviews_count }} customer reviews</p>
+          {% else %}
+          <p class="font-semibold text-slate-900">Straight answers</p><p class="text-slate-600">Clear quotes, no surprises</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </section>
+
+  {# --- Middle sections, in the order chosen for this lead -------------------- #}
+  {% for section in section_order %}
+  {% include "blocks/" ~ section ~ "/" ~ blocks[section] ~ ".html" %}
+  {% endfor %}
+
+  {# --- Footer ---------------------------------------------------------------- #}
+  <footer class="border-t border-slate-200 bg-slate-50">
+    <div class="max-w-6xl mx-auto px-6 py-8 flex flex-col md:flex-row items-center justify-between gap-3 text-sm text-slate-500">
+      <p>&copy; {{ year }} {{ business_name }}. {{ niche_label }} in {{ city }}.</p>
+      <p>Preview site by {{ sender_name }} · <a href="{{ preview_url }}" class="text-[var(--accent)] hover:underline">share this preview</a></p>
+    </div>
+  </footer>
+
+</body>
+</html>

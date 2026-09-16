@@ -1,0 +1,18 @@
+{# Reviews "card": light section, quote or rating in a white card with an accent rule. #}
+{% if testimonial or google_rating %}
+<section id="reviews" class="bg-slate-50 border-y border-slate-200">
+  <div class="max-w-3xl mx-auto px-6 py-20">
+    <div class="rounded-2xl border-l-4 border-[var(--accent)] bg-white p-8 md:p-10 shadow-sm">
+      <p class="text-amber-400 text-xl tracking-widest">★★★★★</p>
+      {% if testimonial %}
+      <blockquote class="mt-4 text-xl md:text-2xl font-semibold leading-snug text-slate-900">&ldquo;{{ testimonial }}&rdquo;</blockquote>
+      <p class="mt-5 text-sm text-slate-500">A {{ business_name }} customer</p>
+      {% else %}
+      <p class="mt-4 text-4xl font-extrabold text-slate-900">{{ "%.1f"|format(google_rating) }}<span class="text-xl text-slate-400"> / 5</span></p>
+      <p class="mt-2 text-slate-600">Average rating from {{ google_reviews_count }} Google reviews</p>
+      <a href="{{ google_reviews_url }}" target="_blank" rel="noopener" class="mt-6 inline-block font-semibold text-[var(--accent)] hover:underline">Read the reviews →</a>
+      {% endif %}
+    </div>
+  </div>
+</section>
+{% endif %}

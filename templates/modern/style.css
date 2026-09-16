@@ -1,0 +1,41 @@
+/* templates/modern -- everything visual lives in Tailwind utility classes in
+   index.html; this file only carries what utilities can't express. */
+html { scroll-behavior: smooth; }
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fade-up { animation: fade-up .7s ease-out both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .fade-up { animation: none; }
+}
+
+/* Contact map. The live Google embed shows on the page; utils/screenshot.py
+   sets <html data-screenshot> before capture and the map-styled placeholder
+   shows instead, so a cold-email screenshot never carries a blank iframe. */
+.map-live, .map-placeholder { position: absolute; inset: 0; }
+.map-placeholder { display: none; background: #eef2f7; }
+html[data-screenshot] .map-live { display: none; }
+html[data-screenshot] .map-placeholder { display: block; }
+.map-roads {
+  position: absolute; inset: 0;
+  background-image:
+    linear-gradient(#ffffff 3px, transparent 3px),
+    linear-gradient(90deg, #ffffff 3px, transparent 3px),
+    linear-gradient(#dde3ec 1px, transparent 1px),
+    linear-gradient(90deg, #dde3ec 1px, transparent 1px);
+  background-size: 180px 180px, 180px 180px, 36px 36px, 36px 36px;
+  background-position: 20px 30px, 20px 30px, 0 0, 0 0;
+}
+.map-pin {
+  position: absolute; left: 50%; top: 44%; width: 18px; height: 18px; margin: -9px 0 0 -9px;
+  border-radius: 50%; background: var(--accent); border: 4px solid #fff;
+  box-shadow: 0 0 0 12px color-mix(in srgb, var(--accent) 18%, transparent), 0 6px 14px rgba(15, 23, 42, .25);
+}
+.map-caption {
+  position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); white-space: nowrap;
+  background: #fff; color: #0f172a; font: 600 13px/1 system-ui, -apple-system, sans-serif;
+  padding: 10px 14px; border-radius: 999px; box-shadow: 0 4px 14px rgba(15, 23, 42, .15);
+}

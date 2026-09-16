@@ -1,0 +1,13 @@
+{# Contact map. The real Google embed is what a visitor sees on the live page.
+   It paints blank in headless Chromium, so every cold-email screenshot used
+   to carry a white box: screenshot.py sets <html data-screenshot> before
+   capture and style.css swaps in the map-styled placeholder below instead.
+   The caller wraps this in a `relative` box with a height. #}
+<div class="map-live">
+  <iframe src="{{ map_embed_url }}" class="h-full w-full" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Map to {{ business_name }}"></iframe>
+</div>
+<div class="map-placeholder" aria-hidden="true">
+  <div class="map-roads"></div>
+  <div class="map-pin"></div>
+  <div class="map-caption">Interactive map locating {{ business_name }}</div>
+</div>

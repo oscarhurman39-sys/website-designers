@@ -1,0 +1,24 @@
+{# About "photos": copy beside a two-up photo grid with a city card. Always used when the client sent their own photos. #}
+<section id="about" class="bg-slate-50 border-y border-slate-200">
+  <div class="max-w-6xl mx-auto px-6 py-20 grid gap-12 md:grid-cols-2 items-center">
+    <div>
+      <p class="text-sm font-semibold uppercase tracking-widest text-[var(--accent)]">About</p>
+      <h2 class="mt-2 text-3xl md:text-4xl font-extrabold tracking-tight text-slate-900">{{ business_name }}</h2>
+      <p class="mt-5 text-lg leading-relaxed text-slate-600">{{ about }}</p>
+      {% if phone %}
+      <a href="tel:{{ phone_href }}" class="mt-8 inline-block rounded-lg bg-[var(--accent)] px-6 py-3 font-semibold text-white hover:opacity-90 transition">Call {{ phone }}</a>
+      {% endif %}
+    </div>
+    {% if gallery_images|length >= 2 %}
+    <div class="grid grid-cols-2 gap-4">
+      {% for img in gallery_images %}
+      <img src="{{ img }}" alt="" class="{% if loop.first %}col-span-2 aspect-[16/10]{% else %}aspect-square{% endif %} w-full rounded-2xl object-cover shadow-md">
+      {% endfor %}
+      <div class="rounded-2xl bg-[var(--accent)] text-white p-6 flex flex-col justify-end">
+        <p class="text-3xl font-extrabold">{{ city }}</p>
+        <p class="text-sm text-white/85">and surrounding areas</p>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</section>

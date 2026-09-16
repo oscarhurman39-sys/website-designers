@@ -11,6 +11,11 @@ pandas==2.2.3
 huggingface_hub==0.25.2
 slack-sdk==3.33.1
 
+# SendGrid transport for utils/email_utils.py (used instead of SMTP when
+# SENDGRID_API_KEY is set). Pulls in python_http_client, whose HTTPError
+# utils/email_utils.py's send_email_sendgrid() catches for its retry logic.
+sendgrid==6.11.0
+
 # Website preview screenshots (pipeline/utils/screenshot.py). After
 # installing, run `playwright install chromium` once (not needed if
 # Chromium is already provided by your environment, e.g. a pre-provisioned

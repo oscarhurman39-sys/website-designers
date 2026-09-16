@@ -1,0 +1,18 @@
+# Serves webhook_server.py (unsubscribe + click tracking + Stripe webhook +
+# preview screenshots) with gunicorn on 127.0.0.1:5000. Caddy (deploy/Caddyfile)
+# terminates TLS in front of it on the public subdomain.
+[Unit]
+Description=website-designers webhook server (gunicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pipeline
+WorkingDirectory=/opt/website-designers/pipeline
+ExecStart=/opt/website-designers/venv/bin/gunicorn --bind 127.0.0.1:5000 --workers 2 --timeout 60 webhook_server:app
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

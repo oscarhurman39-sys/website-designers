@@ -53,6 +53,11 @@ def test_send_cold_email_blocks_invalid_preview_before_sending(monkeypatch):
     lead = {"id": 123, "business_name": "Example Co", "contact_email": "owner@example.com", "location": "Leeds"}
 
     monkeypatch.setattr(sales_agent.db, "is_unsubscribed", Mock(return_value=False))
+    # This test has no DB fixture, so the niche+town cooldown lookup would hit a
+    # state_history table that was never created. Stub the query rather than
+    # zeroing OUTREACH_COOLDOWN_DAYS: the cooldown stays "on", so the test still
+    # proves the *preview check* is what returned False.
+    monkeypatch.setattr(sales_agent.db, "last_cold_email_at", Mock(return_value=None))
     monkeypatch.setattr(sales_agent.db, "get_website_by_lead", Mock(return_value={"preview_url": ""}))
     monkeypatch.setattr(sales_agent.db, "update_lead_status", Mock())
     monkeypatch.setattr(sales_agent, "_send_via_configured_transport", Mock())

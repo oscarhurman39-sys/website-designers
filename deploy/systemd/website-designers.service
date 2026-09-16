@@ -1,0 +1,26 @@
+# Runs the pipeline's main loop (research -> design -> send -> poll inbox ->
+# handover) under systemd so it survives reboots and crashes. Install steps
+# are in deploy/README.md. Adjust User= and the two paths if your clone lives
+# elsewhere than /opt/website-designers.
+[Unit]
+Description=website-designers cold-email pipeline (main loop)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pipeline
+WorkingDirectory=/opt/website-designers/pipeline
+# main.py reads .env from the repo root via pipeline/config.py; nothing else needed here.
+ExecStart=/opt/website-designers/venv/bin/python main.py
+Restart=always
+RestartSec=15
+# stdin is closed under systemd, so the optional operator console
+# (transfer/status/pause/resume) is unavailable here -- attach a tmux session
+# and run main.py by hand when you need it. The sales flow is fully automated.
+StandardInput=null
+StandardOutput=append:/opt/website-designers/pipeline/scheduler.log
+StandardError=append:/opt/website-designers/pipeline/scheduler.log
+
+[Install]
+WantedBy=multi-user.target

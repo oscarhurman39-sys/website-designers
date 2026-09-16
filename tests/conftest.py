@@ -24,6 +24,13 @@ ENV_PATH = REPO_ROOT / ".env"
 # uses to reuse those modules from outside the pipeline/ directory.
 sys.path.insert(0, str(PIPELINE_DIR))
 
+# The outbound send window is a wall-clock gate; leave it wide open for the
+# test session so send-path tests do not depend on when they are run. Tests
+# of the window itself set config.SEND_WINDOW_* explicitly.
+os.environ.setdefault("SEND_WINDOW_START_HOUR", "0")
+os.environ.setdefault("SEND_WINDOW_END_HOUR", "24")
+os.environ.setdefault("SEND_WINDOW_DAYS", "0,1,2,3,4,5,6")
+
 # Load .env.test (or, failing that, .env) before any pipeline module is
 # imported anywhere in the test session: pipeline/config.py reads
 # os.environ into module-level constants at import time, so this has to

@@ -1,0 +1,1 @@
+from utils import db; db.init_db(); lid = db.insert_lead('Greenleaf Landscaping', 'landscaper', 'Reigate'); db.update_lead_status(lid, 'new'); db.update_lead_fields(lid, contact_email='casey.webs.sites@gmail.com'); print('Lead', lid, 'ready')

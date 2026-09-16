@@ -64,6 +64,6 @@ def test_build_html_body_renders_preview_link_as_button():
     assert (
         f'<a href="{preview_url}" style="display:inline-block;padding:14px 28px;'
         "background:#2563eb;color:white;border-radius:8px;text-decoration:none;"
-        'font-size:16px;font-weight:bold;margin:16px 0">View Your Free Website &rarr;</a>'
+        'font-size:16px;font-weight:bold;margin:16px 0">View the draft &rarr;</a>'
     ) in html
     assert f"View the live preview: {preview_url}" not in html

@@ -19,17 +19,18 @@ import logging
 import re
 import smtplib
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from email.header import decode_header
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.utils import formatdate, make_msgid, parseaddr
+from email.utils import formataddr, formatdate, make_msgid, parseaddr
 from pathlib import Path
 from typing import Optional
 import base64
 
+from python_http_client.exceptions import HTTPError as SendGridHTTPError
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import (
     Mail,
@@ -45,9 +46,11 @@ from sendgrid.helpers.mail import (
 )
 
 import config
-from utils import compliance
+from utils import compliance, retry
 
 logger = logging.getLogger(__name__)
+
+_DRY_RUN_LOG_PATH = Path(__file__).resolve().parent.parent / "dry_run.log"
 
 # Simple email validation regex
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
@@ -63,11 +66,43 @@ class InboundEmail:
     body: str
     content_type: str
     date: str
+    # The mailbox (config.EmailAccount.user) this message was polled from.
+    # Distinct from `to_addr`: a prospect may reply to an alias or forward,
+    # but the mailbox it *landed in* is the one their thread lives in, which
+    # is what sales_agent.py pins the lead to. Defaults to "" so anything
+    # constructing InboundEmail by hand (tests) keeps working.
+    account_user: str = ""
+    # Image attachments (photos / logo a prospect sent back). Parsed here
+    # so sales_agent can hand them straight to utils/assets.py.
+    attachments: list = field(default_factory=list)
 
 
 def _validate_email(email_addr: str) -> bool:
     """Validate email address format."""
     return EMAIL_REGEX.match(email_addr) is not None
+
+
+def _log_dry_run(
+    transport: str, to_addr: str, subject: str, body_with_footer: str, from_addr: str = ""
+) -> None:
+    """Console + file record of an email a live run would have sent
+    (config.ENABLE_LIVE_SEND is not true). Appended to pipeline/dry_run.log
+    so a full dry-run pass leaves a durable record, not just console
+    scrollback -- placed after every other guard (unsubscribe check,
+    compliance footer, message construction) so a dry run still exercises
+    everything a real send would, short of the actual network call.
+    `from_addr` names the mailbox the live send would have used, so a
+    multi-mailbox dry run shows the rotation/stickiness actually working."""
+    bar = "=" * 66
+    entry = (
+        f"\n{bar}\nDRY RUN -- email NOT sent (transport: {transport})\n"
+        f"Time: {datetime.utcnow().isoformat()}Z\n"
+        + (f"From: {from_addr}\n" if from_addr else "")
+        + f"To: {to_addr}\nSubject: {subject}\n{'-' * 66}\n{body_with_footer}\n{bar}\n"
+    )
+    print(entry)
+    with open(_DRY_RUN_LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(entry)
 
 
 def send_email(
@@ -78,6 +113,7 @@ def send_email(
     body_html: Optional[str] = None,
     inline_image_path: Optional[str] = None,
     inline_image_cid: str = "preview",
+    account: Optional[config.EmailAccount] = None,
 ) -> str:
     """Send a compliant cold email via SMTP. Returns the generated Message-ID.
 
@@ -93,8 +129,16 @@ def send_email(
     of this writing except sales_agent.py's cold-email send) get back the
     exact same `multipart/alternative`-only structure as before -- this
     parameter is purely additive.
+
+    `account` is the mailbox to send from: it supplies the From header, the
+    SMTP host/login and the envelope sender. None means account 0 (the
+    primary EMAIL_USER mailbox), so existing callers are unchanged. Which
+    mailbox a given lead gets is decided by utils/mailboxes.py, not here.
     """
     from utils import db  # local import to avoid a circular import at module load time
+
+    if account is None:
+        account = config.EMAIL_ACCOUNTS[0]
 
     if db.is_unsubscribed(to_addr):
         raise RuntimeError(f"Refusing to send: {to_addr} is unsubscribed.")
@@ -109,7 +153,7 @@ def send_email(
         html_with_footer = compliance.append_footer_html(body_html, lead_id)
         content.attach(MIMEText(html_with_footer, "html"))
 
-    if inline_image_path:
+    if inline_image_path and Path(inline_image_path).exists():
         msg = MIMEMultipart("related")
         msg.attach(content)
         image_path = Path(inline_image_path)
@@ -118,10 +162,12 @@ def send_email(
         image_part.add_header("Content-Disposition", "inline", filename=image_path.name)
         msg.attach(image_part)
     else:
+        if inline_image_path:
+            logger.warning(f"Inline image path {inline_image_path!r} does not exist; sending without it.")
         msg = content
 
     msg["Subject"] = subject
-    msg["From"] = f"{config.SENDING_DOMAIN} <{config.EMAIL_USER}>"
+    msg["From"] = formataddr((account.display_name, account.user))
     msg["To"] = to_addr
     msg["Date"] = formatdate(localtime=True)
     message_id = make_msgid(domain=config.SENDING_DOMAIN or None)
@@ -129,10 +175,14 @@ def send_email(
     msg["List-Unsubscribe"] = compliance.list_unsubscribe_header(lead_id)
     msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
 
-    with smtplib.SMTP(config.EMAIL_HOST, config.EMAIL_PORT, timeout=30) as server:
+    if not config.ENABLE_LIVE_SEND:
+        _log_dry_run("SMTP", to_addr, subject, text_with_footer, from_addr=account.user)
+        return message_id
+
+    with smtplib.SMTP(account.smtp_host, account.smtp_port, timeout=30) as server:
         server.starttls()
-        server.login(config.EMAIL_USER, config.EMAIL_PASSWORD)
-        server.sendmail(config.EMAIL_USER, [to_addr], msg.as_string())
+        server.login(account.user, account.password)
+        server.sendmail(account.user, [to_addr], msg.as_string())
 
     return message_id
 
@@ -222,11 +272,8 @@ def send_email_sendgrid(
         "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
     }
 
-    # List-Unsubscribe: <https://example.com/unsubscribe/token>, <mailto:admin@example.com?subject=unsubscribe>
-    unsubscribe_url = compliance.create_unsubscribe_link(lead_id)
-    admin_email = config.ADMIN_EMAIL
-
-    mail.extra_headers["List-Unsubscribe"] = f"<{unsubscribe_url}>, <mailto:{admin_email}?subject=unsubscribe>"
+    # RFC 8058-compliant List-Unsubscribe header: HTTP URL + mailto fallback.
+    mail.extra_headers["List-Unsubscribe"] = compliance.list_unsubscribe_header(lead_id)
 
     # Enable open and click tracking
     mail.mail_settings = MailSettings()
@@ -234,8 +281,10 @@ def send_email_sendgrid(
     mail.mail_settings.tracking_settings.open_tracking = OpenTracking(enable=True)
     mail.mail_settings.tracking_settings.click_tracking = ClickTracking(enable=True)
 
-    # Attach inline image if provided
-    if inline_image_path:
+    # Attach inline image if provided (and the file actually exists -- a
+    # missing file must never turn into a broken "image not found" icon in
+    # the recipient's inbox, so we just skip the attachment and log it).
+    if inline_image_path and Path(inline_image_path).exists():
         image_path = Path(inline_image_path)
         image_bytes = image_path.read_bytes()
         # Determine MIME type from file extension
@@ -255,13 +304,29 @@ def send_email_sendgrid(
         )
         mail.add_attachment(attachment)
         logger.debug(f"Added inline image: {image_path.name} ({len(image_bytes)} bytes)")
+    elif inline_image_path:
+        logger.warning(f"Inline image path {inline_image_path!r} does not exist; sending without it.")
 
-    # Send via SendGrid
+    if not config.ENABLE_LIVE_SEND:
+        _log_dry_run("SendGrid", to_addr, subject, text_with_footer)
+        return message_id
+
+    # Send via SendGrid. Retry ONLY definitive 429/5xx API rejections (3
+    # attempts, 2s/4s backoff) -- ambiguous failures (timeouts/resets) are
+    # deliberately NOT retried, since the message may have already been
+    # accepted and a retry would send the same cold email twice.
+    @retry.with_retries(
+        retriable=(SendGridHTTPError,),
+        transient=retry.is_retriable_http_response,
+        label="sendgrid.send",
+    )
+    def _send_once():
+        return SendGridAPIClient(config.SENDGRID_API_KEY).send(mail)
+
     try:
         logger.debug("Connecting to SendGrid API...")
-        sg = SendGridAPIClient(config.SENDGRID_API_KEY, request_headers={"timeout": 30})
-        response = sg.send(mail)
-        
+        response = _send_once()
+
         if response.status_code != 202:
             logger.error(f"SendGrid returned status {response.status_code} for {to_addr}: {response.body}")
             raise RuntimeError(
@@ -310,6 +375,35 @@ def _decode(value: Optional[str]) -> str:
     return decoded
 
 
+_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+_MAX_ATTACHMENTS = 15
+
+
+def _extract_attachments(msg: email.message.Message) -> list:
+    """Image parts of a message (attached or inline-with-filename), as
+    utils.assets.Attachment. Bounded so a stray 40-photo reply can't eat
+    the poll; anything non-image is ignored here."""
+    from utils.assets import Attachment  # local import: keep email_utils light
+
+    found = []
+    if not msg.is_multipart():
+        return found
+    total = 0
+    for part in msg.walk():
+        ctype = part.get_content_type()
+        if not ctype.startswith("image/"):
+            continue
+        filename = part.get_filename() or ""
+        payload = part.get_payload(decode=True) or b""
+        if not payload or total + len(payload) > _MAX_ATTACHMENT_BYTES:
+            continue
+        total += len(payload)
+        found.append(Attachment(filename=_decode(filename), content_type=ctype, data=payload))
+        if len(found) >= _MAX_ATTACHMENTS:
+            break
+    return found
+
+
 def _extract_body(msg: email.message.Message) -> tuple[str, str]:
     """Return (plain_text_body, content_type_summary)."""
     if msg.is_multipart():
@@ -331,15 +425,75 @@ def _extract_body(msg: email.message.Message) -> tuple[str, str]:
         return payload.decode(charset, errors="replace"), msg.get_content_type()
 
 
+# --- Reply-quote stripping ------------------------------------------------------
+# Mail clients paste the message being answered underneath the reply. Every
+# email this pipeline sends ends in a CAN-SPAM footer whose last line is
+# "Unsubscribe: <link>", so a reply classified on its full text read our own
+# footer back as the prospect opting out: "Yes please, how do I pay?" with the
+# cold email quoted below it was marked lost and suppressed for life. Only the
+# prospect's own words may be classified, priced, or parsed for a username.
+_QUOTE_START_PATTERNS = (
+    # Gmail / Apple Mail / Thunderbird: "On Tue, 9 Sep 2026 at 18:07, Casey <x@y> wrote:"
+    # -- the header can wrap onto a second line, and "wrote:" ends its line.
+    re.compile(r"^On [^\n]{0,300}(?:\n[^\n]{0,200})?wrote:\s*$", re.MULTILINE),
+    # Zoho and friends: "---- On Tue, 09 Sep 2026 ... wrote ----"
+    re.compile(r"^-{2,}\s*On [^\n]{0,300}wrote\s*-{2,}\s*$", re.MULTILINE),
+    # Outlook: "-----Original Message-----", the underscore rule, or a bare
+    # From:/Sent:/To:/Subject: header block.
+    re.compile(r"^-{2,}\s*Original Message\s*-{2,}\s*$", re.MULTILINE | re.IGNORECASE),
+    re.compile(r"^_{5,}\s*$", re.MULTILINE),
+    re.compile(r"^From:[^\n]*\n(?:[^\n]*\n){0,3}?(?:Sent|Date|To|Subject):", re.MULTILINE),
+    # Our own footer reproduced without '>' marks (some clients strip them).
+    re.compile(r"^(?:You can opt out anytime|Unsubscribe:\s*https?://)", re.MULTILINE),
+)
+
+
+def strip_quoted_text(body: str) -> str:
+    """The prospect's own words: everything before the first quoted-reply
+    marker, minus any '>'-prefixed lines. A reply that is *nothing but* a
+    quote falls back to the full text, so it is still classified as
+    something rather than as an empty string."""
+    text = (body or "").replace("\r\n", "\n").replace("\r", "\n")
+    cut = len(text)
+    for pattern in _QUOTE_START_PATTERNS:
+        match = pattern.search(text)
+        if match and match.start() < cut:
+            cut = match.start()
+    own = "\n".join(line for line in text[:cut].split("\n") if not line.lstrip().startswith(">"))
+    own = own.strip()
+    return own if own else text.strip()
+
+
 def fetch_unseen_emails() -> list[InboundEmail]:
-    """Poll the IMAP inbox for unseen messages and return them as InboundEmail.
+    """Poll EVERY configured mailbox (config.EMAIL_ACCOUNTS) for unseen
+    messages and return the union, each tagged with the mailbox it arrived
+    in (`InboundEmail.account_user`) so the caller can keep the lead's
+    thread in that mailbox.
+
+    One mailbox failing (revoked app password, IMAP outage) must not hide
+    replies sitting in the others, so a failure is printed and that mailbox
+    skipped rather than raised -- its unseen messages are still unseen on
+    the next poll, so nothing is lost. With a single configured mailbox this
+    is the same "poll failed, 0 processed" outcome as before.
+    """
+    results: list[InboundEmail] = []
+    for account in config.EMAIL_ACCOUNTS:
+        try:
+            results.extend(_fetch_unseen_for_account(account))
+        except Exception as exc:  # noqa: BLE001 - one bad mailbox must not block the rest
+            print(f"[email_utils] IMAP poll failed for {account.user}: {exc}")
+    return results
+
+
+def _fetch_unseen_for_account(account: config.EmailAccount) -> list[InboundEmail]:
+    """Poll one mailbox's INBOX for unseen messages.
 
     Messages are marked \\Seen as a side effect of fetching RFC822 (standard
     IMAP behavior), so each message is only returned once across polls.
     """
     results: list[InboundEmail] = []
-    with imaplib.IMAP4_SSL(config.EMAIL_HOST) as imap:
-        imap.login(config.EMAIL_USER, config.EMAIL_PASSWORD)
+    with imaplib.IMAP4_SSL(account.imap_host) as imap:
+        imap.login(account.user, account.password)
         imap.select("INBOX")
         status, data = imap.search(None, "UNSEEN")
         if status != "OK":
@@ -364,6 +518,8 @@ def fetch_unseen_emails() -> list[InboundEmail]:
                     body=body,
                     content_type=content_type,
                     date=_decode(msg.get("Date")) or datetime.utcnow().isoformat(),
+                    account_user=account.user,
+                    attachments=_extract_attachments(msg),
                 )
             )
     return results

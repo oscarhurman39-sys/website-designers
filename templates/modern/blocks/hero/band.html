@@ -1,0 +1,24 @@
+{# Hero "band": tall full-bleed photo, copy centred and sitting on a bottom gradient. #}
+<section id="top" class="relative isolate flex min-h-[70vh] items-end text-white">
+  <img src="{{ hero_image_url }}" alt="" class="absolute inset-0 -z-10 h-full w-full object-cover">
+  <div class="absolute inset-0 -z-10 bg-gradient-to-t from-slate-950/90 via-slate-900/40 to-transparent"></div>
+  <div class="max-w-6xl mx-auto w-full px-6 pb-16 pt-40 text-center">
+    <p class="text-sm font-semibold uppercase tracking-[0.3em] text-white/80">{{ business_name }}</p>
+    <h1 class="mx-auto mt-4 max-w-3xl text-4xl md:text-6xl font-extrabold leading-tight tracking-tight fade-up">{{ hero_tagline }}</h1>
+    <p class="mx-auto mt-4 max-w-xl text-lg text-white/85 fade-up" style="animation-delay:.1s">
+      {{ niche_label }} in {{ city }}{% if specialty %} · {{ specialty }}{% endif %}
+    </p>
+    <div class="mt-8 flex flex-wrap justify-center gap-3 fade-up" style="animation-delay:.2s">
+      {% if phone %}
+      <a href="tel:{{ phone_href }}" class="rounded-full bg-[var(--accent)] px-7 py-3 font-semibold text-white shadow-lg hover:opacity-90 transition">Call {{ phone }}</a>
+      {% endif %}
+      <a href="#contact" class="rounded-full bg-white px-7 py-3 font-semibold text-slate-900 shadow-lg hover:bg-slate-100 transition">{{ cta_secondary }}</a>
+    </div>
+    {% if google_rating %}
+    <p class="mt-8 text-sm text-white/80 fade-up" style="animation-delay:.3s">
+      <span class="text-amber-300">★★★★★</span>
+      <strong>{{ "%.1f"|format(google_rating) }}</strong> · {{ google_reviews_count }} reviews on Google
+    </p>
+    {% endif %}
+  </div>
+</section>

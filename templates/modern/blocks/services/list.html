@@ -1,0 +1,26 @@
+{# Services "list": numbered two-column list with an accent rule, editorial feel. #}
+{% if service_items %}
+<section id="services" class="border-y border-slate-200 bg-slate-50">
+  <div class="max-w-6xl mx-auto px-6 py-20 grid gap-12 md:grid-cols-3">
+    <div>
+      <p class="text-sm font-semibold uppercase tracking-widest text-[var(--accent)]">{{ nav[0] }}</p>
+      <h2 class="mt-2 text-3xl md:text-4xl font-extrabold tracking-tight text-slate-900">{{ services_heading }}</h2>
+      <p class="mt-4 text-slate-600">{{ trust_line }}</p>
+      {% if phone %}
+      <a href="tel:{{ phone_href }}" class="mt-6 inline-block font-semibold text-[var(--accent)] hover:underline">Call {{ phone }} →</a>
+      {% endif %}
+    </div>
+    <ol class="md:col-span-2 grid gap-x-10 sm:grid-cols-2 divide-y sm:divide-y-0 divide-slate-200">
+      {% for item in service_items %}
+      <li class="flex gap-4 py-5 border-l-2 border-[var(--accent)] pl-5 sm:border-b sm:border-slate-200">
+        <span class="text-sm font-bold tabular-nums text-[var(--accent)]">{{ "%02d"|format(loop.index) }}</span>
+        <div>
+          <h3 class="font-bold text-slate-900">{{ item.name }}</h3>
+          <p class="mt-1 text-sm text-slate-600">{{ item.blurb }}</p>
+        </div>
+      </li>
+      {% endfor %}
+    </ol>
+  </div>
+</section>
+{% endif %}
