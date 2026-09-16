@@ -25,8 +25,22 @@ Logs: `pipeline/logs/webhook.log`, `ngrok.log`, `loop.log`. PID files:
 `pipeline/.run/`. The Desktop app (`Casey Websites.exe`) calls the same
 `ops` commands, so the Commander and the agents always see one truth.
 
-`start_all.bat` and `install_autostart.ps1` still exist for a human who
-wants visible console windows. Agents must not use them.
+`start_all.bat` still exists for a human who wants visible console windows.
+Agents must not use it. `install_autostart.ps1` registers the watchdog below.
+
+### The watchdog (2026-09-16)
+
+Nothing restarted the loop when it died. A Windows scheduled task,
+`\CaseyPipelineWatchdog`, now runs `tools/watchdog.ps1` -> `ops start` every
+ten minutes on a timer (not at logon: this PC sleeps, so logon triggers never
+fire). It only starts what is missing, writes real restarts and failures to
+`pipeline/logs/watchdog.log`, and honours `pipeline/.paused` because the loop
+process reads that flag itself. A pause survives a watchdog restart. Install
+or repair it with `.\install_autostart.ps1`; check it with
+`Get-ScheduledTaskInfo -TaskName CaseyPipelineWatchdog`. The StarNet routine
+"Daily Sales Pipeline" (19:15) had been the de-facto restart path and is
+halted whenever the E-STOP is on; the watchdog does not depend on it.
+Full reasoning and the agent write-surface map: `docs/STARNET_WRITE_SURFACE.md`.
 
 ## 2. The daily shift (a routine, not a conversation)
 

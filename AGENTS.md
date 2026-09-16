@@ -72,6 +72,12 @@ takes it all down. Never use `start_all.bat` from an agent run: it opens three
 windows on the Commander's screen. The Desktop app (`tools/control_panel.py`)
 calls the same `ops` commands, so agents and the Commander see one state.
 
+A scheduled task (`\CaseyPipelineWatchdog`, every 10 minutes) already runs
+`ops start`, so agents should rarely need to start anything. To stop the loop,
+create `pipeline/.paused`; the loop reads that flag itself, so a pause survives
+the watchdog. What agents may *change*, and the gates every such verb must
+pass, is mapped in `docs/STARNET_WRITE_SURFACE.md`.
+
 A daily agent shift is: `ops status --json` -> if not all up, `ops start` ->
 `preflight` -> read `control`, `report` and `ops logs loop` -> act within your lane ->
 hand back through FINN/MASKY. Details, ownership per StarNet agent, and the

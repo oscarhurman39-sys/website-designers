@@ -532,10 +532,13 @@ deliberate.
   console each. Only one copy of the panel can run at a time.
 
 - **Windows dev box:** run `.\install_autostart.ps1` once (PowerShell, repo
-  root). It registers a logon task that runs `start_all.bat`, which opens the
-  webhook server, the ngrok tunnel and the `scheduler.py` supervisor (which
-  restarts `main.py` if it crashes). The pipeline then comes back after every
-  reboot for as long as the PC is on.
+  root). It registers `\CaseyPipelineWatchdog`, a scheduled task that runs
+  `tools\watchdog.ps1` -> `python run.py ops start` every 10 minutes, hidden.
+  `ops start` only launches what is missing, so the webhook server, the ngrok
+  tunnel and the loop come back within 10 minutes of dying, after sleep, or
+  after a reboot. It is a timer, not a logon trigger, because this PC sleeps
+  rather than shutting down and logon triggers never fire. Pause the loop with
+  `pipeline/.paused`; the watchdog respects it.
 - **VPS (recommended for real sending):** everything needed is in
   [`deploy/`](deploy/README.md): systemd units for the loop and a gunicorn-served
   webhook server, a Caddyfile for `track.caseywebsites.com` with automatic TLS,
