@@ -40,14 +40,13 @@ works regardless of the station's state.
 | Rebuild one preview | `rebuild <id>` | low-med | Redeploys to Vercel. ID-bounded. |
 | Bounded send | `reviewed-batch --send --lead N [--lead N]` | **med** | Requires `pipeline/.paused` present, takes `.reviewed-batch.lock`, refuses without `ENABLE_LIVE_SEND`, checks the public `/health` before every lead and **stops fail-closed** on the first failure. This is the model every new verb copies. |
 
-Not agent-callable today:
+Status per verb (first draft 2026-09-16 morning; Phase 1 notes inline):
 
 - `transfer <id>` uses `input()` prompts in the loop's console.
-- pause/resume is a file (`pipeline/.paused`) that `dashboard.py`, `main.py` and
-  `reviewed_batch.py` all agree on, but it is not on `run.py`.
-- A per-lead hold does not exist. `db.list_sendable_leads_by_priority()` returns every
-  `designed` lead by score; only the niche+town cooldown holds anything back. An agent
-  that wants "do not send #47" today can only pause the whole loop or mark it lost.
+- pause/resume: now `run.py pause|resume --agent-id X --reason R` (PR #16). The flag is
+  still `pipeline/.paused`, which `dashboard.py`, `main.py` and `reviewed_batch.py` all honour.
+- Per-lead hold: now `run.py hold|release <id> --agent-id X` (PR #16). `held_by`/`held_at`
+  on `leads`; `db.list_sendable_leads_by_priority()` and `reviewed-batch` skip held leads.
 - Negotiation replies are already autonomous in `sales_agent.py`, inside the code-clamped
   band, escalating through `alert_needs_human`. Agents shape the prompt via FINN review;
   they do not send around the loop.
@@ -74,11 +73,11 @@ Derived from what `reviewed_batch.py` and `db.update_lead_status_unless()` alrea
 
 | # | Verb | Does | Lane | Exists? | New work |
 |---|---|---|---|---|---|
-| 1 | `pause` / `resume` | touch / unlink `pipeline/.paused` | FINN, LIL BEAR | file yes; `run.py` no | expose on `run.py`; log who and why |
-| 2 | `hold <id>` / `release <id>` | per-lead exclusion from the send queue | PROMO-MARKETER | **no** | two columns (`held_by`, `held_at`), a filter in `list_sendable_leads_by_priority`, and `control` shows the hold |
-| 3 | `close-silent <id>` | `emailed` -> `lost` once the one follow-up is exhausted | PROMO-MARKETER | CAS primitive yes | thin wrapper, CAS-guarded |
-| 4 | `reviewed-batch --send` | send N chosen leads | PROMO-MARKETER proposes, FINN releases | **yes** | add `--agent-id`; nothing else |
-| 5 | `rebuild <id>` | redeploy one preview | AGENCY-DESIGNER | yes | add `--agent-id` |
+| 1 | `pause` / `resume` | touch / unlink `pipeline/.paused` | FINN, LIL BEAR | **yes** (PR #16) | done; audit in `pipeline/logs/control.log`, not `state_history` |
+| 2 | `hold <id>` / `release <id>` | per-lead exclusion from the send queue | PROMO-MARKETER | **yes** (PR #16) | done: `held_by`/`held_at`; queue and `reviewed-batch` skip held leads; `control` shows the hold |
+| 3 | `close-silent <id>` | `emailed` -> `lost` once the one follow-up is exhausted | PROMO-MARKETER | **yes** (PR #16) | done; single guarded `UPDATE` |
+| 4 | `reviewed-batch --send` | send N chosen leads | PROMO-MARKETER proposes, FINN releases | **yes** (`--agent-id` PR #16) | done |
+| 5 | `rebuild <id>` | redeploy one preview | AGENCY-DESIGNER | **yes** (`--agent-id` PR #16) | done |
 | 6 | `transfer <id> --github U --client-email E` | handover after `won` | AGENCY-NEGOTIATOR proposes, FINN runs | interactive only | non-interactive form. **`--revoke-own-access` stays Commander-only**: it removes the Commander's own repo access and is destructive. |
 | 7 | `escalate <id> "reason"` | park a negotiation and alert a human | AGENCY-NEGOTIATOR | `alert_needs_human` yes | expose as a verb so the agent has a way *out* of autonomy, not further in |
 
@@ -145,3 +144,24 @@ broken whenever such scratch is present.
 2. Station posture (section 5). The Commander's clicks.
 3. Verb 7, then the non-destructive half of verb 6.
 4. Only then decide whether any verb runs unattended on a routine.
+
+## 9. Phase 1 landed (2026-09-16, PR #16)
+
+Implemented by MASKY in the live tree; reviewed, fixed and finished by Claude Code for
+FINN's review. Verbs 1-3 exist; 4-5 take `--agent-id`. Decisions taken:
+
+- Every control action appends one line to `pipeline/logs/control.log`. Pause and resume
+  write **nothing** to `state_history`: the board's stage clock is each lead's latest
+  `state_history` row, so a pipeline-wide pause logged per lead reset every age to "now"
+  and blinded stalled-work detection. The `.paused` file records `agent_id`, `reason`,
+  `paused_at`; `resume` reports `paused_by`.
+- `hold`, `release` and `close-silent` are single guarded `UPDATE`s (gate 3, met).
+- Locks `pipeline/.control-actions.lock` and `.reviewed-batch.lock`, both gitignored. An
+  orphaned lock refuses every action until deleted; the refusal names the path.
+- MASKY built in the live tree. Nothing broke, by luck: the changes were additive and
+  default-neutral. `AGENTS.md` now has a "Where to build" rule: worktree, never the live tree.
+
+Open for FINN, not blocking: `reviewed-batch` double-logs transitions the agents already
+log; a hold on a `negotiating` lead is ignored by the negotiation loop yet shows as
+`blocked`; held leads may belong under `watch` rather than `blocked`; the two locks could
+be one.

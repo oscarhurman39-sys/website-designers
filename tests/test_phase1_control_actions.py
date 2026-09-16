@@ -9,6 +9,10 @@ from utils import db
 
 def _setup(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "leads.db"))
+    # Keep the lock, the pause flag and the audit log out of the live pipeline/ dir.
+    monkeypatch.setattr(control_actions, "PAUSE_FLAG", tmp_path / ".paused")
+    monkeypatch.setattr(control_actions, "LOCK_PATH", tmp_path / ".control-actions.lock")
+    monkeypatch.setattr(control_actions, "CONTROL_LOG", tmp_path / "logs" / "control.log")
     db.init_db()
 
 
@@ -107,3 +111,39 @@ def test_reviewed_batch_requires_agent_id_and_json_refusal(tmp_path, monkeypatch
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is False
     assert "agent-id" in payload["error"]
+
+
+def test_pause_and_resume_do_not_touch_state_history(tmp_path, monkeypatch, capsys):
+    _setup(tmp_path, monkeypatch)
+    a = _lead("designed")
+    b = _lead("emailed")
+    before = len(_history(a)) + len(_history(b))
+
+    assert control_actions.main(["pause", "--agent-id", "hello-3", "--reason", "review batch"]) == 0
+    paused = json.loads(capsys.readouterr().out)
+    assert paused["ok"] is True and paused["paused_after"] is True
+    flag = (tmp_path / ".paused").read_text(encoding="utf-8")
+    assert flag.startswith("agent_id=hello-3") and "reason=review batch" in flag
+    # The board's stage clock is each lead's latest state_history row; a
+    # pipeline-wide pause must not reset it.
+    assert len(_history(a)) + len(_history(b)) == before
+
+    assert control_actions.main(["resume", "--agent-id", "hello-3", "--reason", "done"]) == 0
+    resumed = json.loads(capsys.readouterr().out)
+    assert resumed["paused_after"] is False and resumed["paused_by"] == "hello-3"
+    assert not (tmp_path / ".paused").exists()
+    assert len(_history(a)) + len(_history(b)) == before
+
+    log = (tmp_path / "logs" / "control.log").read_text(encoding="utf-8")
+    assert "agent=hello-3 action=pause reason=review batch" in log
+    assert "agent=hello-3 action=resume reason=done" in log
+
+
+def test_control_lock_refuses_a_second_action(tmp_path, monkeypatch, capsys):
+    _setup(tmp_path, monkeypatch)
+    lead_id = _lead("designed")
+    (tmp_path / ".control-actions.lock").write_text("held by another run", encoding="utf-8")
+    assert control_actions.main(["hold", str(lead_id), "--agent-id", "marketer"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False and "already running" in payload["error"]
+    assert db.get_lead(lead_id)["held_by"] is None

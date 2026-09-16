@@ -225,7 +225,7 @@ to `pipeline/assets/<lead_id>/` (normalised: logo as PNG/SVG, photos to
 1600 px JPEG, up to six), the preview is rebuilt in place at the same URL
 with the logo in the nav and their photos in the hero and gallery, and a
 confirmation reply goes out. Files that arrive another way go in the same
-folder, then `python run.py rebuild <lead_id>`. How to handle the
+folder, then `python run.py rebuild <lead_id> --agent-id <you>`. How to handle the
 conversation itself is in [`docs/PHOTOS_AND_LOGO_PLAYBOOK.md`](docs/PHOTOS_AND_LOGO_PLAYBOOK.md).
 
 The older per-niche folders (`cafe`, `default`, `dentist`, ...) are kept and
