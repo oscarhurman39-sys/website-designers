@@ -275,3 +275,5 @@ reports/
 pipeline/proofs/
 pipeline/leads.db-shm
 pipeline/leads.db-wal
+pipeline/.control-actions.lock
+pipeline/.reviewed-batch.lock

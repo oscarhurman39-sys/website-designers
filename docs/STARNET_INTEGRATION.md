@@ -69,7 +69,7 @@ The three agents the Commander named, mapped to the pipeline's real seams:
 
 | StarNet agent | Holds | Reads | Changes (via FINN's review) |
 |---|---|---|---|
-| **AGENCY-DESIGNER** (`webdesigner`) | The preview a prospect sees | `pipeline/out/*.png` from `render_preview.py --all-widths`; `docs/PHOTOS_AND_LOGO_PLAYBOOK.md` | `templates/modern/`, `NICHE_THEMES` in `design_agent.py`; `run.py rebuild <id>` after a client sends photos |
+| **AGENCY-DESIGNER** (`webdesigner`) | The preview a prospect sees | `pipeline/out/*.png` from `render_preview.py --all-widths`; `docs/PHOTOS_AND_LOGO_PLAYBOOK.md` | `templates/modern/`, `NICHE_THEMES` in `design_agent.py`; `run.py rebuild <id> --agent-id webdesigner` after a client sends photos |
 | **AGENCY-NEGOTIATOR** (`negotiator`) | Every reply and every price | Slack `#leads` alerts; `run.py dashboard`; `ops logs loop`; `docs/CLIENT_PROPOSAL_AND_TERMS.md` | The negotiation prompt and classifier in `sales_agent.py`; the follow-up copy; escalation wording. Never the price band (code-enforced) |
 | **ACCESSIBILITY CHECKER** (`a11y`) | Who a page locks out | The same renders, at phone width first; the live preview URLs in the `websites` table | Contrast, focus, alt text, tap targets in `templates/modern/` and the accent rules (`accent_pair`, WCAG tests in `tests/test_design_context.py`) |
 

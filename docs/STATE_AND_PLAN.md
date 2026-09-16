@@ -73,7 +73,7 @@ python run.py source --limit 10             # insert 10 real leads only after re
 python run.py loop                          # the pipeline (research/design/send/replies)
 python run.py dashboard                     # Streamlit view of leads and threads
 python run.py test-email you@x.com          # end-to-end on a dummy lead
-python run.py rebuild <lead_id>             # redeploy a preview (new photos/logo/template)
+python run.py rebuild <lead_id> --agent-id X   # redeploy a preview (new photos/logo/template)
 python run.py cleanup-tests [--dry-run]     # delete test leads + their repos/projects
 python run.py cleanup-tests --reset         # pre-launch: archive the whole DB to pipeline/archive/, start empty
 python pipeline/render_preview.py --all-widths  # render every niche at desktop/tablet/phone into pipeline/out

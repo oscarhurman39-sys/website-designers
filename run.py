@@ -7,6 +7,9 @@
     python run.py cleanup-tests [--dry-run]  # delete test leads + their repos/projects
     python run.py report                     # per-niche funnel + revenue
     python run.py control [--json] [--all]    # read-only agent ownership + stalled-work board
+    python run.py pause|resume --agent-id X --reason REASON
+    python run.py hold|release <lead_id> --agent-id X
+    python run.py close-silent <lead_id> --agent-id X
     python run.py rebuild <lead_id>          # one-shot: pipeline/rebuild_preview.py
     python run.py ops start|stop|restart|status [--json]|logs [name]   # headless services, no windows
     python run.py source [--limit N] [--dry-run]   # one-shot: pipeline/source_leads.py
@@ -76,6 +79,32 @@ def run_report(extra_args: list[str]) -> int:
 def run_control(extra_args: list[str]) -> int:
     # Read-only operating board: owner, next action, stage age and exceptions.
     return subprocess.call([sys.executable, str(PIPELINE_DIR / "control.py"), *extra_args], cwd=str(PIPELINE_DIR))
+
+
+def run_control_action(command: str, extra_args: list[str]) -> int:
+    return subprocess.call(
+        [sys.executable, str(PIPELINE_DIR / "control_actions.py"), command, *extra_args], cwd=str(PIPELINE_DIR)
+    )
+
+
+def run_pause(extra_args: list[str]) -> int:
+    return run_control_action("pause", extra_args)
+
+
+def run_resume(extra_args: list[str]) -> int:
+    return run_control_action("resume", extra_args)
+
+
+def run_hold(extra_args: list[str]) -> int:
+    return run_control_action("hold", extra_args)
+
+
+def run_release(extra_args: list[str]) -> int:
+    return run_control_action("release", extra_args)
+
+
+def run_close_silent(extra_args: list[str]) -> int:
+    return run_control_action("close-silent", extra_args)
 
 
 def run_rebuild(extra_args: list[str]) -> int:
@@ -227,6 +256,11 @@ _MODES = {
     "rebuild": run_rebuild,
     "report": run_report,
     "control": run_control,
+    "pause": run_pause,
+    "resume": run_resume,
+    "hold": run_hold,
+    "release": run_release,
+    "close-silent": run_close_silent,
     "preflight": run_preflight,
     "preview-email": run_preview_email,
     "preview-audit": run_preview_audit,

@@ -53,14 +53,32 @@ only usable if `git apply` accepts it:
 ## The run.py surface — the only supported entry points
 
     quick-test   loop        dashboard     test-email <addr>   cleanup-tests [--dry-run]
-    source [--limit N] [--dry-run]         rebuild <lead_id>   report
+    source [--limit N] [--dry-run]         report
     control [--json] [--all] [--agent-id AGENT_ID]
     preflight [--offline]                  preview-email [--lead ID]
-    test-alert   serve-public [--status]   reviewed-batch ...
+    test-alert   serve-public [--status]
     ops start|stop|restart|status [--json]|logs [webhook|ngrok|loop]
+
+    Mutating verbs -- each needs --agent-id, prints JSON, exits 0 = applied / 1 = refused:
+    pause|resume --agent-id X --reason R        # pipeline/.paused; audit in pipeline/logs/control.log
+    hold|release <lead_id> --agent-id X         # per-lead exclusion from the send queue
+    close-silent <lead_id> --agent-id X         # emailed -> lost only; never sends
+    rebuild <lead_id> --agent-id X              # redeploy one preview
+    reviewed-batch --prepare|--send --lead ID [--lead ID] --agent-id X
 
 `run.py` is a thin dispatcher — each mode runs as its own subprocess. Do not reimplement a mode
 in-process; call it.
+
+## Where to build
+
+The checked-out tree at `D:\projects\website-designers` is production: the loop,
+webhook and ngrok run from it, and the watchdog restarts the loop from it every
+ten minutes. Never edit it. Cut a worktree and work there:
+
+    git worktree add ..\wd-<lane> -b <branch> <base-branch>
+
+Hand back a branch or a patch. Uncommitted edits in the live tree are the one way
+an unreviewed change reaches real leads without anyone deciding it should.
 
 ## Running the pipeline without a human at the keyboard
 

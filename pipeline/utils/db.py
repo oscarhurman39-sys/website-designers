@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS state_history (
     from_state  TEXT,
     to_state    TEXT NOT NULL,
     notes       TEXT,
+    agent_id    TEXT,
     timestamp   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -156,7 +157,11 @@ def init_db(db_path: Optional[str] = None) -> None:
         _migrate_add_column(conn, "leads", "site_score", "INTEGER")
         _migrate_add_column(conn, "leads", "lead_score", "INTEGER")
         _migrate_add_column(conn, "leads", "contact_channel", "TEXT")
+        _migrate_add_column(conn, "leads", "held_by", "TEXT")
+        _migrate_add_column(conn, "leads", "held_at", "TEXT")
+        _migrate_add_column(conn, "state_history", "agent_id", "TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_leads_send_priority ON leads(status, lead_score DESC, id ASC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_leads_sendable_priority ON leads(status, held_at, lead_score DESC, id ASC)")
         conn.commit()
 
 
@@ -270,7 +275,7 @@ def list_sendable_leads_by_priority() -> list[dict[str, Any]]:
     """Return designed leads in explicit acquisition priority order."""
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT * FROM leads WHERE status = 'designed' "
+            "SELECT * FROM leads WHERE status = 'designed' AND held_by IS NULL AND held_at IS NULL "
             "ORDER BY CASE WHEN lead_score IS NULL THEN 1 ELSE 0 END, lead_score DESC, id ASC"
         ).fetchall()
         return [dict(r) for r in rows]
@@ -364,7 +369,11 @@ def update_lead_status(lead_id: int, new_status: str, notes: str = "") -> None:
 
 
 def update_lead_status_unless(
-    lead_id: int, new_status: str, notes: str = "", unless_current: tuple[str, ...] = ()
+    lead_id: int,
+    new_status: str,
+    notes: str = "",
+    unless_current: tuple[str, ...] = (),
+    agent_id: Optional[str] = None,
 ) -> bool:
     """Like update_lead_status, but a no-op returning False if the lead's
     *current* status is in `unless_current`. Check and write happen in one
@@ -394,10 +403,84 @@ def update_lead_status_unless(
         if cur.rowcount == 0:
             return False
         conn.execute(
-            "INSERT INTO state_history (lead_id, from_state, to_state, notes) VALUES (?, ?, ?, ?)",
-            (lead_id, old_status, new_status, notes),
+            "INSERT INTO state_history (lead_id, from_state, to_state, notes, agent_id) VALUES (?, ?, ?, ?, ?)",
+            (lead_id, old_status, new_status, notes, agent_id),
         )
         return True
+
+
+def hold_lead(lead_id: int, agent_id: str, reason: str = "hold") -> dict[str, Any]:
+    agent_id = (agent_id or "").strip()
+    if not agent_id:
+        return {"ok": False, "lead_id": lead_id, "reason": "--agent-id is required"}
+    blocked = ("lost", "bounced", "unsubscribed", "payment_sent", "won")
+    with get_connection() as conn:
+        row = conn.execute("SELECT status, held_by FROM leads WHERE id = ?", (lead_id,)).fetchone()
+        if row is None:
+            return {"ok": False, "lead_id": lead_id, "reason": "lead does not exist"}
+        if row["held_by"]:
+            return {"ok": False, "lead_id": lead_id, "reason": f"lead already held by {row['held_by']}"}
+        if row["status"] in blocked:
+            return {"ok": False, "lead_id": lead_id, "reason": f"lead status {row['status']} cannot be held"}
+        placeholders = ",".join("?" for _ in blocked)
+        cur = conn.execute(
+            f"UPDATE leads SET held_by = ?, held_at = datetime('now') WHERE id = ? AND held_by IS NULL AND status NOT IN ({placeholders})",
+            (agent_id, lead_id, *blocked),
+        )
+        if cur.rowcount == 0:
+            return {"ok": False, "lead_id": lead_id, "reason": "lead hold was refused by guard"}
+        held = conn.execute("SELECT held_at FROM leads WHERE id = ?", (lead_id,)).fetchone()
+        conn.execute(
+            "INSERT INTO state_history (lead_id, from_state, to_state, notes, agent_id) VALUES (?, ?, ?, ?, ?)",
+            (lead_id, row["status"], row["status"], reason or "hold", agent_id),
+        )
+        return {"ok": True, "lead_id": lead_id, "held_by": agent_id, "held_at": held["held_at"]}
+
+
+def release_lead(lead_id: int, agent_id: str, reason: str = "release") -> dict[str, Any]:
+    agent_id = (agent_id or "").strip()
+    if not agent_id:
+        return {"ok": False, "lead_id": lead_id, "reason": "--agent-id is required"}
+    with get_connection() as conn:
+        row = conn.execute("SELECT status, held_by FROM leads WHERE id = ?", (lead_id,)).fetchone()
+        if row is None:
+            return {"ok": False, "lead_id": lead_id, "reason": "lead does not exist"}
+        if not row["held_by"]:
+            return {"ok": False, "lead_id": lead_id, "reason": "lead is not held"}
+        if row["held_by"] != agent_id:
+            return {"ok": False, "lead_id": lead_id, "reason": f"lead held by {row['held_by']}"}
+        cur = conn.execute(
+            "UPDATE leads SET held_by = NULL, held_at = NULL WHERE id = ? AND held_by = ?",
+            (lead_id, agent_id),
+        )
+        if cur.rowcount == 0:
+            return {"ok": False, "lead_id": lead_id, "reason": "lead release was refused by guard"}
+        conn.execute(
+            "INSERT INTO state_history (lead_id, from_state, to_state, notes, agent_id) VALUES (?, ?, ?, ?, ?)",
+            (lead_id, row["status"], row["status"], reason or "release", agent_id),
+        )
+        return {"ok": True, "lead_id": lead_id, "released_by": agent_id}
+
+
+def close_silent_lead(lead_id: int, agent_id: str, reason: str = "close-silent") -> dict[str, Any]:
+    agent_id = (agent_id or "").strip()
+    if not agent_id:
+        return {"ok": False, "lead_id": lead_id, "reason": "--agent-id is required"}
+    with get_connection() as conn:
+        row = conn.execute("SELECT status FROM leads WHERE id = ?", (lead_id,)).fetchone()
+        if row is None:
+            return {"ok": False, "lead_id": lead_id, "reason": "lead does not exist"}
+        old_status = row["status"]
+        if old_status != "emailed":
+            return {"ok": False, "lead_id": lead_id, "reason": f"lead status {old_status} is not emailed"}
+        cur = conn.execute("UPDATE leads SET status = 'lost' WHERE id = ? AND status = 'emailed'", (lead_id,))
+        if cur.rowcount == 0:
+            return {"ok": False, "lead_id": lead_id, "reason": "lead close-silent was refused by guard"}
+        conn.execute(
+            "INSERT INTO state_history (lead_id, from_state, to_state, notes, agent_id) VALUES (?, 'emailed', 'lost', ?, ?)",
+            (lead_id, reason or "close-silent", agent_id),
+        )
+        return {"ok": True, "lead_id": lead_id, "from_status": "emailed", "to_status": "lost", "agent_id": agent_id}
 
 
 def mark_unsubscribed(lead_id: int, email: str, notes: str = "unsubscribe link clicked") -> Optional[str]:
@@ -876,9 +959,15 @@ def outcome_report() -> list[dict[str, Any]]:
 
 # --- State history -----------------------------------------------------------
 
-def log_state_history(lead_id: int, from_state: Optional[str], to_state: str, notes: str = "") -> None:
+def log_state_history(
+    lead_id: int,
+    from_state: Optional[str],
+    to_state: str,
+    notes: str = "",
+    agent_id: Optional[str] = None,
+) -> None:
     with get_connection() as conn:
         conn.execute(
-            "INSERT INTO state_history (lead_id, from_state, to_state, notes) VALUES (?, ?, ?, ?)",
-            (lead_id, from_state, to_state, notes),
+            "INSERT INTO state_history (lead_id, from_state, to_state, notes, agent_id) VALUES (?, ?, ?, ?, ?)",
+            (lead_id, from_state, to_state, notes, agent_id),
         )
