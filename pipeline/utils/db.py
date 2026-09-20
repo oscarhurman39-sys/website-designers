@@ -107,6 +107,17 @@ CREATE TABLE IF NOT EXISTS clicks (
     timestamp   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Small key/value store for things the pipeline must remember BETWEEN runs
+-- but which belong to no single lead -- today only the sourcing rotation
+-- cursor (agents/sourcing_agent.py). It lives in the database rather than a
+-- JSON file so it is covered by the same backup and the same WAL locking as
+-- the leads themselves.
+CREATE TABLE IF NOT EXISTS pipeline_state (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL,
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status);
 CREATE INDEX IF NOT EXISTS idx_leads_email ON leads(contact_email);
 CREATE INDEX IF NOT EXISTS idx_email_threads_lead ON email_threads(lead_id);
@@ -184,6 +195,26 @@ def _connect(db_path: Optional[str] = None) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA busy_timeout = 30000")
     return conn
+
+
+def get_state(key: str, default: Optional[str] = None, db_path: Optional[str] = None) -> Optional[str]:
+    """Read a value from the pipeline_state key/value table."""
+    with get_connection(db_path) as conn:
+        row = conn.execute("SELECT value FROM pipeline_state WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_state(key: str, value: str, db_path: Optional[str] = None) -> None:
+    """Write a value to the pipeline_state key/value table (upsert)."""
+    with get_connection(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO pipeline_state (key, value, updated_at)
+            VALUES (?, ?, datetime('now'))
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (key, str(value)),
+        )
 
 
 def backup_database(dest_dir: Optional[str] = None, keep: int = 7) -> Path:

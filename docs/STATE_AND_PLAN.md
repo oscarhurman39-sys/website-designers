@@ -49,6 +49,33 @@ Separately, preflight showed all 51 queued leads held by the 5-day
 niche+town cooldown on 2026-09-20 -- the cooldown, not the caps, is what
 meters sends today.
 
+**2026-09-20 throughput fix: the sourcing rotation cursor (branch
+`claude/sourcing-spread`).** The cooldown above was a symptom. StarNet's MASKY
+measured the queue and found all 51 designed leads sitting in just 13
+niche+town buckets, every one of them emailed on 09-18 or 09-19, so 0 buckets
+were eligible on 09-20 and the 5-day cooldown metered sending to almost
+nothing. The cause was upstream, in `agents/sourcing_agent.py`: the bucket the
+walk started from was the UTC day number, which advanced the start point by
+**one bucket per day**. With 8 niches x 44 towns = 352 buckets and a 30-request
+budget per run, every run of every day re-walked the same front of the list. A
+full sweep of the grid would have taken about a year; the front buckets were
+mined out while most of the grid was never searched at all, and the send queue
+collapsed into those 13 buckets.
+
+The cursor is now persisted (new `pipeline_state` key/value table, key
+`sourcing.rotation_offset`) and advances by however many buckets a run actually
+visited -- on every exit path, including a spent request budget or a quota
+abort, so a run that finds nothing still moves on. Hourly runs now sweep all
+352 buckets in about a day instead of a year, which is what puts enough
+distinct niche+town buckets in the queue for the cooldown to stop being the
+binding constraint. Tests: `tests/test_sourcing_rotation_cursor.py`. Nothing
+about the caps, the cooldown or the gates changed.
+
+MASKY also checked the previews that were assumed to be failing: 81 of 81
+active preview links pass the send-time validation. The `Design failed` rows in
+`state_history` are old Vercel 404/propagation failures from 09-08 that have
+since self-healed. No fix is needed there.
+
 ## 1. What the system does today
 
 A cold-email pipeline for selling pre-built websites to local businesses.

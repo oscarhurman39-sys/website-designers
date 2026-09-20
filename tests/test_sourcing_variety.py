@@ -25,7 +25,8 @@ def _isolated(monkeypatch):
     monkeypatch.setattr(sourcing_agent, "_to_candidate",
                         lambda place, niche, location: SimpleNamespace(
                             business_name=place["name"], niche=niche, location=location))
-    monkeypatch.setattr(sourcing_agent, "_rotation_offset", lambda: 0)
+    monkeypatch.setattr(sourcing_agent, "_rotation_offset", lambda total_buckets: 0)
+    monkeypatch.setattr(sourcing_agent, "_save_rotation_offset", lambda offset, total: None)
     monkeypatch.setattr(config, "SOURCING_PER_BUCKET", 2)
 
 
@@ -66,7 +67,7 @@ def test_the_starting_bucket_rotates(monkeypatch):
     monkeypatch.setattr(config, "SOURCING_NICHES", ["plumber"])
     monkeypatch.setattr(config, "SOURCING_LOCATIONS", ["Crawley", "Leeds", "York"])
     _api(monkeypatch, {"plumber in Crawley": ["C"], "plumber in Leeds": ["L"], "plumber in York": ["Y"]})
-    monkeypatch.setattr(sourcing_agent, "_rotation_offset", lambda: 4)  # 4 % 3 == 1
+    monkeypatch.setattr(sourcing_agent, "_rotation_offset", lambda total: 4 % total)  # 4 % 3 == 1
     assert [c.business_name for c in sourcing_agent.iter_candidates()] == ["L", "Y", "C"]
 
 

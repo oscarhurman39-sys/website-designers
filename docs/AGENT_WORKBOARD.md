@@ -39,6 +39,23 @@ them; AGENCY-NEGOTIATOR's reply copy is unchanged. Still open: reaching
 businesses with no site (STATE_AND_PLAN 5.2), a Companies House check so sole
 traders are not cold-emailed (PECR), and moving the loop off this PC (DEVOPS).
 
+## Landed outside the lanes (Claude Code + MASKY, 2026-09-20)
+
+Branch `claude/sourcing-spread`. MASKY was briefed from StarNet COMMS to
+diagnose why so few emails leave each day; its reply is
+`docs/MASKY_BOTTLENECK_REPLY.md`. It found the send queue concentrated in 13
+niche+town buckets with every bucket inside its 5-day cooldown, and separately
+cleared the Vercel previews (81 of 81 links validate; the old `Design failed`
+rows are self-healed 09-08 propagation errors). The cause was the sourcing
+rotation offset advancing one bucket per UTC day across a 352-bucket grid, so
+hourly runs re-walked the same front of the list forever. The cursor is now
+persisted in a new `pipeline_state` table and advances by the buckets each run
+visited. Lane effects: ENGINE-DBA owns the new `pipeline_state` table and the
+`db.get_state` / `db.set_state` helpers; OPPORTUNITY FINDER should propose new
+`SOURCING_LOCATIONS` now that the grid is actually swept, since the number of
+live buckets is what sets the daily send ceiling under the cooldown. Nobody
+changes `OUTREACH_COOLDOWN_DAYS` or the caps: those are Commander-owned.
+
 
 ## StarNet skill gate
 

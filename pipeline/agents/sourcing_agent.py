@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import math
+import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -335,10 +336,11 @@ def iter_candidates(limit: Optional[int] = None) -> Iterator[Candidate]:
             print(f"[sourcing] WARNING: no templates/{niche}/ folder; DesignAgent will fall back for these leads")
 
     # Walk every niche x town bucket round-robin, at most SOURCING_PER_BUCKET
-    # leads from each, town-major and starting from a different bucket each
-    # day. A niche-major walk with no cap filled the whole daily limit from the
-    # first search (20 plumbers in one town); this spreads a run across towns
-    # and trades so the send queue -- and each town's cooldown -- stays varied.
+    # leads from each, town-major and resuming from wherever the LAST run
+    # stopped (see _rotation_offset). A niche-major walk with no cap filled the
+    # whole daily limit from the first search (20 plumbers in one town); this
+    # spreads a run across towns and trades so the send queue -- and each
+    # town's cooldown -- stays varied.
     # A fresh request budget per run: the walk below stops when it is spent,
     # whether or not the lead limit has been reached.
     global _run_budget
@@ -346,11 +348,15 @@ def iter_candidates(limit: Optional[int] = None) -> Iterator[Candidate]:
 
     per_bucket = config.SOURCING_PER_BUCKET if config.SOURCING_PER_BUCKET > 0 else None
     buckets = [(niche, location) for location in config.SOURCING_LOCATIONS for niche in config.SOURCING_NICHES]
+    total_buckets = len(buckets)
+    start = _rotation_offset(total_buckets)
     if buckets:
-        start = _rotation_offset() % len(buckets)
         buckets = buckets[start:] + buckets[:start]
 
-    for niche, location in buckets:
+    visited = 0
+    try:
+        for niche, location in buckets:
+            visited += 1
             query = f"{niche} in {location}"
             taken = 0
             try:
@@ -374,7 +380,6 @@ def iter_candidates(limit: Optional[int] = None) -> Iterator[Candidate]:
                     yielded += 1
                     taken += 1
                     if limit is not None and yielded >= limit:
-                        _print_skip_summary(skipped)
                         return
                     if per_bucket is not None and taken >= per_bucket:
                         break  # next bucket; unread pages of this search are never fetched
@@ -382,17 +387,57 @@ def iter_candidates(limit: Optional[int] = None) -> Iterator[Candidate]:
                 # Listed before the generic RuntimeError clause below, which
                 # they subclass: these end the run, not just this query.
                 print(f"[sourcing] Aborting run -- {exc}")
-                _print_skip_summary(skipped)
                 return
             except (requests.RequestException, RuntimeError, ValueError, KeyError) as exc:
                 print(f"[sourcing] Query {query!r} failed: {exc}")
-    _print_skip_summary(skipped)
+    finally:
+        # Every exit path lands here -- lead limit reached, request budget
+        # spent, quota abort, or a clean sweep -- so the next run always
+        # resumes at the first bucket this one did NOT finish.
+        _save_rotation_offset(start + visited, total_buckets)
+        _print_skip_summary(skipped)
 
 
-def _rotation_offset() -> int:
-    """Which bucket a run starts from: advances one per UTC day, so the same
-    front-of-list towns are not searched first every day."""
-    return datetime.now(timezone.utc).date().toordinal()
+_ROTATION_STATE_KEY = "sourcing.rotation_offset"
+
+
+def _rotation_offset(total_buckets: int) -> int:
+    """Which bucket this run starts from.
+
+    This used to be the UTC day number, which advanced the start point by ONE
+    bucket per day. With 352 niche x town buckets and a per-run request budget
+    that only reaches a few dozen of them, every run of every day re-walked the
+    same front of the list: a full sweep of the grid would have taken about a
+    year, the front buckets were mined out while the rest were never searched,
+    and the whole send queue collapsed into a handful of niche+town buckets --
+    which OUTREACH_COOLDOWN_DAYS then throttled to nearly no sends a day.
+
+    The cursor is now persisted in the database and advanced by however many
+    buckets a run actually visited, so consecutive runs continue where the last
+    one stopped and the grid is swept in days rather than months.
+    """
+    if total_buckets <= 0:
+        return 0
+    try:
+        stored = db.get_state(_ROTATION_STATE_KEY)
+    except sqlite3.Error as exc:  # a missing/locked DB must not stop sourcing
+        print(f"[sourcing] Could not read rotation cursor ({exc}); starting from the first bucket")
+        return 0
+    try:
+        return int(stored) % total_buckets
+    except (TypeError, ValueError):
+        return 0
+
+
+def _save_rotation_offset(next_offset: int, total_buckets: int) -> None:
+    """Remember where the next run should pick up. Best-effort: failing to
+    save a cursor is not a reason to lose the leads the run just found."""
+    if total_buckets <= 0:
+        return
+    try:
+        db.set_state(_ROTATION_STATE_KEY, str(next_offset % total_buckets))
+    except sqlite3.Error as exc:
+        print(f"[sourcing] Could not save rotation cursor: {exc}")
 
 
 def _print_skip_summary(skipped: dict[str, int]) -> None:

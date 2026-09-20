@@ -20,7 +20,8 @@ def grid(monkeypatch):
     monkeypatch.setattr(config, "SOURCING_LOCATIONS", [f"Town {i}" for i in range(40)])
     monkeypatch.setattr(config, "SOURCING_PER_BUCKET", 2)
     monkeypatch.setattr(config, "SOURCING_MAX_REQUESTS_PER_RUN", 5)
-    monkeypatch.setattr(sourcing_agent, "_rotation_offset", lambda: 0)
+    monkeypatch.setattr(sourcing_agent, "_rotation_offset", lambda total_buckets: 0)
+    monkeypatch.setattr(sourcing_agent, "_save_rotation_offset", lambda offset, total: None)
     monkeypatch.setattr(sourcing_agent, "_skip_reason", lambda place: None)
     monkeypatch.setattr(sourcing_agent, "_within_exclusion_zone", lambda candidate: False)
     # A saturated grid: every business the API returns is already a lead.
