@@ -103,6 +103,20 @@ def test_an_exhausted_request_budget_still_advances_the_cursor(temp_db, monkeypa
     assert db.get_state(sourcing_agent._ROTATION_STATE_KEY) == "2"
 
 
+def test_a_dry_run_does_not_move_the_live_cursor(temp_db, monkeypatch):
+    """`source --dry-run` prints "Nothing was written". If it advanced the
+    cursor, the real run that follows would skip the very towns the dry run
+    just listed."""
+    _api(monkeypatch)
+    db.set_state(sourcing_agent._ROTATION_STATE_KEY, "1")
+    preview = [c.business_name for c in sourcing_agent.iter_candidates(2, advance_cursor=False)]
+    assert preview == ["Leeds", "York"]
+    assert db.get_state(sourcing_agent._ROTATION_STATE_KEY) == "1"
+    # and the real run that follows still gets those same two towns
+    assert [c.business_name for c in sourcing_agent.iter_candidates(2)] == ["Leeds", "York"]
+    assert db.get_state(sourcing_agent._ROTATION_STATE_KEY) == "3"
+
+
 def test_a_corrupt_cursor_starts_from_the_first_bucket(temp_db, monkeypatch):
     _api(monkeypatch)
     db.set_state(sourcing_agent._ROTATION_STATE_KEY, "not-a-number")

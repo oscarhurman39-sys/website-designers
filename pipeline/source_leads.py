@@ -43,7 +43,7 @@ def main() -> int:
         budget = sourcing_agent.remaining_today(args.limit)
         print(f"DRY RUN -- would insert up to {budget} lead(s):")
         count = 0
-        for candidate in sourcing_agent.iter_candidates(budget):
+        for candidate in sourcing_agent.iter_candidates(budget, advance_cursor=False):
             count += 1
             print(f"  {count:3d}. {candidate.describe()}")
         print(f"DRY RUN -- {count} lead(s) would be inserted. Nothing was written.")

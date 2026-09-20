@@ -99,14 +99,40 @@ def ingest_csv(csv_path: str) -> list[int]:
 
 
 def _robots_allows(url: str) -> bool:
-    """Check robots.txt for `url` before scraping it. Fails open only when
-    robots.txt itself can't be fetched (i.e. no explicit disallow found)."""
+    """Check robots.txt for `url` before scraping it.
+
+    This used to call RobotFileParser.read(), which fetches with urllib's own
+    `Python-urllib/3.x` user agent and no timeout. Plenty of small-business
+    sites sit behind a WAF that answers that user agent with 403 while serving
+    robots.txt normally to anything that looks like a browser -- and
+    RobotFileParser swallows the HTTPError internally, so the caller's
+    `except Exception: return True` never fired and the lead was silently
+    treated as "robots disallows". 45 of the 164 leads sourced by 2026-09-20
+    died on "Could not fetch website"; this was a large part of it.
+
+    robots.txt is now fetched with the same headers and timeout as every other
+    request, and each outcome is decided here rather than by accident:
+
+    * 200                  -- obey whatever it says
+    * 401 or 403           -- disallow, per RFC 9309 section 2.3.1.2
+    * any other 4xx        -- allow: robots.txt is simply absent
+    * 5xx                  -- disallow, per RFC 9309 section 2.3.1.4
+    * timeout / no network -- allow, the genuine "could not fetch" case
+    """
     parsed = urlparse(url)
     robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+    try:
+        resp = requests.get(robots_url, headers=REQUEST_HEADERS, timeout=REQUEST_TIMEOUT)
+    except requests.RequestException:
+        return True
+    if resp.status_code in (401, 403) or resp.status_code >= 500:
+        return False
+    if resp.status_code >= 400:
+        return True
     parser = urllib.robotparser.RobotFileParser()
     parser.set_url(robots_url)
     try:
-        parser.read()
+        parser.parse(resp.text.splitlines())
     except Exception:
         return True
     return parser.can_fetch(USER_AGENT, url)

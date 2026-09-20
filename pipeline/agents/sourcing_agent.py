@@ -317,7 +317,7 @@ def _already_in_db(candidate: Candidate) -> bool:
     )
 
 
-def iter_candidates(limit: Optional[int] = None) -> Iterator[Candidate]:
+def iter_candidates(limit: Optional[int] = None, *, advance_cursor: bool = True) -> Iterator[Candidate]:
     """Lazily yield insert-ready candidates across every niche x location
     query, stopping after `limit` (None = no limit).
 
@@ -393,8 +393,12 @@ def iter_candidates(limit: Optional[int] = None) -> Iterator[Candidate]:
     finally:
         # Every exit path lands here -- lead limit reached, request budget
         # spent, quota abort, or a clean sweep -- so the next run always
-        # resumes at the first bucket this one did NOT finish.
-        _save_rotation_offset(start + visited, total_buckets)
+        # resumes at the first bucket this one did NOT finish. A dry run is
+        # the exception: `source --dry-run` promises it wrote nothing, and
+        # moving the live cursor would make the real run that follows skip
+        # the very towns the dry run just showed.
+        if advance_cursor:
+            _save_rotation_offset(start + visited, total_buckets)
         _print_skip_summary(skipped)
 
 
