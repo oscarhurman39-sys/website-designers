@@ -291,14 +291,17 @@ def _intro_line(business_name: str, lead: Optional[dict] = None) -> str:
     lead = lead or {}
     status = lead.get("website_status") or ("owned_site" if (lead.get("website_url") or "").strip() else "")
     if status == "owned_site":
+        # "the website for X" reads right whatever X is ("The Refuge", a name
+        # ending in a full stop); "the X website" did not.
+        name = business_name.strip().rstrip(".")
         phrase = site_audit.phrase_from_keys(lead.get("site_defects"))
         if phrase:
             return (
-                f"I had a look at the {business_name} website and noticed {phrase}, so I put "
+                f"I had a look at the website for {name} and noticed {phrase}, so I put "
                 "together a draft of what a fresh one could look like for you."
             )
         return (
-            f"I had a look at the {business_name} website and put together a draft of what "
+            f"I had a look at the website for {name} and put together a draft of what "
             "a fresh one could look like for you."
         )
     if status == "platform_only":

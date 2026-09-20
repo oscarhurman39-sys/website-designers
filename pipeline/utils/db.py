@@ -298,13 +298,17 @@ def count_leads_by_status(status: str) -> int:
         return int(row["n"])
 
 
-def list_unscored_owned_site_leads(statuses: tuple[str, ...] = ("researched", "designed")) -> list[dict[str, Any]]:
-    """Leads whose existing website has never been audited (site_score is
-    NULL) but which have a URL to audit. Fed to pipeline/rescore.py."""
+def list_owned_site_leads_for_audit(
+    statuses: tuple[str, ...] = ("researched", "designed"), include_scored: bool = False
+) -> list[dict[str, Any]]:
+    """Queued leads with an owned site to audit: those never audited
+    (site_score NULL), or every one when an audit rule has changed and the
+    scores need refreshing. Fed to pipeline/rescore.py."""
     placeholders = ", ".join("?" for _ in statuses)
+    scored_clause = "" if include_scored else "AND site_score IS NULL "
     with get_connection() as conn:
         rows = conn.execute(
-            f"SELECT * FROM leads WHERE status IN ({placeholders}) AND site_score IS NULL "
+            f"SELECT * FROM leads WHERE status IN ({placeholders}) {scored_clause}"
             "AND COALESCE(website_status, 'owned_site') = 'owned_site' "
             "AND COALESCE(TRIM(website_url), '') != '' ORDER BY id ASC",
             statuses,

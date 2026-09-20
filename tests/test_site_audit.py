@@ -61,6 +61,24 @@ def test_placeholder_page_can_never_score_as_healthy():
     assert audit.owner_phrase() == "it's still showing a placeholder page"
 
 
+def test_a_full_page_that_merely_mentions_coming_soon_is_not_a_placeholder():
+    filler = "<p>" + "We fit and service boilers across Kent, seven days a week. " * 20 + "</p>"
+    audit = site_audit.audit_html(
+        "https://acme.test/", _page(extra=filler + "<p>Winter menu coming soon.</p>"), now=NOW
+    )
+    assert "placeholder" not in audit.defects
+
+
+def test_coming_soon_as_the_heading_is_a_placeholder_whatever_the_length():
+    filler = "<p>" + "Lorem ipsum dolor sit amet. " * 40 + "</p>"
+    audit = site_audit.audit_html(
+        "https://acme.test/", _page(extra="<h1>Coming soon</h1>" + filler), now=NOW
+    )
+    assert "placeholder" in audit.defects
+    titled = _page(title="Website coming soon", extra=filler)
+    assert "placeholder" in site_audit.audit_html("https://acme.test/", titled, now=NOW).defects
+
+
 def test_missing_title_and_heavy_html_cost_a_point_each():
     audit = site_audit.audit_html("https://acme.test/", _page(title=""), html_bytes=3 * 1024 * 1024, now=NOW)
     assert audit.defects == ["no_title", "heavy_page"] and audit.score == 8

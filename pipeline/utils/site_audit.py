@@ -19,7 +19,9 @@ for themselves and that the draft site visibly fixes:
     no_meta_description  no meta description for Google to show (scored, never
                          quoted to the owner: they cannot see it)
     heavy_page           homepage HTML over HEAVY_HTML_BYTES
-    placeholder          "under construction" / "coming soon" / parked-domain page
+    placeholder          a parked / under-construction page: the marker sits in the
+                         title or a heading, or the whole page says little else. A
+                         "winter menu coming soon" line on a full page is not one.
 
 Score is 0-10 where 10 is a healthy site. It is a proxy from the HTML alone
 (no assets are downloaded, nothing is rendered) and says little about looks:
@@ -61,6 +63,9 @@ _PLACEHOLDER_MARKERS = (
     "default web page",
     "future home of",
 )
+# A page with less visible text than this is a placeholder if it carries a
+# marker anywhere; a fuller page only if the marker is its title or heading.
+_PLACEHOLDER_TEXT_MAX_CHARS = 600
 
 _COPYRIGHT_RE = re.compile(r"(?:©|&copy;|\(c\)|copyright)\s*(?:\d{4}\s*[-–]\s*)?((?:19|20)\d{2})", re.IGNORECASE)
 
@@ -148,7 +153,14 @@ def audit_html(
 
     text = soup.get_text(" ", strip=True)
     lowered = text.lower()
-    if any(marker in lowered for marker in _PLACEHOLDER_MARKERS):
+    # Title and h1 only: a chain's "Sheffield coming soon!" location card is an
+    # h2/h3 on a full page (leads 48 and 113, 2026-09-20), not a placeholder.
+    headings = [soup.title] if soup.title else []
+    headings += soup.find_all("h1")
+    headline = " ".join(h.get_text(" ", strip=True) for h in headings).lower()
+    if any(marker in headline for marker in _PLACEHOLDER_MARKERS) or (
+        len(text) < _PLACEHOLDER_TEXT_MAX_CHARS and any(marker in lowered for marker in _PLACEHOLDER_MARKERS)
+    ):
         defects.append("placeholder")
 
     if urlparse(final_url or "").scheme.lower() != "https":

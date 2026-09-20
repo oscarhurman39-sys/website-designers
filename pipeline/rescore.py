@@ -3,6 +3,7 @@ existed, and (optionally) park the ones that already have a healthy site.
 
     python run.py rescore --dry-run [--limit N]   # fetch + score, print, write nothing
     python run.py rescore [--limit N]             # write site_score / site_defects / lead_score
+    python run.py rescore --all                   # re-audit scored leads too (after an audit rule changes)
     python run.py rescore --park-good             # also mark queued healthy-site leads lost
 
 Only leads still waiting to be built or sent ('researched' / 'designed')
@@ -38,10 +39,16 @@ def audit_lead(lead: dict) -> Optional[site_audit.SiteAudit]:
     )
 
 
-def rescore(limit: Optional[int] = None, dry_run: bool = False, gap_seconds: float = FETCH_GAP_SECONDS) -> dict[str, int]:
-    """Fetch and score every unscored owned-site lead in the queues. Returns
-    counts: audited, unreachable, and how many now score as a healthy site."""
-    leads = db.list_unscored_owned_site_leads()
+def rescore(
+    limit: Optional[int] = None,
+    dry_run: bool = False,
+    gap_seconds: float = FETCH_GAP_SECONDS,
+    include_scored: bool = False,
+) -> dict[str, int]:
+    """Fetch and score every unscored owned-site lead in the queues (every
+    owned-site lead with include_scored). Returns counts: audited,
+    unreachable, and how many now score as a healthy site."""
+    leads = db.list_owned_site_leads_for_audit(include_scored=include_scored)
     if limit is not None:
         leads = leads[: max(0, limit)]
     counts = {"audited": 0, "unreachable": 0, "good": 0, "written": 0}
@@ -106,12 +113,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dry-run", action="store_true", help="fetch and print scores; write nothing")
     parser.add_argument("--limit", type=int, help="audit at most this many leads")
+    parser.add_argument("--all", action="store_true", help="re-audit leads that already have a score")
     parser.add_argument("--park-good", action="store_true",
                         help=f"after scoring, mark queued leads with site_score >= {config.SITE_SCORE_GOOD_AT} lost")
     args = parser.parse_args(argv)
 
     db.init_db()
-    counts = rescore(limit=args.limit, dry_run=args.dry_run)
+    counts = rescore(limit=args.limit, dry_run=args.dry_run, include_scored=args.all)
     print(
         f"\n{counts['audited']} audited, {counts['unreachable']} unreachable, "
         f"{counts['good']} score as a healthy site (>= {config.SITE_SCORE_GOOD_AT}); "

@@ -71,6 +71,9 @@ def test_rescore_writes_scores_and_park_good_parks_only_healthy_sites(monkeypatc
 
     # Already-scored leads are not fetched again; only the unreachable one is left.
     assert rescore.rescore(gap_seconds=0) == {"audited": 0, "unreachable": 1, "good": 0, "written": 0}
+    # ...unless an audit rule changed and every queued lead needs a fresh score.
+    assert rescore.rescore(gap_seconds=0, include_scored=True) == {"audited": 1, "unreachable": 1, "good": 0, "written": 1}
+    assert db.get_lead(poor)["site_score"] == 2  # the parked 'good' lead is lost, so no longer queued
 
 
 def test_cli_dry_run_never_parks(monkeypatch, capsys):
