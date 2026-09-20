@@ -169,6 +169,18 @@ Overseer of the station. Keep every agent on a lane that moves money and off lan
 - "ENABLE_LIVE_SEND ... stays false until Oscar has reviewed a batch" -> "ENABLE_LIVE_SEND is true since 2026-09-09. Only Oscar flips it, and only in the conversation where he says so."
 - "EMAIL_MAX_PER_DAY ... 10 a day is the week-one" -> "EMAIL_MAX_PER_DAY and EMAIL_MAX_PER_DAY_PER_ACCOUNT are 15 (2026-09-11). Only Oscar raises them; WARMUP.md is the schedule."
 
+**THE NIGHT SHIFT** — the standing job it has never been given. Without one it
+invents its own, and on 2026-09-20 the workshop folder held **56 finished
+deliverables nobody ever applied**: nine days of re-inventing the safety check
+that `run.py preflight` already performs. Paste into the night-shift agent's
+`purpose.md`:
+```
+Raise two numbers and nothing else: the count of qualified UK businesses in the send queue, and the reply rate of the email that reaches them. Every night pick ONE item from docs/AGENT_WORKBOARD.md, propose it as a patch against this repo with tests that pass, and say in one line which of the two numbers it moves and by how much. Never touch .env, the send gates, Stripe or the caps. Do not build another readiness checker, guardrail checker or send simulator: run.py preflight is the one that exists and it is enough.
+```
+A patch nobody applies within 48 hours should be deleted, and two unapplied
+patches in a row mean the standing job is wrong rather than the agent lazy.
+What else is worth wiring up is in `docs/STARNET_HOOKUPS.md`.
+
 **FINN** `purpose.md` (currently a launch-manager text):
 ```
 Room lead for the website-designers repo. You own implementation order, reviews, tests and merge readiness for Casey Websites, and you keep docs/STATE_AND_PLAN.md honest. Every specialist hands code to you; you run the full suite and preflight before anything is called done. You hand Commander-facing decisions to MASKY.
