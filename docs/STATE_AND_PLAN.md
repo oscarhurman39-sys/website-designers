@@ -32,6 +32,23 @@ parks the healthy-site ones already built); `python run.py report --weekly` is
 the Monday table; `preflight` has a "lead quality" line. Sections 5.1 and 5.3
 below are now built; 5.2 (reaching businesses with no site) is not.
 
+Merged into the live branch the same day (fast-forward to 6f3da66) with the
+gate at its default of 8 and no `.env` change. `rescore --all` was run on the
+live queue: 47 audited, 4 unreachable, **43 score as healthy**, 4 poor. Two
+"placeholder" hits on the first pass were restaurant chains announcing a new
+branch "coming soon" -- the rule now needs the marker in the title or h1, or
+a near-empty page. The honest reading: an HTML-only audit cannot judge
+design, so most sites the pipeline sources will pass it, and the gate mainly
+stops the obviously broken sites from being ignored and the truly fine ones
+from being pitched. The next lever is upstream: source businesses with no
+site or a platform-only page (`SOURCING_REQUIRE_WEBSITE=false`) and give
+them a non-email channel (section 5.2). The 43 healthy-site previews were
+**not** parked (`--park-good` marks them lost and the hourly teardown then
+deletes their previews); they stay in the queue, ordered after the poor ones.
+Separately, preflight showed all 51 queued leads held by the 5-day
+niche+town cooldown on 2026-09-20 -- the cooldown, not the caps, is what
+meters sends today.
+
 ## 1. What the system does today
 
 A cold-email pipeline for selling pre-built websites to local businesses.
