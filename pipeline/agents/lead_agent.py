@@ -14,7 +14,7 @@ import re
 import urllib.robotparser
 from dataclasses import dataclass
 from typing import Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urldefrag, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -28,9 +28,15 @@ REQUEST_HEADERS = {"User-Agent": USER_AGENT}
 _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
 # Common filler addresses we never want to treat as a real contact.
 _EMAIL_BLOCKLIST_SUBSTR = ("example.com", "sentry.io", "wixpress.com", "godaddy.com", "yourdomain")
+_EMAIL_ROLE_BLOCKLIST = ("no-reply", "noreply", "donotreply", "do-not-reply")
 
 _TESTIMONIAL_HINTS = ("testimonial", "review", "quote", "client-says")
 _PAIN_POINT_HINTS = ("blog", "news", "about", "why-", "services")
+_CONTACT_SUBPAGE_HINTS = (
+    "contact", "about", "enquir", "inquir", "book", "appoint", "team", "staff", "visit", "find-us", "location",
+)
+_SKIP_SUBPAGE_HINTS = ("privacy", "policy", "terms", "cookie", "gdpr", "legal")
+_MAX_RESEARCH_SUBPAGES = 8
 
 # Domains that constantly outrank a thin/nonexistent business site in local
 # search but aren't a site the business actually owns -- a social profile,
@@ -236,7 +242,11 @@ def _usable_address(addr: Optional[str]) -> bool:
     send queue (lead 55, 2026-09-11)."""
     if not addr or not email_verify.verify_email(addr):
         return False
-    return not any(bad in addr.lower() for bad in _EMAIL_BLOCKLIST_SUBSTR)
+    lowered = addr.lower()
+    local_part = lowered.split("@", 1)[0]
+    return not any(bad in lowered for bad in _EMAIL_BLOCKLIST_SUBSTR) and not any(
+        bad in local_part for bad in _EMAIL_ROLE_BLOCKLIST
+    )
 
 
 def _extract_email(soup: BeautifulSoup) -> Optional[str]:
@@ -250,7 +260,7 @@ def _extract_email(soup: BeautifulSoup) -> Optional[str]:
             return addr
     text = soup.get_text(" ")
     for match in _EMAIL_RE.findall(text):
-        if not any(bad in match.lower() for bad in _EMAIL_BLOCKLIST_SUBSTR):
+        if _usable_address(match):
             return match
     return None
 
@@ -278,12 +288,35 @@ def _extract_pain_point(soup: BeautifulSoup, base_url: str) -> Optional[str]:
     return None
 
 
-def _find_subpage(soup: BeautifulSoup, base_url: str, hints: tuple[str, ...]) -> Optional[str]:
+def _candidate_subpages(soup: BeautifulSoup, base_url: str, limit: int = _MAX_RESEARCH_SUBPAGES) -> list[str]:
+    """Return likely same-site research pages, capped so one lead cannot
+    explode into an unbounded crawl. Privacy/legal pages are deliberately
+    skipped: they often expose data-controller or no-reply addresses that
+    are not a sales contact for the business."""
+    base = urlparse(base_url)
+    candidates: list[str] = []
+    seen: set[str] = set()
     for a in soup.find_all("a", href=True):
-        href = a["href"].lower()
-        if any(h in href for h in hints):
-            return urljoin(base_url, a["href"])
-    return None
+        raw_href = a["href"].strip()
+        if not raw_href or raw_href.startswith(("#", "mailto:", "tel:", "javascript:")):
+            continue
+        text = a.get_text(" ", strip=True).lower()
+        haystack = f"{raw_href} {text}".lower()
+        if any(skip in haystack for skip in _SKIP_SUBPAGE_HINTS):
+            continue
+        if not any(hint in haystack for hint in _CONTACT_SUBPAGE_HINTS + _TESTIMONIAL_HINTS + _PAIN_POINT_HINTS):
+            continue
+        url = urldefrag(urljoin(base_url, raw_href))[0]
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https") or parsed.netloc.lower() != base.netloc.lower():
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        candidates.append(url)
+        if len(candidates) >= limit:
+            break
+    return candidates
 
 
 def research_lead(lead: dict) -> None:
@@ -354,15 +387,18 @@ def _research_lead_impl(lead: dict) -> None:
     testimonial = _extract_testimonial(homepage)
     pain_point = _extract_pain_point(homepage, website_url)
 
-    # If nothing useful on the homepage, try a likely subpage (about/contact/blog).
+    # If nothing useful on the homepage, try likely same-site subpages. Keep it
+    # capped: this is research, not a crawler.
     if not email_addr or not testimonial or not pain_point:
-        subpage_url = _find_subpage(homepage, website_url, ("contact", "about", "blog", "review"))
-        if subpage_url:
+        for subpage_url in _candidate_subpages(homepage, website_url):
             subpage = _fetch(subpage_url)
-            if subpage is not None:
-                email_addr = email_addr or _extract_email(subpage)
-                testimonial = testimonial or _extract_testimonial(subpage)
-                pain_point = pain_point or _extract_pain_point(subpage, subpage_url)
+            if subpage is None:
+                continue
+            email_addr = email_addr or _extract_email(subpage)
+            testimonial = testimonial or _extract_testimonial(subpage)
+            pain_point = pain_point or _extract_pain_point(subpage, subpage_url)
+            if email_addr and testimonial and pain_point:
+                break
 
     # The concrete defect beats a scraped paragraph as the "something noticed"
     # the email leads with; the paragraph stays available in scraped_info.

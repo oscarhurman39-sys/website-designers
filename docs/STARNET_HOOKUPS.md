@@ -87,8 +87,20 @@ rate-limit retries on Codex instead of failing the run.
 MAX ITERATIONS is set to 40 (it was unlimited). BUDGET → PER RUN and PER DAY
 are still blank. Suggested: PER RUN 2, PER DAY 10. Nothing on this station
 legitimately needs more, and a loop that repeats one tool call will otherwise
-run until the tokens are gone. 174 million tokens have gone through this
+run until the tokens are gone. 179 million tokens have gone through this
 station; a cap is what makes that number stop mattering.
+
+**But 40 is too low for code work, proven the same day.** MASKY was asked to
+write a patch with tests; the run stopped at turn 41 with the patch written,
+the tests written and passing, and the handoff note never saved. Writing code,
+running a five-minute test suite and reporting does not fit in 40 turns. The
+cap that matters for cost is the **budget** one, because the crew is on the
+unmetered Codex lane where turns are free; MAX ITERATIONS only needs to be low
+enough to catch a genuine loop. **80** is the better number for this station.
+
+The same run showed a second thing worth knowing: the crew badge still read
+WORKING nineteen minutes after the run had ended. Trust `runs.jsonl` and
+`station-report.js` over the badge.
 
 ## 6. A hook that makes the `.env` rule real
 
