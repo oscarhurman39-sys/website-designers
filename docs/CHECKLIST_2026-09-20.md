@@ -91,10 +91,41 @@ merged patch lifts the yield side of that sum.
 
 ### 9. Plan the mass plumber campaign, one town in every English town
 
-Research exists (`research/mass-plumber-campaign-plan.md`). The town list and
-the staged rollout are being produced now, along with the Companies House screen
-that a plumber-only campaign legally needs, and the build order for reaching
-businesses that have no website at all. Those three land in `docs/research/`.
+Done. Three agents produced `research/england-plumber-towns.md` (488 entries:
+456 English towns of 20,000 or more from the ONS 2021 built-up areas, plus the
+32 London boroughs, in the exact "Town, County" form the search uses, with
+Caterham excluded at 4.0 miles from home), `research/plumber-rollout-plan.md`,
+`research/companies-house-screen.md` and
+`research/no-site-channel-build-order.md`.
+
+The ceiling is towns divided by the 5-day cooldown, so 100 towns supports 20
+cold emails a day and all 488 supports 97. **The trap to avoid: narrowing the
+niche list to plumber alone with today's 44 towns drops the ceiling to 8.8 a
+day, below the current cap. Widen the towns before narrowing the niche.**
+
+### 10. Two defects the agents found in passing, both fixed
+
+- **The robots.txt gate was closing on sites that allow us.** It fetched
+  robots.txt as `Python-urllib`, which small-business firewalls answer with 403,
+  and the library swallowed the error so the lead was recorded as "could not
+  fetch website". 51 history rows say exactly that. It now fetches with the
+  pipeline's own identity and decides each status code deliberately.
+- **A dry run moved the live rotation cursor**, so `source --dry-run` could make
+  the next real run skip the towns it had just listed. Introduced by this
+  morning's cursor fix, caught the same day.
+
+Full suite after both: 416 passed, 4 skipped.
+
+---
+
+## Time-sensitive: seven follow-ups are due tomorrow
+
+`send_follow_up_if_due()` will email seven leads on 21 or 22 September. Six of
+the seven trade under a name with no Ltd, LLP or PLC in it, so there is no
+evidence they are incorporated, and a follow-up is a second unsolicited
+marketing message. Under PECR that is only lawful to a corporate subscriber.
+The Companies House screen in `research/companies-house-screen.md` is the fix;
+until it exists, the only lever is to stop the loop.
 
 ---
 
