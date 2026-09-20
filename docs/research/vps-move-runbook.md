@@ -1,12 +1,12 @@
 # Moving the sales pipeline off the PC onto a Linux VPS
 
-Written 2026-09-20 for Oscar. Read-only review of `deploy/`, `tools/`, `pipeline/` and the Windows box; nothing was run or changed. Every price and fact below has a source at the end, with the date it was checked.
+Written 2026-09-20 for Oscar. Read-only review of `deploy/`, `tools/`, `pipeline/` and the Windows box; nothing was run or changed. Sources, with the date checked, are at the end.
 
 ## 1. What the move changes, and what it costs
 
-Today the loop (`main.py`), the Flask webhook on :5000 and an ngrok tunnel all live on the PC, kept alive by a Windows scheduled task (`CaseyPipelineWatchdog`, every 10 minutes). When the PC sleeps, replies wait, payment links die and Stripe's webhook has nobody to talk to.
+Today the loop (`main.py`), the Flask webhook on :5000 and an ngrok tunnel live on the PC, kept alive by the Windows task `CaseyPipelineWatchdog` (every 10 minutes). When the PC sleeps, replies wait, payment links die and Stripe has nobody to deliver to.
 
-After the move, a small Ubuntu 24.04 server runs the same two programs under systemd (which restarts them itself), Caddy gives `track.caseywebsites.com` a free HTTPS certificate, and ngrok is no longer needed. Nothing about the emails, Zoho, Vercel, GitHub or Stripe keys changes. Only three settings move: `PUBLIC_BASE_URL`, `STRIPE_WEBHOOK_SECRET` (a new webhook endpoint gets a new secret) and, if you use it, `CLICK_TRACKING_ENABLED`.
+After the move a small Ubuntu 24.04 server runs the same two programs under systemd (which restarts them itself), Caddy gives `track.caseywebsites.com` a free HTTPS certificate, and ngrok is retired. Emails, Zoho, Vercel, GitHub and Stripe keys are untouched. Only `PUBLIC_BASE_URL`, `STRIPE_WEBHOOK_SECRET` (a new endpoint gets a new secret) and optionally `CLICK_TRACKING_ENABLED` change.
 
 | Option | Spec | Price (ex VAT) | About | Region |
 |---|---|---|---|---|
@@ -14,15 +14,15 @@ After the move, a small Ubuntu 24.04 server runs the same two programs under sys
 | DigitalOcean Basic 2 GB | 1 vCPU, 2 GB, 50 GB | $12/mo | £8.99 (£10.79 with VAT) | London (LON1) available |
 | DigitalOcean Basic 1 GB | 1 vCPU, 1 GB, 25 GB | $6/mo | £4.50 (£5.40 with VAT) | London; needs the swap step below for Chromium |
 
-Pick Hetzner CX23 if the Cloud Console lets you order one (on 2026-09-20 Hetzner's own plan pages showed CX23 and CPX22 as "currently unavailable", and the docs say CPX22 is now €19.49 in Germany/Finland, so check the price in the console before you click Buy). Otherwise DigitalOcean 2 GB in London. The ngrok free static domain and the Porkbun domain you already own cost nothing extra, and the PC no longer has to stay on. Budget: about £5 to £11 a month.
+Pick Hetzner CX23 if the Cloud Console will sell you one (on 2026-09-20 Hetzner's plan pages showed CX23 and CPX22 as "currently unavailable", and CPX22 is now €19.49, so check the price in the console before buying). Otherwise DigitalOcean 2 GB in London. The domain you already own costs nothing extra and the PC no longer has to stay on. Budget: £5 to £11 a month.
 
 ## 2. Things only you can do (before the commands)
 
 1. **Buy the server.** Ubuntu 24.04 LTS, add your SSH public key when ordering, note the public IPv4 address. (On Windows: `ssh-keygen` once in PowerShell if you have no key; the public half is `C:\Users\<you>\.ssh\id_ed25519.pub`.)
 2. **DNS at Porkbun.** Add an **A** record: host `track`, answer `<VPS IP>`, TTL 600. Do this early; Caddy cannot get a certificate until it resolves.
-3. **Stripe (live mode).** Workbench, Webhooks tab, *Create an event destination*, Your account, event `checkout.session.completed`, destination *Webhook endpoint*, URL `https://track.caseywebsites.com/webhook/stripe`. On the endpoint page click *Reveal secret*; you will paste that value as `STRIPE_WEBHOOK_SECRET` in the **server's** `.env` in step 3.9. Leave the old ngrok endpoint alive until section 5 passes. Each endpoint has its own secret, so the PC's `.env` keeps working unchanged for rollback.
-4. **Zoho.** No change to SPF/DKIM: Zoho's SPF record authorises Zoho's mail servers for your domain, and the pipeline still sends through `smtppro.zoho.eu`, so recipients see the same sending IPs. Two things to watch: Zoho flags logins that differ from previous behaviour (its security report lists client IP and source such as IMAP / SMTP_OUT), so after the first server start open Admin Console, Security, Suspicious logins and confirm the new IP; and Zoho can suspend IMAP for "simultaneous connections from multiple clients", which is another reason the PC loop must be stopped first. If you ever set an *Allowed IPs* list in Zoho, add the VPS IP.
-5. **Google Places / GitHub / Vercel / Slack** need nothing, unless you restricted the Places API key to the PC's IP.
+3. **Stripe (live mode).** Workbench, Webhooks tab, *Create an event destination*, Your account, event `checkout.session.completed`, destination *Webhook endpoint*, URL `https://track.caseywebsites.com/webhook/stripe`. Click *Reveal secret*; that value becomes `STRIPE_WEBHOOK_SECRET` in the **server's** `.env` at step 3.9. Each endpoint has its own secret, so the PC's `.env` stays valid for rollback. Leave the old ngrok endpoint alive until section 5 passes.
+4. **Zoho.** SPF/DKIM need no change: the SPF record authorises Zoho's servers for your domain, and the pipeline still sends through `smtppro.zoho.eu`, so recipients see the same IPs. Two cautions: Zoho flags logins that differ from previous behaviour (its security report shows client IP and source, IMAP / SMTP_OUT), so after the first server start check Admin Console, Security, Suspicious logins; and Zoho can suspend IMAP for "simultaneous connections from multiple clients", one more reason the PC loop stops first. If you ever set an *Allowed IPs* list, add the VPS IP.
+5. **Google Places / GitHub / Vercel / Slack** need nothing, unless the Places key was restricted to the PC's IP.
 
 ## 3. Commands, in order
 
@@ -90,7 +90,7 @@ systemctl status website-designers-webhook website-designers --no-pager
 
 ## 4. Moving the database and backups safely
 
-`leads.db` is SQLite in WAL mode; the loop, the webhook and the dashboard all write it. Two loops polling one inbox would each classify the same reply (and Zoho may block IMAP for the duplicate connection), so the PC must be fully stopped, and the watchdog disabled so it cannot restart the loop ten minutes later.
+`leads.db` is SQLite in WAL mode, written by the loop, the webhook and the dashboard. Two loops on one inbox would each process the same reply (and Zoho may block the duplicate IMAP connection), so the PC must be fully stopped and the watchdog disabled so it cannot restart the loop ten minutes later.
 
 **4.1 PC (PowerShell as Administrator): freeze**
 ```powershell
@@ -102,13 +102,13 @@ cd D:\projects\website-designers
 ```
 Expected: `webhook down`, `ngrok down`, `loop down`. Close any `start_all.bat` windows still open.
 
-**4.2 PC: make a consistent copy of the database.** Never copy `leads.db` by hand while a `-wal` file sits next to it; the repo's own `backup_database()` uses SQLite's backup API, which is safe under WAL, and writes a plain file into `pipeline\backups\`. This imports config but runs no pipeline stage.
+**4.2 PC: make a consistent copy of the database.** Never hand-copy `leads.db` while a `-wal` file sits beside it; the repo's `backup_database()` uses SQLite's backup API (safe under WAL) and writes a plain file into `pipeline\backups\`. It imports config but runs no pipeline stage.
 ```powershell
 .\venv\Scripts\python.exe -c "import sys; sys.path.insert(0,'pipeline'); from utils import db; print(db.backup_database())"
 ```
 It prints the new file's path, for example `pipeline\backups\leads-20260920-153000.db`. Use that name below.
 
-**4.3 PC: send data and secrets** (database copy, existing backups, screenshots that sent emails still link to, the trace file the dashboard reads, `.env`, and `.secret_key`, which signs every unsubscribe and click token already in customers' inboxes; without it those links all break)
+**4.3 PC: send data and secrets** (database copy, old backups, screenshots that sent emails still link to, the dashboard's trace file, `.env`, and `.secret_key`, which signs every unsubscribe and click token already in inboxes; lose it and those links break)
 ```powershell
 scp pipeline\backups\leads-<STAMP>.db root@<VPS IP>:/opt/website-designers/pipeline/leads.db
 scp -r pipeline\backups pipeline\screenshots root@<VPS IP>:/opt/website-designers/pipeline/
@@ -120,9 +120,9 @@ scp .env root@<VPS IP>:/opt/website-designers/.env
 ```bash
 chown -R pipeline:pipeline /opt/website-designers && chmod 600 /opt/website-designers/pipeline/leads.db
 ```
-Then return to 3.9. From here on the daily backup runs on the server (`pipeline/backups/`, newest 7 kept); copy that folder to the PC now and then with `scp -r root@<VPS IP>:/opt/website-designers/pipeline/backups D:\pipeline-backups`.
+Then return to 3.9. The daily backup now runs on the server (`pipeline/backups/`, newest 7 kept); pull it to the PC occasionally with `scp -r root@<VPS IP>:/opt/website-designers/pipeline/backups D:\pipeline-backups`.
 
-Downtime is the gap between 4.1 and 3.10, about 15 minutes. A payment landing in that gap is safe twice over: Stripe retries failed deliveries for up to three days, and the loop asks Stripe directly every ten minutes about every open checkout (`_maybe_reconcile_payments`), and `record_payment` is idempotent.
+Downtime is the gap between 4.1 and 3.10, about 15 minutes. A payment in that gap is safe twice over: Stripe retries failed deliveries for up to three days, and the loop asks Stripe about every open checkout every ten minutes (`_maybe_reconcile_payments`); `record_payment` is idempotent.
 
 ## 5. Verification checklist
 
@@ -139,7 +139,7 @@ Run on the VPS unless stated. Every line should match.
 9. Zoho Admin Console, Security reports: the VPS IP appears as a normal IMAP / SMTP_OUT login, not a block.
 10. PC: `python run.py ops status` still says everything is down, and Task Scheduler shows `CaseyPipelineWatchdog` *Disabled*.
 
-When all ten pass: in Stripe, open the old ngrok endpoint and *Disable* it. Links in emails already sent still point at the ngrok domain (unsubscribe, click, screenshot URLs), and unsubscribe must keep working for 30 days after a send; the cheap bridge is to run the ngrok agent on the VPS for a month, pointed at the same port: `snap install ngrok`, `ngrok config add-authtoken <your token>`, then `tmux new -d -s ngrok "ngrok http --url=<your ngrok static domain> 5000"`.
+When all ten pass, *Disable* the old ngrok endpoint in Stripe. Emails already sent still carry ngrok-domain unsubscribe, click and screenshot links, and unsubscribe must work for 30 days after a send; the cheap bridge is the ngrok agent on the VPS for a month, pointed at the same port: `snap install ngrok`, `ngrok config add-authtoken <your token>`, then `tmux new -d -s ngrok "ngrok http --url=<your ngrok static domain> 5000"`.
 
 ## 6. Rollback
 
@@ -171,7 +171,7 @@ When all ten pass: in Stripe, open the old ngrok endpoint and *Disable* it. Link
     WorkingDirectory=/opt/website-designers/pipeline
    +Environment=TZ=Europe/London
    ```
-4. **Log output is buffered and never rotated.** `website-designers.service` redirects stdout to `pipeline/scheduler.log`; Python block-buffers when stdout is a file, so lines appear hours late, and nothing rotates the file (`ops.py` expects `pipeline/logs/*.log` instead, so the two tools disagree too). Fix in `deploy/systemd/website-designers.service`:
+4. **Log output is buffered and never rotated.** The loop unit sends stdout to `pipeline/scheduler.log`; Python block-buffers a file, so lines appear hours late, nothing rotates it, and `ops.py` looks in `pipeline/logs/` instead. Fix in `deploy/systemd/website-designers.service`:
    ```diff
     WorkingDirectory=/opt/website-designers/pipeline
    +Environment=PYTHONUNBUFFERED=1
@@ -198,33 +198,33 @@ When all ten pass: in Stripe, open the old ngrok endpoint and *Disable* it. Link
    -PY = REPO / "venv" / "Scripts" / "python.exe"
    +PY = REPO / "venv" / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
    ```
-8. **ngrok assumptions elsewhere.** `README.md` "Keeping the public URL up" and `pipeline/serve_public.py` only know ngrok, and the `CLICK_TRACKING_ENABLED` comment in `config.py` says to turn it on once a real domain fronts the links; `deploy/README.md` should tell the reader to set it and to ignore `serve-public` on the VPS.
+8. **ngrok assumptions elsewhere.** `README.md` "Keeping the public URL up" and `pipeline/serve_public.py` only know ngrok; `deploy/README.md` should say to ignore `serve-public` on the VPS and to set `CLICK_TRACKING_ENABLED=true` now that a real domain fronts the links (as the `config.py` comment intends).
 9. **Stale price and plan name.** README line 5 says "Hetzner CX22 ... ~£4/month"; CX22 was replaced by CX23, priced €5.49 (about £4.71 ex VAT) since 15 June 2026:
    ```diff
    -running it is off. A tiny VPS (Hetzner CX22 / DigitalOcean basic, ~£4/month)
    +running it is off. A tiny VPS (Hetzner CX23 at €5.49/month, or DigitalOcean 2 GB at $12/month)
    ```
-10. **Startup validation skipped under gunicorn.** `webhook_server.py` only calls `config.validate()` and `db.init_db()` under `if __name__ == "__main__"`; gunicorn imports `app` directly, so a blank `STRIPE_WEBHOOK_SECRET` surfaces only as `400`s in Stripe's deliveries tab. Fix: call `config.validate()` as the first line of `create_app()`.
-11. **Pins drift from what the PC runs.** The PC's venv has pandas 2.3.3 and streamlit 1.59.0; `pipeline/requirements.txt` pins 2.2.3 and 1.38.0. The VPS will get the pins, which is fine for the loop (pandas only matters to report/dashboard), but `pip freeze > deploy/requirements-lock.txt` on the PC before the move would make the two identical.
+10. **Startup validation skipped under gunicorn.** `webhook_server.py` calls `config.validate()` and `db.init_db()` only under `if __name__ == "__main__"`; gunicorn imports `app` directly, so a blank `STRIPE_WEBHOOK_SECRET` shows up only as `400`s in Stripe's deliveries tab. Fix: call `config.validate()` first thing in `create_app()`.
+11. **Pins drift from what the PC runs.** The PC's venv has pandas 2.3.3 and streamlit 1.59.0; `pipeline/requirements.txt` pins 2.2.3 and 1.38.0. Harmless for the loop, but `pip freeze > deploy/requirements-lock.txt` on the PC first would make the two machines identical.
 
 ## Sources (all accessed 2026-09-20)
 
-- Hetzner price adjustment, 15 June 2026 (CX23 €5.49, CPX22 €19.49): https://docs.hetzner.com/general/infrastructure-and-availability/price-adjustment/
-- Hetzner Cost-Optimized plans page (CX23 spec, "currently unavailable", price incl. IPv4): https://www.hetzner.com/cloud/cost-optimized/
+- Hetzner price adjustment 15 June 2026 (CX23 €5.49, CPX22 €19.49): https://docs.hetzner.com/general/infrastructure-and-availability/price-adjustment/
+- Hetzner CX plans (CX23 spec, "unavailable", incl. IPv4): https://www.hetzner.com/cloud/cost-optimized/
 - Hetzner locations (no UK): https://docs.hetzner.com/cloud/general/locations/
-- Hetzner CX22 launch press release (June 2024, superseded): https://www.hetzner.com/pressroom/new-cx-plans/
-- DigitalOcean Droplet pricing ($4/$6/$12 Basic tiers, per-second billing capped monthly): https://www.digitalocean.com/pricing/droplets
-- DigitalOcean regions (LON1 available): https://docs.digitalocean.com/platform/regional-availability/
-- ECB reference rates 2026-09-18 (EUR/GBP 0.8588, EUR/USD 1.1460): https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml
-- Ubuntu 24.04 release notes (Python defaults to 3.12): https://discourse.ubuntu.com/t/noble-numbat-release-notes/39890
+- Hetzner CX22 press release, June 2024 (superseded): https://www.hetzner.com/pressroom/new-cx-plans/
+- DigitalOcean Droplet pricing: https://www.digitalocean.com/pricing/droplets
+- DigitalOcean regions (LON1): https://docs.digitalocean.com/platform/regional-availability/
+- ECB rates 2026-09-18 (EUR/GBP 0.8588, EUR/USD 1.1460): https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml
+- Ubuntu 24.04 release notes (Python 3.12): https://discourse.ubuntu.com/t/noble-numbat-release-notes/39890
 - deadsnakes PPA, only if a future pin needs 3.13: https://launchpad.net/~deadsnakes/+archive/ubuntu/ppa
-- Playwright Python system requirements (Python 3.8+, Ubuntu 22.04/24.04/26.04): https://playwright.dev/python/docs/intro
-- Playwright browsers, `install-deps`, `~/.cache/ms-playwright`, `PLAYWRIGHT_BROWSERS_PATH`: https://playwright.dev/python/docs/browsers
-- Caddy install (Debian/Ubuntu, runs as systemd service `caddy`): https://caddyserver.com/docs/install
-- Caddy automatic HTTPS (DNS must point at the server, ports 80/443 open, Let's Encrypt with ZeroSSL fallback): https://caddyserver.com/docs/automatic-https
-- Zoho SPF (record authorises Zoho's servers for the domain): https://www.zoho.com/mail/help/adminconsole/spf-configuration.html
-- Zoho IMAP/SMTP hosts and app-specific passwords: https://www.zoho.com/mail/help/imap-access.html
-- Zoho IMAP blocks, 5 minutes to 5 days, "simultaneous connections from multiple clients": https://www.zoho.com.cn/mail/help/faq/imap-access1.html
-- Zoho suspicious-login report (client IP, IMAP/SMTP_OUT source, based on previous behaviour): https://www.zoho.com/mail/help/adminconsole/security-reports.html
-- Stripe webhooks: Workbench endpoint creation, Reveal secret, one secret per endpoint, 3-day retries, HTTPS required: https://docs.stripe.com/webhooks
-- Stripe API, updating an endpoint edits `url`/events/status only (secret unchanged unless rolled): https://docs.stripe.com/api/webhook_endpoints/update
+- Playwright requirements (Python 3.8+, Ubuntu 22.04/24.04/26.04): https://playwright.dev/python/docs/intro
+- Playwright browsers, `install-deps`, `~/.cache/ms-playwright`: https://playwright.dev/python/docs/browsers
+- Caddy install: https://caddyserver.com/docs/install
+- Caddy automatic HTTPS (DNS first, ports 80/443, Let's Encrypt/ZeroSSL): https://caddyserver.com/docs/automatic-https
+- Zoho SPF: https://www.zoho.com/mail/help/adminconsole/spf-configuration.html
+- Zoho IMAP/SMTP hosts, app-specific passwords: https://www.zoho.com/mail/help/imap-access.html
+- Zoho IMAP blocks, "simultaneous connections from multiple clients": https://www.zoho.com.cn/mail/help/faq/imap-access1.html
+- Zoho suspicious-login report: https://www.zoho.com/mail/help/adminconsole/security-reports.html
+- Stripe webhooks (Workbench, Reveal secret, one secret per endpoint, 3-day retries): https://docs.stripe.com/webhooks
+- Stripe API, endpoint update edits `url`/events/status only: https://docs.stripe.com/api/webhook_endpoints/update
