@@ -53,7 +53,8 @@ only usable if `git apply` accepts it:
 ## The run.py surface — the only supported entry points
 
     quick-test   loop        dashboard     test-email <addr>   cleanup-tests [--dry-run]
-    source [--limit N] [--dry-run]         rebuild <lead_id>   report
+    source [--limit N] [--dry-run]         rebuild <lead_id>   report [--weekly]
+    rescore [--dry-run] [--limit N] [--park-good]   # audit existing sites; park healthy-site leads
     control [--json] [--all] [--agent-id AGENT_ID]
     preflight [--offline]                  preview-email [--lead ID]
     test-alert   serve-public [--status]   reviewed-batch ...

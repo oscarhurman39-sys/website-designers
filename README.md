@@ -119,12 +119,26 @@ default `SOURCING_LOCATIONS` are all further out than that.
 python run.py source --dry-run      # print what would be inserted, write nothing
 python run.py source --limit 10     # insert up to 10 leads now
 python run.py preview-audit --limit 10  # offline audit of up to 10 active previews
+python run.py rescore --dry-run         # audit queued leads' existing sites; print scores, write nothing
+python run.py rescore --park-good       # write scores, then park leads whose site is already healthy
+python run.py report --weekly           # funnel per 7-day window + lead quality mix
 ```
 
 `preview-audit` is read-only and offline. It checks active preview records for
 a usable preview URL, repository URL, local screenshot, contact email, repository
 handoff name, and Vercel project id. It never sends email, calls a deployment
 service, or changes the database.
+
+`rescore` fetches each queued lead's homepage once (the same request research
+makes) and fills `site_score` / `site_defects` / `lead_score` for leads researched
+before the site audit existed. Research does this automatically for new leads:
+`pipeline/utils/site_audit.py` checks https, viewport meta, footer year, title,
+page weight and placeholder pages; `pipeline/utils/scoring.py` turns that into
+the send order. A site scoring `SITE_SCORE_GOOD_AT` (default 8) or better is not
+pitched -- DesignAgent parks the lead before any repo or Vercel project exists --
+and the cold email opens with the defect actually found. DesignAgent also stops
+building once `DESIGN_BACKLOG_MAX` (default two days of sends) previews are
+waiting, so none expires unsent.
 
 Needs `GOOGLE_PLACES_API_KEY` in `.env` (with "Places API (New)" enabled
 on the key). The orchestrator loop runs the same step once an hour when

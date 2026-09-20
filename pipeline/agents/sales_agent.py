@@ -33,7 +33,8 @@ from huggingface_hub import InferenceClient
 
 import config
 from utils import (
-    assets, compliance, db, email_utils, email_verify, github_api, mailboxes, screenshot, stripe_utils, tracer, tracker,
+    assets, compliance, db, email_utils, email_verify, github_api, mailboxes, screenshot, site_audit, stripe_utils,
+    tracer, tracker,
 )
 # Shared with DesignAgent's post-deploy check so both sides agree on what an
 # "auth wall" looks like; the timeout is separate because this check runs on
@@ -280,9 +281,32 @@ _SCREENSHOT_CID = "preview"
 _SENDER_NAME = config.SENDER_NAME
 
 
-def _intro_line(business_name: str) -> str:
-    """Plain-text greeting that always sits above the screenshot image --
-    frames this as solving a discoverability problem, not just a sales pitch."""
+def _intro_line(business_name: str, lead: Optional[dict] = None) -> str:
+    """Plain-text greeting that always sits above the screenshot image.
+    Names the one thing research actually found -- no site beyond a
+    listing, or a concrete defect on the site they have -- so the first
+    line is true for the business reading it. Until 2026-09-20 every lead
+    got the "only find your Google listing" line, and all 164 of them had
+    a website."""
+    lead = lead or {}
+    status = lead.get("website_status") or ("owned_site" if (lead.get("website_url") or "").strip() else "")
+    if status == "owned_site":
+        phrase = site_audit.phrase_from_keys(lead.get("site_defects"))
+        if phrase:
+            return (
+                f"I had a look at the {business_name} website and noticed {phrase}, so I put "
+                "together a draft of what a fresh one could look like for you."
+            )
+        return (
+            f"I had a look at the {business_name} website and put together a draft of what "
+            "a fresh one could look like for you."
+        )
+    if status == "platform_only":
+        return (
+            f"I noticed people searching for {business_name} only find a directory or "
+            "social-media page, so I put together a draft website to show what one "
+            "could look like for you."
+        )
     return (
         f"I noticed people searching for {business_name} only find your Google "
         "listing, so I put together a draft website to show what one could look "
@@ -429,21 +453,21 @@ def _validate_preview_link_for_send(preview_link: str) -> str:
     return preview_link
 
 
-def _plain_text_body(business_name: str, preview_link: str, city: str) -> str:
+def _plain_text_body(business_name: str, preview_link: str, city: str, lead: Optional[dict] = None) -> str:
     return "\n\n".join([
-        _intro_line(business_name),
+        _intro_line(business_name, lead),
         _draft_note(),
         _checklist_paragraph(city),
         *_closing_paragraphs(preview_link),
     ])
 
 
-def _build_html_body(business_name: str, preview_link: str, city: str) -> str:
+def _build_html_body(business_name: str, preview_link: str, city: str, lead: Optional[dict] = None) -> str:
     """Intro greeting, then the cached screenshot, then the "what we
     improved" checklist, then the closing paragraphs -- only called when a
     screenshot is actually available; see _send_cold_email_impl."""
     escaped_link = html_module.escape(preview_link)
-    intro_html = f"<p>{html_module.escape(_intro_line(business_name))}</p>"
+    intro_html = f"<p>{html_module.escape(_intro_line(business_name, lead))}</p>"
     image_html = (
         f'<p><a href="{escaped_link}">'
         f'<img src="cid:{_SCREENSHOT_CID}" alt="Draft website preview" '
@@ -629,7 +653,7 @@ def _send_cold_email_impl(lead: dict) -> bool:
     # it in the copy when the redirect endpoint is confirmed reachable.
     if config.CLICK_TRACKING_ENABLED and tracker.public_endpoint_up():
         preview_link = tracker.create_click_link(lead["id"])
-    body_with_link = _plain_text_body(lead["business_name"], preview_link, city)
+    body_with_link = _plain_text_body(lead["business_name"], preview_link, city, lead=lead)
 
     # Embed the cached preview screenshot inline (cid:) if design_agent.py
     # already captured one for this lead; otherwise send exactly the same
@@ -637,7 +661,7 @@ def _send_cold_email_impl(lead: dict) -> bool:
     # failed, or an older lead from before this feature existed) must
     # never block or change the send itself.
     cached_screenshot = screenshot.get_cached_screenshot(lead["id"])
-    body_html = _build_html_body(lead["business_name"], preview_link, city) if cached_screenshot else None
+    body_html = _build_html_body(lead["business_name"], preview_link, city, lead=lead) if cached_screenshot else None
     inline_image_path = str(cached_screenshot) if cached_screenshot else None
 
     # Chosen last, right before the send, so the per-mailbox cap is checked

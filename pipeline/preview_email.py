@@ -33,7 +33,7 @@ def build(lead: dict, preview_link: str) -> dict:
     """Everything the send path would put on the wire, minus the transport."""
     lead_id = int(lead["id"])
     city = lead.get("location") or "your area"
-    body = sales_agent._plain_text_body(lead["business_name"], preview_link, city)
+    body = sales_agent._plain_text_body(lead["business_name"], preview_link, city, lead=lead)
     cached = screenshot.get_cached_screenshot(lead_id) if lead_id else None
     account = config.EMAIL_ACCOUNTS[0]
     return {

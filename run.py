@@ -5,7 +5,8 @@
     python run.py dashboard            # streamlit run dashboard.py
     python run.py test-email <email>   # one-shot: pipeline/test_email.py
     python run.py cleanup-tests [--dry-run]  # delete test leads + their repos/projects
-    python run.py report                     # per-niche funnel + revenue
+    python run.py report [--weekly]          # per-niche funnel + revenue; --weekly: 7-day windows + lead quality
+    python run.py rescore [--dry-run] [--park-good]  # audit unscored existing websites; park healthy-site leads
     python run.py control [--json] [--all]    # read-only agent ownership + stalled-work board
     python run.py rebuild <lead_id>          # one-shot: pipeline/rebuild_preview.py
     python run.py ops start|stop|restart|status [--json]|logs [name]   # headless services, no windows
@@ -69,8 +70,13 @@ def run_cleanup_tests(extra_args: list[str]) -> int:
 
 
 def run_report(extra_args: list[str]) -> int:
-    # Per-niche funnel + revenue, to decide which niches to focus on.
+    # Per-niche funnel + revenue (default) or the weekly funnel + lead quality mix (--weekly).
     return subprocess.call([sys.executable, str(PIPELINE_DIR / "report.py"), *extra_args], cwd=str(PIPELINE_DIR))
+
+
+def run_rescore(extra_args: list[str]) -> int:
+    # Audit the existing websites of leads scored before the site audit existed; --park-good parks healthy ones.
+    return subprocess.call([sys.executable, str(PIPELINE_DIR / "rescore.py"), *extra_args], cwd=str(PIPELINE_DIR))
 
 
 def run_control(extra_args: list[str]) -> int:
@@ -226,6 +232,7 @@ _MODES = {
     "source": run_source,
     "rebuild": run_rebuild,
     "report": run_report,
+    "rescore": run_rescore,
     "control": run_control,
     "preflight": run_preflight,
     "preview-email": run_preview_email,

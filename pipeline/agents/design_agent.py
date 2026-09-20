@@ -17,7 +17,7 @@ import requests
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 import config
-from utils import assets, db, github_api, screenshot, tracer, tracker, vercel_api
+from utils import assets, db, github_api, scoring, screenshot, tracer, tracker, vercel_api
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 TEMPLATE_FILES = ("index.html", "style.css")
@@ -734,12 +734,9 @@ def _process_lead_impl(lead: dict) -> Optional[dict]:
         )
         return None
 
-    # A preview only earns its deploy if there is an address to send it to.
-    # SalesAgent would mark this lead lost at send time anyway; doing it here
-    # saves a GitHub repo and a Vercel project per unmailable lead -- 6 of 12
-    # sourced leads on the first live day were built and then never sent.
-    if not (lead.get("contact_email") or "").strip():
-        db.update_lead_status(lead["id"], "lost", notes="No contact email found; preview not built")
+    reason = park_reason(lead)
+    if reason:
+        db.update_lead_status(lead["id"], "lost", notes=reason)
         return None
 
     # Built once already? Then this lead is back at 'researched' because its
@@ -812,15 +809,55 @@ _design_failures: dict[int, int] = {}
 _DESIGN_ALERT_AFTER = 2  # consecutive failures before a person is told
 
 
+def park_reason(lead: dict) -> Optional[str]:
+    """Why this lead should never get a preview, or None if it should.
+
+    A preview only earns its deploy if there is an address to send it to:
+    SalesAgent would mark an unmailable lead lost at send time anyway, and
+    doing it here saves a GitHub repo and a Vercel project (6 of 12 sourced
+    leads on the first live day were built and then never sent). And a
+    business whose existing site already scores as healthy is not who this
+    pitch is for (utils/scoring.py): parking it here costs no repo, no
+    Vercel project and no send slot."""
+    if not (lead.get("contact_email") or "").strip():
+        return "No contact email found; preview not built"
+    if scoring.is_good_site(lead.get("website_status"), lead.get("site_score")):
+        return (
+            f"Existing website scored {lead.get('site_score')}/10 (healthy; SITE_SCORE_GOOD_AT="
+            f"{scoring.good_site_threshold()}); not a target, preview not built"
+        )
+    return None
+
+
+_backlog_full_announced = False
+
+
 def run() -> None:
-    """Main entrypoint called by main.py: design a site for every
-    'researched' lead that has a matching template. A lead whose build
-    fails is backed off for _DESIGN_RETRY_DELAY; a second failure in a row
-    alerts a human."""
+    """Main entrypoint called by main.py: design a site for 'researched'
+    leads, best lead_score first, until the 'designed' queue holds
+    config.design_backlog_cap() unsent previews. Previews expire
+    PREVIEW_TTL_DAYS after they are built, so building faster than the daily
+    send cap drains only makes previews that are torn down unsent. Leads
+    that should never be built are parked regardless of the cap. A lead
+    whose build fails is backed off for _DESIGN_RETRY_DELAY; a second
+    failure in a row alerts a human."""
+    global _backlog_full_announced
     now = datetime.now(timezone.utc)
-    for lead in db.list_leads_by_status("researched"):
+    cap = config.design_backlog_cap()
+    for lead in db.list_designable_leads_by_priority():
         if _design_next_attempt.get(lead["id"], datetime.min.replace(tzinfo=timezone.utc)) > now:
             continue
+        reason = park_reason(lead)
+        if reason:
+            db.update_lead_status(lead["id"], "lost", notes=reason)
+            continue
+        if cap > 0 and db.count_leads_by_status("designed") >= cap:
+            if not _backlog_full_announced:
+                print(f"[design_agent] {cap} previews already built and waiting to send; "
+                      "not building more until the queue drains (DESIGN_BACKLOG_MAX)")
+                _backlog_full_announced = True
+            return
+        _backlog_full_announced = False
         try:
             process_lead(lead)
         except Exception as exc:  # noqa: BLE001 - one bad lead must not kill the batch

@@ -330,6 +330,23 @@ PREVIEW_TEARDOWN_ENABLED: bool = (
     os.getenv("PREVIEW_TEARDOWN_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
 )
 
+# --- Lead quality gate -------------------------------------------------------
+# utils/site_audit.py scores a lead's existing website 0-10 during research.
+# An owned site scoring at or above this line is left alone: DesignAgent
+# parks the lead instead of building a preview, because "I built you a new
+# site" to a business with a healthy one is the email that got 0 replies
+# from 30 sends. 0 = pitch everyone regardless.
+SITE_SCORE_GOOD_AT: int = int(os.getenv("SITE_SCORE_GOOD_AT", "8") or 0)
+# How many built-but-unsent previews may wait in the 'designed' queue before
+# DesignAgent stops building more. Previews are torn down PREVIEW_TTL_DAYS
+# after they are built, so a backlog longer than the daily send cap can drain
+# expires unsent (10 leads, 2026-09-08..20). 0 = two days of sends.
+DESIGN_BACKLOG_MAX: int = _int_env("DESIGN_BACKLOG_MAX", default=0)
+
+
+def design_backlog_cap() -> int:
+    return DESIGN_BACKLOG_MAX if DESIGN_BACKLOG_MAX > 0 else 2 * EMAIL_MAX_PER_DAY
+
 # --- Sending mailboxes -------------------------------------------------------
 # Deliverability tops out around 25 cold emails/day per mailbox, so real
 # volume means several mailboxes (ideally on several domains), not one busy

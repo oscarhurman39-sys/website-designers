@@ -19,7 +19,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from utils import db, email_verify, retry, tracer
+from utils import db, email_verify, retry, scoring, site_audit, tracer
 
 USER_AGENT = "ColdEmailSalesPipelineBot/1.0 (+mailto:contact@example.com)"
 REQUEST_TIMEOUT = 10
@@ -182,7 +182,9 @@ def find_business_website(business_name: str, location: str) -> Optional[str]:
     return None
 
 
-def _fetch(url: str) -> Optional[BeautifulSoup]:
+def _fetch_response(url: str) -> Optional[requests.Response]:
+    """One polite GET. The Response (not just its parse) is what the site
+    audit needs: the final URL after redirects and the byte size."""
     if not _robots_allows(url):
         return None
     try:
@@ -190,7 +192,23 @@ def _fetch(url: str) -> Optional[BeautifulSoup]:
         resp.raise_for_status()
     except requests.RequestException:
         return None
-    return BeautifulSoup(resp.text, "html.parser")
+    return resp
+
+
+def _fetch(url: str) -> Optional[BeautifulSoup]:
+    resp = _fetch_response(url)
+    return None if resp is None else BeautifulSoup(resp.text, "html.parser")
+
+
+def _contact_channel(lead: dict, email_addr: Optional[str]) -> str:
+    """The best follow-up route now that research has actually looked:
+    sourcing guesses 'email' for any owned site, which was wrong for 73 of
+    164 leads."""
+    if (email_addr or "").strip():
+        return "email"
+    if (lead.get("phone") or "").strip():
+        return "phone"
+    return "unknown"
 
 
 def _decode_cloudflare_email(cfemail_hex: str) -> Optional[str]:
@@ -300,17 +318,37 @@ def _research_lead_impl(lead: dict) -> None:
     )
 
     if not website_url:
+        # A manual/CSV lead with no site anywhere: the strongest kind of
+        # lead this pipeline has, so score it as one instead of leaving it
+        # unscored behind every business that does have a site.
+        website_status = lead.get("website_status") or scoring.WEBSITE_STATUS_NONE
+        channel = _contact_channel(lead, lead.get("contact_email"))
+        db.update_lead_fields(
+            lead_id,
+            website_status=website_status,
+            contact_channel=channel,
+            site_score=0 if website_status == scoring.WEBSITE_STATUS_NONE else lead.get("site_score"),
+            lead_score=scoring.lead_score(
+                website_status, 0, channel,
+                review_count=lead.get("google_reviews_count"), business_name=lead["business_name"],
+            ),
+        )
         db.update_lead_status(lead_id, "researched", notes="No website found during research; proceeding with name/niche/location only")
         return
 
-    homepage = _fetch(website_url)
-    if homepage is None:
+    response = _fetch_response(website_url)
+    if response is None:
         db.update_lead_fields(lead_id, website_url=website_url)
         db.update_lead_status(
             lead_id, "researched",
             notes=f"Could not fetch website (robots.txt or network): {website_url}; proceeding without scraped data",
         )
         return
+
+    homepage = BeautifulSoup(response.text, "html.parser")
+    audit = site_audit.audit_html(
+        response.url or website_url, response.text, html_bytes=len(response.content or b""), soup=homepage
+    )
 
     email_addr = _extract_email(homepage)
     testimonial = _extract_testimonial(homepage)
@@ -326,6 +364,19 @@ def _research_lead_impl(lead: dict) -> None:
                 testimonial = testimonial or _extract_testimonial(subpage)
                 pain_point = pain_point or _extract_pain_point(subpage, subpage_url)
 
+    # The concrete defect beats a scraped paragraph as the "something noticed"
+    # the email leads with; the paragraph stays available in scraped_info.
+    defect_phrase = audit.owner_phrase()
+    if defect_phrase:
+        pain_point = f"their current website: {defect_phrase}"
+
+    # A site we had to search for is still a site they own: a lead sourced or
+    # typed in as 'none' must not keep a no-website score once one is found.
+    if (lead.get("website_url") or "").strip():
+        website_status = lead.get("website_status") or scoring.WEBSITE_STATUS_OWNED
+    else:
+        website_status = scoring.WEBSITE_STATUS_OWNED
+    channel = _contact_channel(lead, email_addr)
     db.update_lead_fields(
         lead_id,
         website_url=website_url,
@@ -333,8 +384,20 @@ def _research_lead_impl(lead: dict) -> None:
         pain_point=pain_point or "",
         testimonial=testimonial or "",
         scraped_info=homepage.get_text(" ", strip=True)[:2000],
+        website_status=website_status,
+        contact_channel=channel,
+        site_score=audit.score,
+        site_defects=audit.keys,
+        lead_score=scoring.lead_score(
+            website_status, audit.score, channel,
+            review_count=lead.get("google_reviews_count"), business_name=lead["business_name"],
+        ),
     )
-    notes = "Research complete" if email_addr else "Website found but no contact email discovered; proceeding without one"
+    site_note = f"site scored {audit.score}/10" + (f" ({audit.keys})" if audit.defects else " (no defects found)")
+    notes = (
+        f"Research complete; {site_note}" if email_addr
+        else f"Website found but no contact email discovered; proceeding without one; {site_note}"
+    )
     db.update_lead_status(lead_id, "researched", notes=notes)
 
 

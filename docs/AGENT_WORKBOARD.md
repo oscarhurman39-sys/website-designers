@@ -25,6 +25,20 @@ pre-launch questions: `docs/STATE_AND_PLAN.md` sections 6a and 6b. The
 uncommitted lead-quality slice (website_status / lead_score / send priority)
 was committed as found, tests green.
 
+## Landed outside the lanes (Claude Code, 2026-09-20)
+
+Branch `claude/lead-quality-scoring`, for FINN to review and merge: research
+now audits each lead's existing site (`utils/site_audit.py`) and scores it
+(`utils/scoring.py`); DesignAgent parks healthy-site leads and builds
+best-score-first up to `DESIGN_BACKLOG_MAX`; the cold email opens with the
+defect found; `run.py rescore` backfills the queue; `run.py report --weekly`
+and a preflight "lead quality" line measure it. Lane effects: ENGINE-DBA owns
+the new `leads.site_defects` column; PROMO-MARKETER reads `report --weekly`
+every Monday and proposes rubric changes (`scoring.py`) rather than editing
+them; AGENCY-NEGOTIATOR's reply copy is unchanged. Still open: reaching
+businesses with no site (STATE_AND_PLAN 5.2), a Companies House check so sole
+traders are not cold-emailed (PECR), and moving the loop off this PC (DEVOPS).
+
 
 ## StarNet skill gate
 

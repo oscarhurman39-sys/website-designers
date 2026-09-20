@@ -25,7 +25,7 @@ from urllib.parse import urlparse
 import requests
 
 import config
-from utils import db, tracer
+from utils import db, scoring, tracer
 
 PLACES_TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 # Field masks are mandatory on Places API (New) and also drive billing, so
@@ -194,17 +194,13 @@ def site_score_for_status(website_status: str) -> Optional[int]:
 
 
 def lead_score_for_candidate(website_status: str, contact_channel: str) -> Optional[int]:
-    """Deterministic first-pass acquisition score.
+    """Deterministic first-pass acquisition score (utils/scoring.py).
 
-    The score favours obvious need first, then reachability. It intentionally
-    ignores rating/review count for now because those need a wider rubric and
-    tests before they influence who gets contacted.
+    At sourcing time only a business with no site or a platform-only
+    presence can be scored; an owned site is scored by LeadAgent once its
+    homepage has actually been audited, so it stays None here.
     """
-    if website_status == WEBSITE_STATUS_NONE:
-        return 10 if contact_channel != CONTACT_CHANNEL_UNKNOWN else 8
-    if website_status == WEBSITE_STATUS_PLATFORM_ONLY:
-        return 9 if contact_channel != CONTACT_CHANNEL_UNKNOWN else 7
-    return None
+    return scoring.lead_score(website_status, None, contact_channel)
 
 
 def _skip_reason(place: dict[str, Any]) -> Optional[str]:

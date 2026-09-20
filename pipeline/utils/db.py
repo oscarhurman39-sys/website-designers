@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS leads (
     site_score      INTEGER,
     lead_score      INTEGER,
     contact_channel TEXT,
+    site_defects    TEXT,
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -157,6 +158,9 @@ def init_db(db_path: Optional[str] = None) -> None:
         _migrate_add_column(conn, "leads", "lead_score", "INTEGER")
         _migrate_add_column(conn, "leads", "contact_channel", "TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_leads_send_priority ON leads(status, lead_score DESC, id ASC)")
+        # Comma-separated utils/site_audit.py defect keys found on the lead's
+        # existing site; the cold email's opening line is built from these.
+        _migrate_add_column(conn, "leads", "site_defects", "TEXT")
         conn.commit()
 
 
@@ -268,10 +272,58 @@ def list_leads_by_status(status: str) -> list[dict[str, Any]]:
 
 def list_sendable_leads_by_priority() -> list[dict[str, Any]]:
     """Return designed leads in explicit acquisition priority order."""
+    return _list_by_status_and_priority("designed")
+
+
+def list_designable_leads_by_priority() -> list[dict[str, Any]]:
+    """Researched leads in the order DesignAgent should build them: the
+    same score order the send queue uses, so a capped backlog is always
+    filled with the best leads rather than the oldest."""
+    return _list_by_status_and_priority("researched")
+
+
+def _list_by_status_and_priority(status: str) -> list[dict[str, Any]]:
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT * FROM leads WHERE status = 'designed' "
-            "ORDER BY CASE WHEN lead_score IS NULL THEN 1 ELSE 0 END, lead_score DESC, id ASC"
+            "SELECT * FROM leads WHERE status = ? "
+            "ORDER BY CASE WHEN lead_score IS NULL THEN 1 ELSE 0 END, lead_score DESC, id ASC",
+            (status,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def count_leads_by_status(status: str) -> int:
+    with get_connection() as conn:
+        row = conn.execute("SELECT COUNT(*) AS n FROM leads WHERE status = ?", (status,)).fetchone()
+        return int(row["n"])
+
+
+def list_unscored_owned_site_leads(statuses: tuple[str, ...] = ("researched", "designed")) -> list[dict[str, Any]]:
+    """Leads whose existing website has never been audited (site_score is
+    NULL) but which have a URL to audit. Fed to pipeline/rescore.py."""
+    placeholders = ", ".join("?" for _ in statuses)
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM leads WHERE status IN ({placeholders}) AND site_score IS NULL "
+            "AND COALESCE(website_status, 'owned_site') = 'owned_site' "
+            "AND COALESCE(TRIM(website_url), '') != '' ORDER BY id ASC",
+            statuses,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def list_good_site_leads(statuses: tuple[str, ...] = ("researched", "designed")) -> list[dict[str, Any]]:
+    """Leads still in the build/send queues whose existing site scored at or
+    above config.SITE_SCORE_GOOD_AT -- the ones `rescore --park-good` parks."""
+    threshold = int(getattr(config, "SITE_SCORE_GOOD_AT", 8) or 0)
+    if threshold <= 0:
+        return []
+    placeholders = ", ".join("?" for _ in statuses)
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM leads WHERE status IN ({placeholders}) AND website_status = 'owned_site' "
+            "AND site_score IS NOT NULL AND site_score >= ? ORDER BY id ASC",
+            (*statuses, threshold),
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -870,6 +922,82 @@ def outcome_report() -> list[dict[str, Any]]:
             "SUM(CASE WHEN status = 'won' THEN 1 ELSE 0 END) AS won, "
             "COALESCE(SUM(won_amount), 0) AS revenue "
             "FROM leads GROUP BY niche ORDER BY revenue DESC, won DESC, replied DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def weekly_funnel(weeks: int = 4, now: Optional[datetime] = None) -> list[dict[str, Any]]:
+    """The funnel per 7-day window, newest first: sourced, mailable (a
+    contact email was found), designed, cold emails, follow-ups, replies
+    (real ones -- auto-replies excluded), clicks, won, revenue. Thirty
+    emails say nothing; this is the table that shows whether a change to
+    targeting or copy moved anything, week on week."""
+    end = now or datetime.now(timezone.utc)
+    windows = []
+    with get_connection() as conn:
+        for i in range(weeks):
+            hi = end - timedelta(days=7 * i)
+            lo = hi - timedelta(days=7)
+            lo_s, hi_s = lo.strftime("%Y-%m-%d %H:%M:%S"), hi.strftime("%Y-%m-%d %H:%M:%S")
+
+            def scalar(sql: str, *params: Any) -> int:
+                return int(conn.execute(sql, params).fetchone()[0] or 0)
+
+            windows.append({
+                "week_start": lo.strftime("%Y-%m-%d"),
+                "week_end": hi.strftime("%Y-%m-%d"),
+                "sourced": scalar("SELECT COUNT(*) FROM leads WHERE created_at >= ? AND created_at < ?", lo_s, hi_s),
+                "mailable": scalar(
+                    "SELECT COUNT(*) FROM leads WHERE created_at >= ? AND created_at < ? "
+                    "AND COALESCE(TRIM(contact_email), '') != ''", lo_s, hi_s),
+                "designed": scalar(
+                    "SELECT COUNT(DISTINCT lead_id) FROM state_history WHERE to_state = 'designed' "
+                    "AND from_state = 'researched' AND timestamp >= ? AND timestamp < ?", lo_s, hi_s),
+                "cold_emails": scalar(
+                    "SELECT COUNT(*) FROM email_threads WHERE direction = 'outbound' "
+                    "AND COALESCE(classification, '') = '' AND timestamp >= ? AND timestamp < ?", lo_s, hi_s),
+                "follow_ups": scalar(
+                    "SELECT COUNT(*) FROM email_threads WHERE direction = 'outbound' "
+                    "AND classification = 'follow_up' AND timestamp >= ? AND timestamp < ?", lo_s, hi_s),
+                "replies": scalar(
+                    "SELECT COUNT(DISTINCT lead_id) FROM email_threads WHERE direction = 'inbound' "
+                    "AND COALESCE(classification, '') != 'out_of_office' AND timestamp >= ? AND timestamp < ?",
+                    lo_s, hi_s),
+                "clicks": scalar("SELECT COUNT(DISTINCT lead_id) FROM clicks WHERE timestamp >= ? AND timestamp < ?", lo_s, hi_s),
+                "won": scalar(
+                    "SELECT COUNT(DISTINCT lead_id) FROM state_history WHERE to_state = 'won' "
+                    "AND timestamp >= ? AND timestamp < ?", lo_s, hi_s),
+                "revenue": scalar(
+                    "SELECT COALESCE(SUM(l.won_amount), 0) FROM leads l WHERE l.status = 'won' AND EXISTS ("
+                    "  SELECT 1 FROM state_history h WHERE h.lead_id = l.id AND h.to_state = 'won' "
+                    "  AND h.timestamp >= ? AND h.timestamp < ?)", lo_s, hi_s),
+            })
+    return windows
+
+
+def lead_quality_mix() -> list[dict[str, Any]]:
+    """How the leads waiting to be built/sent, and those already emailed,
+    break down by what their existing web presence looked like. The
+    'unscored' row is the work rescore.py has left to do; the 'good site'
+    row is the slice the design gate now refuses to pitch."""
+    threshold = int(getattr(config, "SITE_SCORE_GOOD_AT", 8) or 0)
+    bucket_sql = (
+        "CASE "
+        " WHEN website_status = 'none' THEN 'no website'"
+        " WHEN website_status = 'platform_only' THEN 'platform only'"
+        " WHEN site_score IS NULL THEN 'unscored'"
+        f" WHEN {threshold} > 0 AND site_score >= {threshold} THEN 'good site'"
+        " WHEN site_score <= 3 THEN 'very poor site'"
+        " ELSE 'poor site' END"
+    )
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"SELECT {bucket_sql} AS bucket, "
+            "SUM(CASE WHEN status IN ('researched') THEN 1 ELSE 0 END) AS to_build, "
+            "SUM(CASE WHEN status = 'designed' THEN 1 ELSE 0 END) AS to_send, "
+            "SUM(CASE WHEN status IN ('emailed','replied','negotiating','payment_sent','won') THEN 1 ELSE 0 END) AS emailed, "
+            "SUM(CASE WHEN status = 'lost' THEN 1 ELSE 0 END) AS lost "
+            "FROM leads GROUP BY bucket ORDER BY bucket"
         ).fetchall()
         return [dict(r) for r in rows]
 

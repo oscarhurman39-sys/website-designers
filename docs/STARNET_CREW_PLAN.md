@@ -202,3 +202,60 @@ Sales-proof assets for Casey Websites (before/after shots and short walkthrough 
 3. Disable the erroring routines (section 3.1).
 4. Re-run `station-report.js` and `layout-audit.js`; both should show no
    agent without a seat, no unbound bay, no routine in error.
+
+## 5. 2026-09-20 deltas (station report + run forensics, 14 days)
+
+What changed since section 0: MASKY did 339 of 406 runs; the specialists
+barely ran (negotiator 1, marketer 2, researcher 3). Scheduling, loops and
+night shift have been E-STOPPED since ~09-17; "Daily Sales Pipeline" last ran
+09-16. Two agents are pinned to models that fail a third of the time
+(STRATEGIST on `gpt-6-astra`, 36% errors; RESEARCHER on `gpt-5.6-terra`, 37%).
+Night-shift "self-directed work" beats cost 3-4M tokens each and produced
+patches that mostly could not be applied. Two bays are still unbound.
+
+Shortest click list that fixes the sales team, in order (about 15 minutes):
+
+1. **Stop the runaway runs.** SYSTEM -> SETTINGS -> RUNTIME -> ADVANCED ->
+   MAX ITERATIONS `40` -> SAVE. (SETTINGS -> BUDGET -> PER RUN `2`, PER DAY
+   `10` -> SAVE LIMITS is the belt to go with those braces.)
+2. **Re-pin the two flaky agents.** CREW -> AGENTS -> STRATEGIST -> CONFIG ->
+   HOW IT BEHAVES -> MODEL -> pick the ChatGPT (Codex) entry for
+   `gpt-5.6-luna` (7% errors, the station's most reliable) -> effort MEDIUM ->
+   SAVE PIN. Same for RESEARCHER (effort LOW).
+3. **Ask-first for the agent that reads strangers' replies.** SYSTEM ->
+   SETTINGS -> PERMISSIONS -> AGENCY-NEGOTIATOR -> CHECK WITH ME. Its project
+   folder holds the live `.env`; a prospect's reply is untrusted text.
+4. **One standing job per agent.** Paste the section 2 dossiers for STRATEGIST,
+   RESEARCHER, GHOSTWRITER, SUPPORT AGENT and DEVOPS ENGINEER, and the
+   section 2.3 fixes for MASKY, FINN and PROMO-MARKETER. Everything else in
+   the crew is reserve until a lane needs it.
+5. **Weekly measurement.** WORK -> AUTOMATION -> CREATE ROUTINE, as
+   STRATEGIST, every Monday 09:00 (cron `0 9 * * 1`), delivery local:
+
+   ```
+   Weekly sales review for Casey Websites. Work only in D:\projects\website-designers
+   with venv\Scripts\python.exe. Run, in order: python run.py report --weekly ;
+   python run.py report ; python run.py preflight --offline. Then write
+   docs/STRATEGY.md (overwrite): the four-week funnel table verbatim; reply rate
+   per week; which niches/towns produced replies; the lead-quality mix and how
+   many queued leads were parked as healthy sites; ONE change to make this week
+   (targeting, copy, or channel) with the cheapest test of it; and one thing to
+   stop. Never change .env, never source, send, rebuild or pay. Under 400 words.
+   ```
+
+   Then WORK -> AUTOMATION -> RESUME SCHEDULING (routines only; leave loops and
+   night shift halted until step 4 is done).
+6. **Bind the two cold bays.** BUILD -> REFIT STATION -> click each bay showing
+   "NO SERVER — CLICK TO BIND" (one in `product sale`, one in `the agency web
+   design b`) -> pick SUPPORT AGENT for the sale bay and ENGINE-DBA for the
+   agency bay, or DELETE the belt run -> DONE. Then re-run `layout-audit.js`:
+   `errors` must be empty.
+7. **Off this PC.** DEVOPS ENGINEER's first task (WORK -> TASKS -> + ADD):
+   "Move the loop and webhook to the VPS in deploy/README.md; same
+   PUBLIC_BASE_URL; propose the .env diff, do not apply it." Until then the
+   pipeline only replies to prospects while this PC is awake.
+
+Not done on purpose: nothing above widens reach. FULL POWER stays where Oscar
+set it except the negotiator; the autonomy dial stays halted; no new agent is
+summoned. The repo side of the same day is on branch
+`claude/lead-quality-scoring` (see docs/STATE_AND_PLAN.md, 2026-09-20 note).

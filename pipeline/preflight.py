@@ -588,6 +588,36 @@ def collect_checks(offline: bool = False) -> list[Check]:
             + f", {pending} new/researched (previews still to build)",
             level=INFO,
         ))
+        # Lead quality: is the queue full of businesses that actually need a
+        # site? Every lead sourced 2026-09-08..20 had an unaudited owned site
+        # and the send order was id order; this line makes that visible.
+        unscored = _scalar(
+            config.DB_PATH,
+            "SELECT COUNT(*) FROM leads WHERE status IN ('researched', 'designed') AND site_score IS NULL "
+            "AND COALESCE(website_status, 'owned_site') = 'owned_site' AND COALESCE(TRIM(website_url), '') != ''",
+        ) or 0
+        good_waiting = 0
+        if config.SITE_SCORE_GOOD_AT > 0:
+            good_waiting = _scalar(
+                config.DB_PATH,
+                "SELECT COUNT(*) FROM leads WHERE status IN ('researched', 'designed') "
+                "AND website_status = 'owned_site' AND site_score >= ?",
+                (config.SITE_SCORE_GOOD_AT,),
+            ) or 0
+        quality_ok = not unscored and not good_waiting
+        quality_parts = []
+        if unscored:
+            quality_parts.append(f"{unscored} queued lead(s) whose existing site was never audited (run `python run.py rescore`)")
+        if good_waiting:
+            quality_parts.append(
+                f"{good_waiting} queued lead(s) already have a healthy site (score >= {config.SITE_SCORE_GOOD_AT}) "
+                "and would waste a send slot (run `python run.py rescore --park-good`)"
+            )
+        checks.append(Check(
+            "lead quality", quality_ok,
+            "every queued lead has an audited site and a real need" if quality_ok else "; ".join(quality_parts),
+            level=INFO if quality_ok else WARN,
+        ))
         unsubscribed = _scalar(config.DB_PATH, "SELECT COUNT(*) FROM unsubscribes") or 0
         checks.append(Check("suppression list", True, f"{unsubscribed} unsubscribed address(es) kept", level=INFO))
 

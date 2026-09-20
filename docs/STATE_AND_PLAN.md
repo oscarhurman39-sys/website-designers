@@ -14,6 +14,24 @@ permission error on this PC).
 (2026-09-08..11), 0 replies and 0 sales so far. Sections 6b and 9 below are the
 pre-launch plan and are kept as history; section 2 is the current state.
 
+**2026-09-20 targeting change (branch `claude/lead-quality-scoring`).** By
+2026-09-20: 164 leads sourced, 30 cold-emailed, 0 real replies. Every one of the
+164 had a working website and nothing ever looked at it: `site_score` stayed
+NULL, the send order was id order, and the cold email told all of them "people
+only find your Google listing". Research now audits the homepage it already
+fetches (`pipeline/utils/site_audit.py`: https, viewport meta, footer year,
+title, page weight, placeholder page) and scores the lead
+(`pipeline/utils/scoring.py`, need first, then reachability, small bonuses for
+20+ reviews and a Ltd/LLP name). DesignAgent parks leads whose site scores
+`SITE_SCORE_GOOD_AT` (default 8) or better, builds best-score-first, and stops
+at `DESIGN_BACKLOG_MAX` (default 2 x `EMAIL_MAX_PER_DAY`) unsent previews so
+none expires unsent (10 did between 09-08 and 09-20). The cold email now opens
+with the defect actually found, or makes no claim. `python run.py rescore`
+backfills scores for leads researched before this existed (`--park-good`
+parks the healthy-site ones already built); `python run.py report --weekly` is
+the Monday table; `preflight` has a "lead quality" line. Sections 5.1 and 5.3
+below are now built; 5.2 (reaching businesses with no site) is not.
+
 ## 1. What the system does today
 
 A cold-email pipeline for selling pre-built websites to local businesses.
