@@ -597,6 +597,12 @@ def control_queue() -> list[dict[str, Any]]:
                     MIN(CASE WHEN direction = 'outbound' THEN timestamp END) AS first_outbound_at,
                     MAX(CASE WHEN direction = 'outbound' THEN timestamp END) AS last_outbound_at,
                     MAX(CASE WHEN direction = 'inbound' THEN timestamp END) AS last_inbound_at,
+                    (SELECT t2.classification
+                       FROM email_threads t2
+                      WHERE t2.lead_id = email_threads.lead_id
+                        AND t2.direction = 'inbound'
+                      ORDER BY t2.timestamp DESC, t2.id DESC
+                      LIMIT 1) AS last_inbound_classification,
                     MAX(timestamp) AS last_email_at
                 FROM email_threads
                 GROUP BY lead_id
@@ -617,6 +623,7 @@ def control_queue() -> list[dict[str, Any]]:
                 ea.first_outbound_at,
                 ea.last_outbound_at,
                 ea.last_inbound_at,
+                ea.last_inbound_classification,
                 ea.last_email_at,
                 lw.id AS website_id,
                 lw.preview_url,

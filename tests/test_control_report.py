@@ -72,6 +72,18 @@ def test_inbound_still_parked_as_emailed_is_blocked(tmp_path, monkeypatch):
     assert "Process the recorded reply" in item["next_action"]
 
 
+def test_out_of_office_inbound_does_not_block_negotiator(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "leads.db"))
+    db.init_db()
+    lead_id = _lead("emailed")
+    _email(lead_id, "outbound", "-1 day")
+    _email(lead_id, "inbound", "-1 hour", classification="out_of_office")
+    item = control.classify(db.control_queue()[0], NOW)
+    assert item["severity"] == "watch"
+    assert item["owner"] == "PROMO-MARKETER"
+    assert "automatic reply" in item["next_action"]
+
+
 def test_paid_lead_without_website_is_blocked(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "leads.db"))
     db.init_db()

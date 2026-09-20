@@ -132,7 +132,12 @@ def classify(row: dict[str, Any], now: Optional[datetime] = None) -> dict[str, A
             reason = "preview is waiting in the outbound queue"
     elif status == "emailed":
         inbound = _parse_utc(row.get("last_inbound_at"))
-        if inbound:
+        inbound_classification = (row.get("last_inbound_classification") or "").strip().lower()
+        if inbound and inbound_classification == "out_of_office":
+            severity = "watch"
+            next_action = "Wait for a real reply; latest inbound was an automatic reply"
+            reason = "auto-reply acknowledged the email but is not a buying signal"
+        elif inbound:
             owner, agent_id = OWNER_BY_STATUS["replied"]
             severity = "blocked"
             next_action = "Process the recorded reply; this lead should no longer be parked as emailed"
