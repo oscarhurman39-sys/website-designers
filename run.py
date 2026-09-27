@@ -16,6 +16,7 @@
     python run.py preview-audit [--limit 10] # offline audit of active previews; nothing sent
     python run.py test-alert                # post one test alert to the Slack channel
     python run.py serve-public [--status]   # bring PUBLIC_BASE_URL up, or report why it is not
+    python run.py readiness-report           # tests + offline preflight + preview safety report
     python run.py reviewed-batch --prepare --lead ID [--lead ID...]
     python run.py offline-readiness         # tests + offline preflight with a timestamped proof report
 
@@ -164,6 +165,16 @@ def _append_command_report(report_lines: list[str], title: str, cmd: list[str], 
     report_lines.append("")
 
 
+def _readiness_env() -> dict[str, str]:
+    """Return an environment that keeps pytest temp files inside this repo."""
+    tmp_dir = REPO_ROOT / ".pytest-tmp"
+    tmp_dir.mkdir(exist_ok=True)
+    env = os.environ.copy()
+    env["TMP"] = str(tmp_dir)
+    env["TEMP"] = str(tmp_dir)
+    return env
+
+
 def run_offline_readiness(extra_args: list[str]) -> int:
     """Run the Windows-safe offline readiness proof and save the evidence."""
     if extra_args:
@@ -183,7 +194,7 @@ def run_offline_readiness(extra_args: list[str]) -> int:
 
     python_exe = _local_python()
     checks: list[tuple[str, list[str]]] = [
-        ("Full pytest suite", [python_exe, "-m", "pytest", "-q"]),
+        ("Full pytest suite", [python_exe, "-m", "pytest", "-q", "--basetemp=.pytest-tmp/offline-readiness"]),
         ("Offline preflight", [python_exe, str(REPO_ROOT / "run.py"), "preflight", "--offline"]),
     ]
 
@@ -223,6 +234,61 @@ def run_offline_readiness(extra_args: list[str]) -> int:
     return 0 if failures == 0 else 1
 
 
+def _readiness_summary(output: str) -> str:
+    """Keep the readiness report concise while retaining the useful verdict."""
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    for line in reversed(lines):
+        if line.startswith(("NO-GO", "READY", "GO", "Summary:", "Preview audit")):
+            return line
+    return lines[-1] if lines else "<no output>"
+
+
+def run_readiness_report(extra_args: list[str]) -> int:
+    """Run all local readiness proofs without sending, publishing, or deploying."""
+    if extra_args:
+        print("Usage: python run.py readiness-report")
+        return 1
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    reports_dir = REPO_ROOT / "reports"
+    reports_dir.mkdir(exist_ok=True)
+    report_path = reports_dir / f"readiness-report-{timestamp}.md"
+
+    env = _readiness_env()
+    python_exe = _local_python()
+    checks: list[tuple[str, list[str]]] = [
+        ("Approved tests", [python_exe, "-m", "pytest", "-q", "--basetemp=.pytest-tmp/readiness-report", "tests"]),
+        ("Offline preflight", [python_exe, str(REPO_ROOT / "run.py"), "preflight", "--offline"]),
+        ("Preview safety", [python_exe, str(REPO_ROOT / "run.py"), "preview-audit"]),
+    ]
+
+    report_lines = [
+        "# Website designers readiness report",
+        "",
+        f"Created: {datetime.now().isoformat(timespec='seconds')}",
+        "",
+        "Local-only proof: no email, sourcing, payment, deployment, or publishing is triggered.",
+        "",
+    ]
+    failures = 0
+    for title, cmd in checks:
+        print(f"Running {title}...")
+        result = subprocess.run(
+            cmd, cwd=str(REPO_ROOT), env=env, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        )
+        status = "PASS" if result.returncode == 0 else "BLOCKER"
+        report_lines.append(f"- **{status} — {title}:** {_readiness_summary(result.stdout or '')}")
+        if result.returncode != 0:
+            failures += 1
+
+    overall = "PASS" if failures == 0 else "BLOCKER"
+    report_lines.insert(2, f"Status: {overall}")
+    report_path.write_text("\n".join(report_lines) + "\n", encoding="utf-8")
+    print(f"Readiness report written to {report_path}")
+    return 0 if failures == 0 else 1
+
+
 _MODES = {
     "quick-test": run_quick_test,
     "loop": run_loop,
@@ -241,6 +307,7 @@ _MODES = {
     "serve-public": run_serve_public,
     "reviewed-batch": run_reviewed_batch,
     "offline-readiness": run_offline_readiness,
+    "readiness-report": run_readiness_report,
     "ops": run_ops,
 }
 
