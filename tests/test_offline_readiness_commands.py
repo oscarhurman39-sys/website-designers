@@ -51,7 +51,7 @@ def test_offline_readiness_runs_suite_then_offline_preflight_and_reports_pass(mo
     assert run.run_offline_readiness([]) == 0
 
     (suite, suite_env), (preflight_cmd, _) = calls
-    assert suite == ["venv-python", "-m", "pytest", "-q"]
+    assert suite == ["venv-python", "-m", "pytest", "-q", "--basetemp=.pytest-tmp/offline-readiness", "tests"]
     assert Path(preflight_cmd[1]).name == "run.py" and preflight_cmd[2:] == ["preflight", "--offline"]
     assert suite_env["TMP"] == suite_env["TEMP"] == str(tmp_path / ".pytest-tmp")
     assert "Status: PASS" in _report(tmp_path)

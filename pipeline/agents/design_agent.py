@@ -17,7 +17,7 @@ import requests
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 import config
-from utils import assets, db, github_api, scoring, screenshot, tracer, tracker, vercel_api
+from utils import assets, db, github_api, pages_host, scoring, screenshot, tracer, tracker, vercel_api
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 TEMPLATE_FILES = ("index.html", "style.css")

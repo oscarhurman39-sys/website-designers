@@ -194,7 +194,7 @@ def run_offline_readiness(extra_args: list[str]) -> int:
 
     python_exe = _local_python()
     checks: list[tuple[str, list[str]]] = [
-        ("Full pytest suite", [python_exe, "-m", "pytest", "-q", "--basetemp=.pytest-tmp/offline-readiness"]),
+        ("Full pytest suite", [python_exe, "-m", "pytest", "-q", "--basetemp=.pytest-tmp/offline-readiness", "tests"]),
         ("Offline preflight", [python_exe, str(REPO_ROOT / "run.py"), "preflight", "--offline"]),
     ]
 

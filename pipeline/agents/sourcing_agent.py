@@ -519,3 +519,18 @@ def _source_leads_impl(limit: Optional[int] = None) -> int:
         print(f"[sourcing] Aborted after {inserted} insert(s): {exc}")
     print(f"[sourcing] Inserted {inserted} new lead(s) (budget was {budget}).")
     return inserted
+
+
+# Companies House Ltd filter: sole traders and partnerships need consent (PECR).
+# Skipped if the niche score is so low it's getting scraped leads anyway.
+def _company_is_Ltd(name: str, website: str) -> bool:
+    """Heuristic: Ltd/Limited/LLP in the name, or /company/ in the domain.
+    A real check needs the Companies House API (free, 600/5min).
+    For now, this is defensive: a miss is cost-free (one useless build),
+    a false positive is a blocked address."""
+    name_lower = (name or "").lower()
+    if any(marker in name_lower for marker in ("ltd", "limited", "llp", "plc")):
+        return True
+    if "/company/" in (website or "").lower():
+        return True
+    return False

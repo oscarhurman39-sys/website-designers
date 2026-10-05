@@ -176,6 +176,28 @@ def test_is_platform_host_ignores_real_websites(url):
     assert not sourcing_agent.is_platform_host(url)
 
 
+@pytest.mark.parametrize(
+    ("place", "required_website", "expected"),
+    [
+        (_place("p1", "No site", website=None), True, "no website"),
+        (_place("p2", "No site", website=None), False, None),
+        (_place("p3", "Closed", status="CLOSED_TEMPORARILY"), False, "business status CLOSED_TEMPORARILY"),
+        ({"businessStatus": "OPERATIONAL", "displayName": {"text": "Missing id"}}, False, "no place id"),
+        ({"id": "p5", "businessStatus": "OPERATIONAL", "displayName": {"text": "  "}}, False, "no display name"),
+    ],
+)
+def test_candidate_qualification_filters(place, required_website, expected, monkeypatch):
+    monkeypatch.setattr(config, "SOURCING_REQUIRE_WEBSITE", required_website)
+
+    assert sourcing_agent._skip_reason(place) == expected
+
+
+def test_website_presence_is_classified_without_confusing_subdomains():
+    assert sourcing_agent.website_status_for_url("") == "none"
+    assert sourcing_agent.website_status_for_url("https://business.google.com/profile") == "platform_only"
+    assert sourcing_agent.website_status_for_url("https://facebook.com.example.org") == "owned_site"
+
+
 def test_platform_profile_websites_are_prioritised(sourcing_env, monkeypatch):
     _use_api(
         monkeypatch,
