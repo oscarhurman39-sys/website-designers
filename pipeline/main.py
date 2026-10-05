@@ -49,7 +49,7 @@ from pathlib import Path
 from typing import Optional
 
 import config
-from agents import design_agent, lead_agent, sales_agent, sourcing_agent
+from agents import design_agent, lead_agent, mission_agent, sales_agent, sourcing_agent
 from utils import db, github_api, stripe_utils, teardown, vercel_api
 
 PIPELINE_DIR = Path(__file__).resolve().parent
@@ -282,6 +282,7 @@ def _run_cycle() -> None:
     _stage("send", _send_outreach)
     _stage("expire-previews", _maybe_expire_previews)
     _stage("backup", _maybe_backup_db)
+    _stage("mission", mission_agent.run)
 
 
 def _maybe_expire_previews() -> None:

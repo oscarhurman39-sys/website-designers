@@ -21,6 +21,8 @@ sendgrid==6.11.0
 # Chromium is already provided by your environment, e.g. a pre-provisioned
 # container image -- screenshot.py auto-detects that case).
 playwright==1.56.0
+# Shrinks the preview screenshot before it goes inline in a cold email.
+Pillow>=10
 
 # Observability (optional cloud mirroring; local tracing works without any
 # VoltAgent account -- see pipeline/utils/tracer.py)

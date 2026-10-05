@@ -176,9 +176,9 @@ def _capture_sync(preview_url: str, out_path: Path) -> None:
 
 def invalidate(lead_id: int) -> None:
     """Drop the cached screenshot so the next capture reflects a rebuild."""
-    path = screenshot_path(lead_id)
-    if path.exists():
-        path.unlink()
+    for path in (screenshot_path(lead_id), _email_image_path(lead_id)):
+        if path.exists():
+            path.unlink()
 
 
 def get_cached_screenshot(lead_id: int) -> Optional[Path]:
@@ -190,7 +190,49 @@ def get_cached_screenshot(lead_id: int) -> Optional[Path]:
     return path if path.exists() else None
 
 
+# The capture is a full-page PNG at 1280 px, around 1 MB. Inline in a cold
+# email that is slow to load and heavy for spam filters, so the email gets
+# the top of the page as a small JPEG instead.
+_EMAIL_IMAGE_WIDTH = 640
+_EMAIL_IMAGE_MAX_ASPECT = 1.5  # height kept, as a multiple of the width
+_EMAIL_IMAGE_QUALITY = 80
+
+
+def _email_image_path(lead_id: int) -> Path:
+    return SCREENSHOTS_DIR / f"{lead_id}.email.jpg"
+
+
+def email_image(lead_id: int) -> Optional[Path]:
+    """The cached screenshot cropped and shrunk for inline use in an email,
+    or None if there is no screenshot. Rebuilt whenever the PNG is newer.
+    Falls back to the PNG itself if the conversion fails."""
+    source = get_cached_screenshot(lead_id)
+    if source is None:
+        return None
+    out_path = _email_image_path(lead_id)
+    if out_path.exists() and out_path.stat().st_mtime >= source.stat().st_mtime:
+        return out_path
+    try:
+        from PIL import Image
+
+        with Image.open(source) as image:
+            image = image.convert("RGB")
+            width, height = image.size
+            image = image.crop((0, 0, width, min(height, int(width * _EMAIL_IMAGE_MAX_ASPECT))))
+            if image.width > _EMAIL_IMAGE_WIDTH:
+                image = image.resize(
+                    (_EMAIL_IMAGE_WIDTH, round(image.height * _EMAIL_IMAGE_WIDTH / image.width)),
+                    Image.LANCZOS,
+                )
+            image.save(out_path, "JPEG", quality=_EMAIL_IMAGE_QUALITY, optimize=True)
+    except Exception as exc:  # noqa: BLE001 - a smaller image is an optimisation, never a blocker
+        print(f"[screenshot] Could not shrink the screenshot for lead {lead_id} ({exc}); using the PNG")
+        return source
+    return out_path
+
+
 __all__ = [
+    "email_image",
     "capture_screenshot",
     "capture_screenshot_sync",
     "get_cached_screenshot",

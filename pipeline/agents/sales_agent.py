@@ -651,6 +651,7 @@ def _send_cold_email_impl(lead: dict) -> bool:
             notes=f"Email blocked: preview URL is not publicly sendable ({exc})",
         )
         return False
+    raw_preview_link = preview_link
     city = lead.get("location") or "your area"
     # The raw URL is what gets validated above; the tracked one only replaces
     # it in the copy when the redirect endpoint is confirmed reachable.
@@ -663,7 +664,12 @@ def _send_cold_email_impl(lead: dict) -> bool:
     # plain-text-only email as before -- a missing screenshot (capture
     # failed, or an older lead from before this feature existed) must
     # never block or change the send itself.
-    cached_screenshot = screenshot.get_cached_screenshot(lead["id"])
+    if screenshot.get_cached_screenshot(lead["id"]) is None:
+        # The file is gone (it has been wiped under a queued lead before):
+        # retake it rather than send the pitch without its picture.
+        from agents import design_agent  # local import, as design_agent.run does for this module
+        design_agent._capture_and_publish_screenshot(lead["id"], raw_preview_link)
+    cached_screenshot = screenshot.email_image(lead["id"])
     body_html = _build_html_body(lead["business_name"], preview_link, city, lead=lead) if cached_screenshot else None
     inline_image_path = str(cached_screenshot) if cached_screenshot else None
 

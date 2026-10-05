@@ -86,3 +86,21 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     for item in items:
         if "real_integration" in item.keywords:
             item.add_marker(skip_real)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_screenshot_cache(tmp_path_factory, monkeypatch):
+    """Point the preview-screenshot cache at a throwaway folder for every
+    test. cleanup_tests.reset_prelaunch() moves the whole cache into its
+    archive, and a test that redirected only the archive used to empty the
+    real pipeline/screenshots/ on every suite run in the live checkout --
+    cold emails then went out with no preview image. The browser is stubbed
+    out too: the send path retakes a missing screenshot, and no test should
+    launch Chromium by accident (tests of the capture patch it themselves)."""
+    from utils import screenshot
+
+    def _no_browser():
+        raise RuntimeError("screenshot capture is disabled in tests")
+
+    monkeypatch.setattr(screenshot, "SCREENSHOTS_DIR", tmp_path_factory.mktemp("screenshots"))
+    monkeypatch.setattr(screenshot, "sync_playwright", _no_browser)

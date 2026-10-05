@@ -323,6 +323,11 @@ MAIN_LOOP_SLEEP_SECONDS: int = 60
 # by deleting the Vercel project + GitHub repo of previews older than
 # PREVIEW_TTL_DAYS whose lead never turned into a conversation. Keep this in
 # sync with the wording in the email copy if you change it.
+# The mission: cold emails a day the line is meant to send. 0 = no target.
+# agents/mission_agent.py measures every stage against it and reports the
+# blocker; it never changes a cap itself.
+MISSION_DAILY_SENDS: int = _int_env("MISSION_DAILY_SENDS", default=0)
+
 PREVIEW_TTL_DAYS: int = int(os.getenv("PREVIEW_TTL_DAYS", "7") or 7)
 # Set to false/0/no to keep the hourly teardown pass in main.py from running
 # (the one-shot `python pipeline/utils/teardown.py` CLI ignores this flag).
